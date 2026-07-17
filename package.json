@@ -1,0 +1,21 @@
+{
+  "name": "repo-radar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local Git repo dashboard that scans all your repos — the entry screen is a cross-repo action queue answering \"what needs you now\".",
+  "license": "MIT",
+  "author": "rockbenben <qingwhat@gmail.com>",
+  "repository": { "type": "git", "url": "https://github.com/rockbenben/repo-radar.git" },
+  "homepage": "https://github.com/rockbenben/repo-radar#readme",
+  "engines": { "node": ">=20" },
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev": "concurrently -n server,web \"npm run dev -w server\" \"npm run dev -w web\"",
+    "test": "npm run typecheck -w server && npm run typecheck -w web && npm test -w server && npm test -w web",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
+  }
+}

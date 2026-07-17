@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#0d1320"/><stop offset="1" stop-color="#080b11"/>
+    </linearGradient>
+    <radialGradient id="ambient" cx="0.82" cy="0.05" r="0.9">
+      <stop offset="0" stop-color="#4cc2ff" stop-opacity=".13"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sweep" x1="0.5" y1="0.5" x2="1" y2="0">
+      <stop offset="0" stop-color="#4cc2ff" stop-opacity=".5"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glow"><stop offset="0" stop-color="#4cc2ff" stop-opacity=".6"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/></radialGradient>
+    <radialGradient id="scan" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#4cc2ff" stop-opacity=".14"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="topline" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4cc2ff" stop-opacity="0"/><stop offset=".18" stop-color="#4cc2ff" stop-opacity=".55"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="gridMask" cx="0.28" cy="0.42" r="0.75"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient>
+    <mask id="gm"><rect width="1200" height="630" fill="url(#gridMask)"/></mask>
+    <pattern id="grid" width="46" height="46" patternUnits="userSpaceOnUse">
+      <path d="M46 0H0V46" fill="none" stroke="#131c2b" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- ground -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#grid)" mask="url(#gm)" opacity=".7"/>
+  <rect width="1200" height="630" fill="url(#ambient)"/>
+
+  <!-- ===== identity + thesis (left) ===== -->
+  <!-- radar scope-mark: the scanner -->
+  <g transform="translate(74 82) scale(1.72)">
+    <path d="M32 32 L32 5 A27 27 0 0 1 58.4 26 Z" fill="url(#sweep)"/>
+    <g stroke="#3a5f86" fill="none">
+      <circle cx="32" cy="32" r="27" stroke-width="1.4"/>
+      <circle cx="32" cy="32" r="17.5" stroke-width="1" opacity=".7"/>
+      <line x1="32" y1="6" x2="32" y2="58" stroke-width=".8" opacity=".45"/>
+      <line x1="6" y1="32" x2="58" y2="32" stroke-width=".8" opacity=".45"/>
+    </g>
+    <circle cx="46" cy="20" r="2.7" fill="#3ad68a"/>
+    <circle cx="19.5" cy="27" r="2.7" fill="#f5a623"/>
+    <circle cx="27" cy="46.5" r="2.7" fill="#ff5a6a"/>
+    <circle cx="44" cy="45" r="2.2" fill="#3ad68a"/>
+    <circle cx="32" cy="32" r="7" fill="url(#glow)"/>
+    <circle cx="32" cy="32" r="2.8" fill="#4cc2ff"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="208" y="156" font-size="43" font-weight="650" letter-spacing="-1">
+    <tspan fill="#9fb0c8">repo</tspan><tspan fill="#4cc2ff">·</tspan><tspan fill="#e6edf7">radar</tspan>
+  </text>
+
+  <!-- instrument divider: identity | thesis (the app's own vernacular) -->
+  <line x1="76" y1="216" x2="470" y2="216" stroke="#213146" stroke-width="1"/>
+  <line x1="76" y1="216" x2="132" y2="216" stroke="#4cc2ff" stroke-width="1" opacity=".65"/>
+
+  <!-- thesis headline -->
+  <g font-family="system-ui, 'Segoe UI', Roboto, sans-serif" fill="#e9eff8" font-weight="700" letter-spacing="-1.5">
+    <text x="74" y="292" font-size="66">What needs</text>
+    <text x="74" y="362" font-size="66">you now.</text>
+  </g>
+
+  <!-- tagline -->
+  <g font-family="system-ui, 'Segoe UI', Roboto, sans-serif" fill="#8090a8">
+    <text x="76" y="416" font-size="22">One action queue across every local Git</text>
+    <text x="76" y="446" font-size="22">repo — not another repo-count dashboard.</text>
+  </g>
+
+  <!-- footer meta: nods to local-first + multilingual -->
+  <text x="76" y="512" font-size="15" fill="#55647e" letter-spacing=".02em">
+    <tspan fill="#3ad68a">●</tspan> local git<tspan>   ·   </tspan>zero-config<tspan>   ·   </tspan>18 languages
+  </text>
+
+  <!-- ===== the queue = the product's face (right) ===== -->
+  <g transform="translate(600 72)">
+    <rect x="0" y="0" width="528" height="486" rx="16" fill="#111726" fill-opacity=".82" stroke="#26374f"/>
+    <!-- the sweep just illuminated the top of the queue -->
+    <rect x="1" y="1" width="526" height="200" rx="15" fill="url(#scan)"/>
+    <rect x="16" y="0" width="496" height="2" fill="url(#topline)"/>
+
+    <!-- header -->
+    <circle cx="34" cy="46" r="4.5" fill="#4cc2ff"/>
+    <circle cx="34" cy="46" r="9" fill="url(#glow)"/>
+    <text x="50" y="52" font-size="19" letter-spacing=".16em" fill="#aab8cc" font-weight="600">NEEDS YOU</text>
+    <text x="498" y="52" font-size="15" text-anchor="end" fill="#5b6a83">6 of 72 repos</text>
+    <line x1="30" y1="74" x2="498" y2="74" stroke="#233248" stroke-width="1"/>
+
+    <!-- ranked rows: severity dot + repo (mono) + reason (right, severity-colored) -->
+    <g font-size="22" fill="#dde5f1">
+      <circle cx="38" cy="118" r="5.5" fill="#ff5a6a"/><text x="60" y="125">reflowpdf</text>
+      <text x="498" y="125" font-size="17.5" text-anchor="end" fill="#ff5a6a">CI failing</text>
+      <line x1="30" y1="150" x2="498" y2="150" stroke="#182234"/>
+
+      <circle cx="38" cy="180" r="5.5" fill="#f5a623"/><text x="60" y="187">img-prompt</text>
+      <text x="498" y="187" font-size="17.5" text-anchor="end" fill="#f6b74d">2 PRs waiting</text>
+      <line x1="30" y1="212" x2="498" y2="212" stroke="#182234"/>
+
+      <circle cx="38" cy="242" r="5.5" fill="#f5a623"/><text x="60" y="249">md-translator</text>
+      <text x="498" y="249" font-size="17.5" text-anchor="end" fill="#f6b74d">3 issues open</text>
+      <line x1="30" y1="274" x2="498" y2="274" stroke="#182234"/>
+
+      <circle cx="38" cy="304" r="5.5" fill="#f5a623"/><text x="60" y="311">web-tools-by-ai</text>
+      <text x="498" y="311" font-size="17.5" text-anchor="end" fill="#f6b74d">12 unpushed · 5d</text>
+      <line x1="30" y1="336" x2="498" y2="336" stroke="#182234"/>
+
+      <circle cx="38" cy="366" r="5.5" fill="#f5a623"/><text x="60" y="373">soundlings</text>
+      <text x="498" y="373" font-size="17.5" text-anchor="end" fill="#f6b74d">89 commits since v1.0</text>
+      <line x1="30" y1="398" x2="498" y2="398" stroke="#182234"/>
+
+      <circle cx="38" cy="428" r="5.5" fill="#f5a623"/><text x="60" y="435">daily-notes</text>
+      <text x="498" y="435" font-size="17.5" text-anchor="end" fill="#f6b74d">stash · 9d</text>
+    </g>
+  </g>
+</svg>
