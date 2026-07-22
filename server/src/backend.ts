@@ -1,0 +1,423 @@
+import { serve } from "@hono/node-server"
+import { createNodeWebSocket } from "@hono/node-ws"
+import { existsSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config"
+import { DescCache } from "./desc-cache"
+import { WsHub } from "./events"
+import { runRepoAction } from "./git"
+import { getGithubDescription, getGithubInbox, ghAvailable, githubRemoteUrl, githubSlug } from "./github"
+import { InboxCache } from "./inbox-cache"
+import { PORT } from "./port"
+import { drainRepoLocks, pendingRepoOps, withRepoLock } from "./queue"
+import { type ApiExtras, createApi, originAllowed } from "./routes"
+import { createShutdown } from "./shutdown"
+import { diskStatic } from "./static"
+import { evictRepoStats } from "./stats"
+import { mapLimit, RepoStore } from "./store"
+import type { GithubInbox, RepoStatus } from "./types"
+import { RepoWatcher } from "./watcher"
+
+export interface BackendOptions {
+  configFile: string
+  staticRoot: string // 前端 web/dist 的绝对路径
+  version: string
+  port?: number // 仅测试用；正常走 REPO_RADAR_PORT / 默认 7420
+  extras?: Pick<ApiExtras, "autostart" | "shutdown">
+}
+
+/** 一轮 inbox 补全里，某个仓库的「等我的」发生了变化。before 为 null 表示此前没有缓存（首次拿到） */
+export interface InboxChange {
+  repoId: string
+  name: string
+  before: GithubInbox | null
+  after: GithubInbox
+}
+
+/** before/after 是否完全一致（Minor 7）：InboxChange 这个名字承诺的是「变化」，
+ * 之前实际塞进去的是「本轮所有拉取成功的仓库」（含毫无变化的）——两者不该混为一谈，
+ * 名字要跟内容对上。before 为 null（首次拿到缓存）永远不算「一致」。 */
+export function inboxEqual(before: GithubInbox | null, after: GithubInbox): boolean {
+  if (before === null) return false
+  return (
+    before.prs === after.prs &&
+    before.issues === after.issues &&
+    before.ciFailed === after.ciFailed &&
+    before.ciSha === after.ciSha &&
+    before.byViewer === after.byViewer
+  )
+}
+
+export interface Backend {
+  readonly port: number
+  start(): Promise<void>
+  stop(): Promise<void>
+  /** 订阅 inbox 变化。每轮补全只发一次（批量），空轮不发——消费方据此聚合成一条通知而不是刷屏 */
+  onInboxChanged(listener: (changes: InboxChange[]) => void): void
+}
+
+/** inbox 事件缝的投递器：维护订阅者列表 + 逐个兜错投递 + 清空。
+ * 单独抽成一个不依赖 gh/网络的小工厂——不这样做的话，「订阅者抛错不影响其它订阅者」
+ * 「空轮不投递」「多订阅者按顺序都收到」这三条保证只能靠真拉一轮 GitHub 数据才能触发，
+ * 在 CI 与本机都不可靠，实际上就等于永远测不到。createBackend 内部用它；
+ * stop() 时调 clear()，避免同一进程重复 start/stop 时监听器无界增长，也避免退出后
+ * 残留的订阅者还在收晚到的一轮回调。 */
+export interface InboxEmitter {
+  subscribe(listener: (changes: InboxChange[]) => void): void
+  emit(changes: InboxChange[]): void
+  clear(): void
+}
+export function createInboxEmitter(): InboxEmitter {
+  const listeners: ((changes: InboxChange[]) => void)[] = []
+  return {
+    subscribe(listener) {
+      listeners.push(listener)
+    },
+    emit(changes) {
+      if (changes.length === 0) return // 空轮不投递：消费方不必自己再判一次空数组
+      for (const listener of listeners) {
+        try {
+          listener(changes)
+        } catch (err) {
+          // 订阅者（主进程的通知逻辑）抛错绝不能把补全轮次带崩——它只是个旁观者
+          console.error(`[repo-radar] inbox 订阅者出错: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    },
+    clear() {
+      listeners.length = 0
+    },
+  }
+}
+
+const INBOX_REFRESH_MS = 12 * 60 * 1000
+const DRAIN_TIMEOUT_MS = 10_000
+
+export function createBackend(options: BackendOptions): Backend {
+  const { configFile, staticRoot, version } = options
+  const port = options.port ?? PORT
+
+  if (!existsSync(configFile)) {
+    saveConfig(configFile, DEFAULT_CONFIG)
+    console.log(`[repo-radar] 已生成默认配置 / created default config: ${configFile}`)
+  }
+
+  const descCache = new DescCache(join(dirname(configFile), "github-desc.json"))
+  const inboxCache = new InboxCache(join(dirname(configFile), "github-inbox.json"))
+  const store = new RepoStore(
+    () => loadConfig(configFile),
+    (id, url) => descCache.get(id, url),
+    (id, url) => inboxCache.get(id, url),
+  )
+  const hub = new WsHub()
+
+  // 事件缝：主进程要据此弹系统通知。刻意只暴露「变化」而不是整个 inbox 状态——
+  // 消费方不需要知道全量，只需要知道「什么变了、从什么变成什么」
+  const inboxEmitter = createInboxEmitter()
+
+  // 有 GitHub 远程、且 stale 判定为真的补全目标。inbox 与描述两个补全器共用这一份筛选——
+  // 之前各抄一份，改挑选逻辑（如 origin 优先）就得改两处，漏一处两边的数据就对不上同一个仓库
+  function githubTargets(stale: (id: string, url: string) => boolean): { id: string; url: string; slug: string }[] {
+    return store
+      .list()
+      .filter((r) => r.error === null && !r.archived)
+      .map((r) => {
+        const url = githubRemoteUrl(r.remotes) // 主机名精确匹配 + origin 优先，与前端跳转同一挑选逻辑
+        return { id: r.id, url, slug: url ? githubSlug(url) : null }
+      })
+      .filter((t): t is { id: string; url: string; slug: string } => t.url !== undefined && t.slug !== null && stale(t.id, t.url))
+  }
+
+  // 后台补全 GitHub「等我的」：对有 GitHub 远程、缓存缺失/过期的仓库限流拉取 PR/issue/CI，写缓存后 redecorate + 广播。
+  // 与描述补全同样只读联网、gh 未装则跳过；扫描后触发，另有定时刷新（这些比描述变得频繁）。
+  // promise 链 + 共乘：调用时若已有「排队未开跑」的一轮就共乘它（force 标记在开跑时才读，先到的设置都算数），
+  // 否则在链尾排新一轮——↻ 手动刷新即便赶上上一轮正在收尾也一定跑到强制轮、等到它真结束
+  // （单飞 + pending 标记有收尾关窗期会假成功；不共乘的话 gh 未登录时每个触发都排完整一轮，积压无上界）。
+  let inboxChain: Promise<void> = Promise.resolve()
+  let inboxQueued: Promise<void> | null = null // 已排队、尚未开跑的那一轮；开跑即清
+  let inboxForce = false // 手动刷新：下一轮忽略 TTL，强制重拉全部 GitHub 仓库
+  function enrichGithubInbox(): Promise<void> {
+    if (inboxQueued) return inboxQueued
+    const run = inboxChain.then(async () => {
+      inboxQueued = null // 本轮开跑：之后的触发需另排一轮（本轮的目标集已定）
+      const force = inboxForce
+      inboxForce = false
+      const targets = githubTargets((id, url) => force || inboxCache.isStale(id, url))
+      if (targets.length === 0) return
+      if (!(await ghAvailable())) return
+      const changes: InboxChange[] = []
+      // 6 并发：每次 gh graphql 约 1.8s（spawn+联网），并发拉满可把整轮从 ~37s 压到 ~18s；只读 API，不会触发写限流
+      await mapLimit(targets, 6, async (t) => {
+        try {
+          // 传上次缓存的 PR 数与 issue 数：prOthers（PR 的 search 字段）与 mine（自己开的 issue 数）
+          // 都可能被二级限流单独置空，各自沿用对应的上次计数——避免 PR 数在「不含自己/含总数」间震荡，
+          // 也避免 issue 数因 mine 缺失被静默按 0 算而虚高（见 github.ts parseInboxResponse 的注释）
+          const before = inboxCache.get(t.id, t.url)
+          const inbox = await getGithubInbox(t.slug, before?.prs, before?.issues)
+          if (inbox === null) return // 拉不到（未登录/网络）：保留旧缓存，别把状态抹空
+          inboxCache.set(t.id, t.url, inbox)
+          const updated = store.redecorate(t.id)
+          if (updated) hub.broadcast("repo:updated", { repo: updated })
+          // 只收「真变了」的：InboxChange 的名字承诺的是变化，不是「本轮所有拉取成功的仓库」——
+          // 拉到手但与上次完全一致（before/after 全等）的不算变化，不该进这个数组
+          if (!inboxEqual(before, inbox)) {
+            changes.push({ repoId: t.id, name: updated?.displayName ?? updated?.name ?? t.id, before, after: inbox })
+          }
+        } catch {
+          /* 单仓库失败不影响其它 */
+        }
+      })
+      inboxEmitter.emit(changes)
+    })
+    inboxQueued = run
+    inboxChain = run.catch(() => {}) // 链自身吞错，避免一轮异常把后续所有轮永久卡死
+    return run
+  }
+
+  // 后台补全 GitHub 描述：同上走 promise 链 + 共乘；缓存 TTL 7 天，通常一轮即 no-op
+  let descChain: Promise<void> = Promise.resolve()
+  let descQueued: Promise<void> | null = null
+  function enrichDescriptions(): Promise<void> {
+    if (descQueued) return descQueued
+    const run = descChain.then(async () => {
+      descQueued = null
+      const targets = githubTargets((id, url) => descCache.isStale(id, url))
+      if (targets.length === 0) return // 全部命中缓存：连 gh --version 都不必 spawn
+      if (!(await ghAvailable())) return
+      await mapLimit(targets, 3, async (t) => {
+        try {
+          const res = await getGithubDescription(t.slug) // 显式 owner/repo，不依赖 cwd 默认远程
+          if (res === null) return // 查询失败（未登录/网络）：不缓存，下次重试——别把失败落盘成「确认无描述」压 7 天
+          descCache.set(t.id, t.url, res.description)
+          const updated = store.redecorate(t.id)
+          if (updated) hub.broadcast("repo:updated", { repo: updated })
+        } catch {
+          /* 单仓库失败不影响其它 */
+        }
+      })
+    })
+    descQueued = run
+    descChain = run.catch(() => {})
+    return run
+  }
+
+  const watcher = new RepoWatcher((id) => {
+    evictRepoStats(id) // 仓库有变化，作废其热力图缓存，避免统计落后于实时状态
+    void store
+      .refreshOne(id)
+      .then((repo) => {
+        if (repo) hub.broadcast("repo:updated", { repo })
+      })
+      .catch((err) => {
+        console.error(`[repo-radar] 监听刷新失败：${err instanceof Error ? err.message : String(err)}`)
+      })
+  })
+
+  // 按当前 config.autoWatch 决定是否开启文件监听（默认关闭；扫描本身始终执行以填充看板）
+  async function applyWatch(enabled: boolean, repos?: RepoStatus[]): Promise<void> {
+    if (enabled) {
+      // 不监听「已排除」的仓库——它们从看板/统计/后台处理里都收起
+      const list = (repos ?? store.list()).filter((r) => !r.archived).map((r) => ({ id: r.id, path: r.path }))
+      await watcher.watch(list)
+    } else {
+      await watcher.close()
+    }
+  }
+
+  async function doRescanAndWatch(): Promise<RepoStatus[]> {
+    const repos = await store.refreshAll((scanned, total) => hub.broadcast("scan:progress", { scanned, total }))
+    await applyWatch(loadConfig(configFile).autoWatch, repos)
+    const ids = new Set(repos.map((r) => r.id)) // 剪掉已不存在仓库的缓存条目，避免落盘缓存无界增长
+    descCache.prune(ids)
+    inboxCache.prune(ids)
+    void enrichDescriptions() // 后台补全 GitHub 描述，不阻塞扫描返回
+    void enrichGithubInbox() // 后台补全 GitHub「等我的」（PR/issue/CI）
+    return repos
+  }
+
+  // 重扫链 + 按需共乘：进行中的一轮在开跑时就定死了扫描目标（roots/excludes/manualRepos 快照）——
+  //   目标没变（重复点「重扫」）→ 共乘进行中的一轮：不排第二次全量扫描，等待不翻倍、进度条不倒退；
+  //   目标变了（保存了新扫描目录）→ 链尾排新一轮：开跑时才读配置，新目录必然被扫到，不会被旧一轮静默吞掉；
+  //   已排队未开跑的一轮任何触发都可共乘（它开跑时读到的配置一定是最新的）
+  const scanTargets = (): string => {
+    try {
+      const cfg = loadConfig(configFile)
+      return JSON.stringify({ roots: cfg.roots, excludes: cfg.excludes, manualRepos: cfg.manualRepos })
+    } catch {
+      return "config-unreadable" // 配置损坏：快照恒等 → 触发都共乘；真正的报错由扫描链的 catch 记日志
+    }
+  }
+  let rescanChain: Promise<unknown> = Promise.resolve()
+  let rescanQueued: Promise<RepoStatus[]> | null = null
+  let rescanRunning: { promise: Promise<RepoStatus[]>; targets: string } | null = null
+  // force：磁盘刚被服务端自己改过（clone/新建项目）——进行中的一轮可能在写盘前就扫过了目标父目录，
+  // 共乘它会漏掉新仓库，必须排新一轮；已排队未开跑的一轮仍可共乘（它开跑时读到的磁盘状态是新的）
+  function rescanAndWatch(force = false): Promise<RepoStatus[]> {
+    if (rescanQueued) return rescanQueued
+    if (!force && rescanRunning && scanTargets() === rescanRunning.targets) return rescanRunning.promise
+    const run = rescanChain.then(async () => {
+      rescanQueued = null
+      const round = { promise: doRescanAndWatch(), targets: scanTargets() }
+      rescanRunning = round
+      try {
+        return await round.promise
+      } finally {
+        if (rescanRunning === round) rescanRunning = null
+      }
+    })
+    rescanQueued = run
+    rescanChain = run.catch(() => {}) // 链自身吞错，避免一轮失败把后续所有轮永久卡死
+    return run
+  }
+
+  async function setWatch(enabled: boolean): Promise<void> {
+    const cfg = loadConfig(configFile)
+    cfg.autoWatch = enabled
+    saveConfig(configFile, cfg)
+    await applyWatch(enabled)
+  }
+
+  // 定时后台 fetch：安静地为有远程的仓库 fetch，只广播 repo:updated（不占用批量进度条）
+  let autoFetchRunning = false
+  async function autoFetchAll(): Promise<void> {
+    if (autoFetchRunning) return // 上一轮未结束则跳过，避免叠加
+    autoFetchRunning = true
+    try {
+      const repos = store.list().filter((r) => r.remotes.length > 0 && r.error === null && !r.archived)
+      await mapLimit(repos, 4, async (r) => {
+        try {
+          // 走仓库锁：一是别和用户正在做的 commit/push 在同一个 .git 上撞车，
+          // 二是退出时的排空只认锁里的操作——不包进来，定时 fetch 就会被硬切在写 refs 的中途
+          await withRepoLock(r.id, () => runRepoAction(r.path, "fetch"))
+          const updated = await store.refreshOne(r.id)
+          if (updated) hub.broadcast("repo:updated", { repo: updated })
+        } catch {
+          /* 单仓库 fetch 失败不影响其它 */
+        }
+      })
+    } finally {
+      autoFetchRunning = false
+    }
+  }
+
+  let fetchTimer: ReturnType<typeof setInterval> | null = null
+  function applyAutoFetch(minutes: number): void {
+    if (fetchTimer) {
+      clearInterval(fetchTimer)
+      fetchTimer = null
+    }
+    if (minutes > 0) fetchTimer = setInterval(() => void autoFetchAll(), minutes * 60_000)
+  }
+  async function setAutoFetch(minutes: number): Promise<void> {
+    const cfg = loadConfig(configFile)
+    cfg.autoFetchMinutes = minutes
+    saveConfig(configFile, cfg)
+    applyAutoFetch(minutes)
+  }
+
+  // 手动刷新 GitHub「等我的」：强制标记后跑一轮（跳过 TTL），跑完再返回
+  const refreshInbox = async (): Promise<void> => {
+    inboxForce = true
+    await enrichGithubInbox()
+  }
+
+  const app = createApi(store, configFile, {
+    hub,
+    rescan: () => rescanAndWatch(),
+    rescanFresh: () => rescanAndWatch(true),
+    setWatch,
+    setAutoFetch,
+    refreshInbox,
+    version,
+    ...(options.extras ?? {}),
+  })
+  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app })
+
+  const wsUpgrade = upgradeWebSocket(() => ({
+    onOpen: (_evt, ws) => hub.add(ws),
+    onClose: (_evt, ws) => hub.remove(ws),
+  }))
+  app.get("/ws", async (c, next) => {
+    if (!originAllowed(c.req.header("origin"))) return c.text("forbidden", 403)
+    return wsUpgrade(c, next)
+  })
+  app.use("/*", diskStatic(staticRoot))
+
+  let server: ReturnType<typeof serve> | null = null
+  let intervalTimer: ReturnType<typeof setInterval> | null = null
+  let stopped: Promise<void> | null = null
+
+  /** 绑定端口。失败走返回值；绑定成功后的运行期 error 只记日志——文件描述符耗尽时
+   *  服务器也会 emit error，绝不能因此把健康实例拆掉 */
+  function bindOnce(): Promise<{ ok: true } | { ok: false; err: NodeJS.ErrnoException }> {
+    return new Promise((resolve) => {
+      let listening = false
+      const s = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
+        listening = true
+        server = s
+        resolve({ ok: true })
+      })
+      s.on("error", (err: NodeJS.ErrnoException) => {
+        if (listening) console.error(`[repo-radar] 服务器错误 / server error: ${err.message}`)
+        else resolve({ ok: false, err })
+      })
+      injectWebSocket(s)
+    })
+  }
+
+  const shutdown = createShutdown({
+    stopListening: () => void server?.close(),
+    drainOps: () => drainRepoLocks(DRAIN_TIMEOUT_MS),
+    pendingOps: pendingRepoOps,
+    closeWatcher: () => watcher.close(),
+    flushCaches: () => inboxCache.flush(),
+    closeConnections: () => (server as { closeAllConnections?: () => void } | null)?.closeAllConnections?.(),
+    log: (m) => console.log(m),
+  })
+
+  return {
+    port,
+    onInboxChanged(listener) {
+      inboxEmitter.subscribe(listener)
+    },
+    async start() {
+      let bound = await bindOnce()
+      if (!bound.ok && bound.err.code === "EADDRINUSE") {
+        // 上一个实例刚退出时端口可能还在释放中（「退出 → 立刻重开」是常见动作）。
+        // 等一拍再抢一次；仍失败才是真的被别的程序占着
+        await new Promise((r) => setTimeout(r, 300))
+        bound = await bindOnce()
+      }
+      if (!bound.ok) throw bound.err
+
+      intervalTimer = setInterval(() => void enrichGithubInbox(), INBOX_REFRESH_MS)
+
+      // 定时 fetch 按当前配置装上，不挂在扫描结果后面：扫描会失败（配置损坏时 loadConfig 直接抛），
+      // 挂上去就意味着「扫描一失败，用户开着的定时拉取整局静默不生效」
+      let cfg = DEFAULT_CONFIG
+      try {
+        cfg = loadConfig(configFile)
+      } catch (err) {
+        console.error(`[repo-radar] 配置读取失败，本次按默认设置运行: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      applyAutoFetch(cfg.autoFetchMinutes)
+
+      // 不做遗留 clone 临时目录的启动清扫——见 scaffold.ts 顶部 CLONE_TMP_PREFIX 注释：
+      // 这类残骸点号开头、scanner 本就忽略、界面上看不见，出现条件也苛刻，不值得为它
+      // 维护一整套跨进程账本机制
+
+      rescanAndWatch()
+        .then((repos) => console.log(`[repo-radar] 启动扫描完成：${repos.length} 个仓库 / startup scan done: ${repos.length} repos`))
+        .catch((err) => console.error(`[repo-radar] 启动扫描失败: ${err instanceof Error ? err.message : String(err)}`))
+    },
+    stop() {
+      // 幂等：托盘退出、窗口关闭、系统关机可能同时到达
+      return (stopped ??= (async () => {
+        if (intervalTimer) clearInterval(intervalTimer)
+        applyAutoFetch(0)
+        inboxEmitter.clear() // 之前只增不减：同一进程反复 start/stop 会让订阅者无界增长，退出后也不该再收晚到的回调
+        await shutdown("backend.stop")
+      })())
+    },
+  }
+}

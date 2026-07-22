@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
-import { DEFAULT_CONFIG, loadConfig, mergeConfig, saveConfig, validateConfigPatch } from "../src/config"
+import { Config, DEFAULT_CONFIG, loadConfig, mergeConfig, saveConfig, validateConfigPatch } from "../src/config"
 
 const dir = mkdtempSync(join(tmpdir(), "rr-config-"))
 afterAll(() => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }))
@@ -76,5 +76,62 @@ describe("loadConfig deep merge", () => {
     const cfg = loadConfig(file)
     expect(cfg.health.staleDays).toBe(30)
     expect(cfg.health.disabledRules).toEqual([])
+  })
+})
+
+describe("notifications 字段", () => {
+  it("默认关闭——通知是打扰，必须由用户主动打开", () => {
+    expect(DEFAULT_CONFIG.notifications).toBe(false)
+  })
+
+  it("旧配置文件没有这个字段时按默认值合并", () => {
+    const merged = mergeConfig(structuredClone(DEFAULT_CONFIG), { roots: ["/a"] } as Partial<Config>)
+    expect(merged.notifications).toBe(false)
+  })
+
+  it("校验：必须是布尔", () => {
+    expect(validateConfigPatch({ notifications: true })).toBeNull()
+    expect(validateConfigPatch({ notifications: "yes" })).toBe("notifications must be a boolean")
+  })
+})
+
+// 缺陷 4：legacyAutostartMigrated 曾被错误地放进这份用户可见、可通过 PUT /api/config 修改的
+// 配置——它是纯粹的桌面端一次性迁移状态（SEA 时代自启意图是否已经迁移过），用户在自己的
+// config.json 里看到一个看不懂的内部字段，还能通过公开 API 把它改坏，进而干扰
+// desktop/src/autostart.ts 的迁移判定。已挪到 desktop/src/autostart-state.ts 管理的桌面端
+// 专属状态文件，这里只负责确认它已经从用户配置的 schema 里彻底移除，且老配置文件里可能
+// 残留的这个字段会被静默剔除（与 openMode 走同一套 DROPPED_FIELDS 机制），不再声明、不再校验。
+describe("legacyAutostartMigrated 已移除出用户配置（缺陷 4：挪到桌面端专属状态文件）", () => {
+  it("默认配置里不再有这个字段", () => {
+    expect("legacyAutostartMigrated" in DEFAULT_CONFIG).toBe(false)
+  })
+
+  // 老配置文件（升级前写入过）里可能还留着这个字段，加载时不该报错，也不该把它带进新配置
+  it("老配置文件里的 legacyAutostartMigrated 被静默忽略", () => {
+    const merged = mergeConfig(structuredClone(DEFAULT_CONFIG), {
+      legacyAutostartMigrated: true,
+    } as unknown as Partial<Config>)
+    expect("legacyAutostartMigrated" in merged).toBe(false)
+  })
+
+  it("不再校验它——写进 PUT /api/config 的 patch 也只是被忽略，而不是报错或生效", () => {
+    expect(validateConfigPatch({ legacyAutostartMigrated: true })).toBeNull()
+    expect(validateConfigPatch({ legacyAutostartMigrated: "not-a-boolean" })).toBeNull()
+  })
+})
+
+describe("openMode 已移除", () => {
+  it("默认配置里不再有这个字段", () => {
+    expect("openMode" in DEFAULT_CONFIG).toBe(false)
+  })
+
+  // 老配置文件里可能还留着这个字段，加载时不该报错，也不该把它带进新配置
+  it("老配置文件里的 openMode 被静默忽略", () => {
+    const merged = mergeConfig(structuredClone(DEFAULT_CONFIG), { openMode: "browser" } as unknown as Partial<Config>)
+    expect("openMode" in merged).toBe(false)
+  })
+
+  it("不再校验它——写进 patch 也只是被忽略，而不是报错", () => {
+    expect(validateConfigPatch({ openMode: "nonsense" })).toBeNull()
   })
 })

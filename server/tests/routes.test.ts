@@ -1,13 +1,44 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { afterAll, describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it, vi } from "vitest"
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type Config } from "../src/config"
+import { pendingRepoOps } from "../src/queue"
 import { createApi } from "../src/routes"
 import { RepoStore } from "../src/store"
 import { cleanupFixtures, git, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// 两个 mocked scaffold 函数各自「开始跑」「跑完」的时间线，供并发测试判定二者是否重叠——
+// 比写死的毫秒阈值更抗环境抖动：不管机器多慢/多忙，「两个 start 是否都先于任一个 end 出现」
+// 这个先后关系本身不受绝对耗时影响，只反映有没有被串行化。测试用例里在断言前会清空它。
+const scaffoldOrder: string[] = []
+
+// new-project/clone 走的是 scaffold.ts 里真正的 mkdir/git init/git clone，速度快到没法在测试里
+// 靠时序窗口可靠地观察到"操作进行中"这一刻——mock 掉，换成一个带可控延时的假实现，才能
+// 确定性地断言：
+//   - clone 进行中不会被 pendingRepoOps() 计入（它走的是 scaffold.ts 的临时目录方案，
+//     耗时可能是分钟级，10 秒的排空上限对它形同虚设，见 routes.ts /api/clone 处的注释）
+//   - new-project 进行中会被 pendingRepoOps() 计入（缺陷 4：createProject 秒级完成，
+//     重新包回 withRepoLock，退出排空能真正等到它）
+//   - 二者互不阻塞（各自的锁键不共享，不会重蹈上一轮合成键 "__scaffold__" 串行化的覆辙）
+vi.mock("../src/scaffold", () => ({
+  createProject: vi.fn(async (parent: string, name: string) => {
+    scaffoldOrder.push("new:start")
+    await sleep(30)
+    scaffoldOrder.push("new:end")
+    return { ok: true, path: join(parent, name) }
+  }),
+  cloneRepo: vi.fn(async (url: string, parent: string) => {
+    scaffoldOrder.push("clone:start")
+    await sleep(30)
+    scaffoldOrder.push("clone:end")
+    return { ok: true, path: join(parent, "repo") }
+  }),
+}))
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "rr-routes-"))
@@ -35,6 +66,71 @@ describe("api", () => {
     const body = (await res.json()) as Array<{ name: string }>
     expect(body).toHaveLength(1)
     expect(body[0].name).toBe(basename(t.repo))
+    t.cleanup()
+  })
+
+  it("GET /api/version identifies the app and its version", async () => {
+    const t = setup()
+    const res = await t.app.request("/api/version")
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { app: string; version: string }
+    expect(body.app).toBe("repo-radar") // 接管逻辑靠 app 字段确认对面是自己，不能只看 200
+    expect(body.version).toMatch(/^\d+\.\d+\.\d+/)
+    t.cleanup()
+  })
+
+  it("POST /api/shutdown requires the X-Repo-Radar header and triggers the shutdown hook", async () => {
+    const t = setup()
+    let calls = 0
+    const app = createApi(t.store, t.configFile, { shutdown: () => void calls++ })
+
+    const noHeader = await app.request("/api/shutdown", { method: "POST" })
+    expect(noHeader.status).toBe(403)
+    expect(calls).toBe(0) // 没带自定义头（如跨站请求）绝不能触发退出
+
+    const withHeader = await app.request("/api/shutdown", { method: "POST", headers: { "x-repo-radar": "shutdown" } })
+    expect(withHeader.status).toBe(200)
+    expect(await withHeader.json()).toEqual({ ok: true })
+    expect(calls).toBe(1)
+    t.cleanup()
+  })
+
+  it("POST /api/shutdown does not exist when no shutdown hook is injected (source/PM2 deployments must not be killable over HTTP)", async () => {
+    const t = setup()
+    const res = await t.app.request("/api/shutdown", { method: "POST", headers: { "x-repo-radar": "shutdown" } })
+    expect(res.status).toBe(404)
+    t.cleanup()
+  })
+
+  it("POST /api/shutdown rejects cross-origin browser requests via the origin gate", async () => {
+    const t = setup()
+    let calls = 0
+    const app = createApi(t.store, t.configFile, { shutdown: () => void calls++ })
+    const res = await app.request("/api/shutdown", {
+      method: "POST",
+      headers: { origin: "http://evil.example", "x-repo-radar": "shutdown" },
+    })
+    expect(res.status).toBe(403)
+    expect(calls).toBe(0)
+    t.cleanup()
+  })
+
+  it("GET/POST /api/autostart proxies the injected hook; unsupported without it", async () => {
+    const t = setup()
+    // 未注入（源码/PM2 模式）：GET 报不支持，POST 400
+    expect(await (await t.app.request("/api/autostart")).json()).toEqual({ supported: false, enabled: false })
+    expect((await t.app.request("/api/autostart", { method: "POST", headers: { "content-type": "application/json" }, body: '{"enabled":true}' })).status).toBe(400)
+
+    // 注入后（exe 模式）：GET 透传状态，POST 校验 body 并调用
+    let state = { supported: true, enabled: false }
+    const app = createApi(t.store, t.configFile, {
+      autostart: { get: () => state, set: (enabled) => (state = { supported: true, enabled }) },
+    })
+    expect(await (await app.request("/api/autostart")).json()).toEqual({ supported: true, enabled: false })
+    const on = await app.request("/api/autostart", { method: "POST", headers: { "content-type": "application/json" }, body: '{"enabled":true}' })
+    expect(await on.json()).toEqual({ supported: true, enabled: true })
+    expect((await app.request("/api/autostart", { method: "POST", headers: { "content-type": "application/json" }, body: '{"enabled":"yes"}' })).status).toBe(400)
+    expect(state.enabled).toBe(true) // 校验失败不应改状态
     t.cleanup()
   })
 
@@ -536,6 +632,94 @@ describe("api", () => {
     expect(body.stashes[0].sha).toMatch(/^[0-9a-f]{40}$/)
     expect(body.stashes[0].branch).toBe("main")
     expect(body.stashes[0].files).toBeGreaterThan(0)
+    t.cleanup()
+  })
+
+  // 缺陷 4：createProject 很快（mkdir + git init，秒级），重新包回 withRepoLock——退出时 10 秒
+  // 的排空对它绰绰有余。用带可控延时的假实现确定性地断言操作进行中 pendingRepoOps() 确实被计入
+  // （而不是像上一轮那样两头落空：既不进锁、临时目录方案又没做）
+  it("POST /api/new-project 进行中会被 pendingRepoOps() 计入（缺陷 4：重新走仓库锁）", async () => {
+    const t = setup()
+    expect(pendingRepoOps()).toBe(0)
+    const req = t.app.request("/api/new-project", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parent: "C:\\fake\\parent", name: "demo" }),
+    })
+    await sleep(5) // mock 的 createProject 延时 30ms 还没到，此刻仍在进行中
+    expect(pendingRepoOps()).toBe(1)
+    const res = await req
+    expect(res.status).toBe(200)
+    expect(pendingRepoOps()).toBe(0)
+    t.cleanup()
+  })
+
+  it("POST /api/clone 进行中不会被 pendingRepoOps() 计入（仍不走仓库锁，走临时目录方案）", async () => {
+    const t = setup()
+    expect(pendingRepoOps()).toBe(0)
+    const req = t.app.request("/api/clone", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/demo.git", parent: "C:\\fake\\parent" }),
+    })
+    await sleep(5)
+    expect(pendingRepoOps()).toBe(0)
+    const res = await req
+    expect(res.status).toBe(200)
+    expect(pendingRepoOps()).toBe(0)
+    t.cleanup()
+  })
+
+  // 缺陷 4：createProject 重新包回 withRepoLock 之后，仍要保证它与 clone 互不阻塞——两者用的是
+  // 完全不同的锁键（NEW_PROJECT_LOCK_KEY vs. clone 压根不过锁），不会重蹈上一轮合成键 "__scaffold__"
+  // 的覆辙（一个慢 clone 能把另一个新建卡到 5 分钟）。判定标准是二者的执行区间有没有重叠：
+  // 串行化的话 clone 要等 new-project 完全跑完（"new:end"）才会开始（"clone:start"）；
+  // 真正并发跑的话两个 "start" 都该先于任一个 "end" 出现
+  it("POST /api/new-project 与 POST /api/clone 并发执行，互不等待（各自的锁键不共享）", async () => {
+    const t = setup()
+    scaffoldOrder.length = 0
+    const [res1, res2] = await Promise.all([
+      t.app.request("/api/new-project", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parent: "C:\\fake\\parent", name: "demo" }),
+      }),
+      t.app.request("/api/clone", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: "https://example.com/demo.git", parent: "C:\\fake\\parent" }),
+      }),
+    ])
+    expect(res1.status).toBe(200)
+    expect(res2.status).toBe(200)
+    const firstEnd = scaffoldOrder.findIndex((e) => e.endsWith(":end"))
+    expect(firstEnd).toBeGreaterThanOrEqual(0)
+    // 第一个 "end" 出现之前，两边的 "start" 都该已经发生——证明二者是并发执行，不是排队等来的
+    expect(scaffoldOrder.slice(0, firstEnd)).toEqual(expect.arrayContaining(["new:start", "clone:start"]))
+    t.cleanup()
+  })
+
+  // 缺陷 4 补充：NEW_PROJECT_LOCK_KEY 只有 createProject 自己用，两个 new-project 请求会共用
+  // 这同一把键，理应彼此串行（这是有意为之——秒级操作串行无妨，换来的是退出排空真能等到它）
+  it("两个 POST /api/new-project 并发时彼此串行（共用同一把锁键），但不影响上面 clone 与它的并发", async () => {
+    const t = setup()
+    scaffoldOrder.length = 0
+    const [res1, res2] = await Promise.all([
+      t.app.request("/api/new-project", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parent: "C:\\fake\\parent", name: "a" }),
+      }),
+      t.app.request("/api/new-project", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parent: "C:\\fake\\parent", name: "b" }),
+      }),
+    ])
+    expect(res1.status).toBe(200)
+    expect(res2.status).toBe(200)
+    // 严格串行：start → end → start → end，第二个的 start 不会抢在第一个的 end 之前发生
+    expect(scaffoldOrder).toEqual(["new:start", "new:end", "new:start", "new:end"])
     t.cleanup()
   })
 })

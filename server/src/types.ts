@@ -29,6 +29,9 @@ export interface GithubInbox {
   issues: number // 开放 issue 数
   ciFailed: boolean // 最近一次工作流运行失败
   ciSha?: string | null // 远程默认分支 HEAD oid（CI「已处理」按它记；旧缓存无此字段）
+  // prs/issues 的计数口径：true = 已减去当前登录用户自己开的；旧缓存无此字段（undefined）视同「不确定」。
+  // desktop/src/notify.ts 用它判断前后两轮的计数是否可比——口径切换时直接做差会全线虚高，必须能识别出来
+  byViewer?: boolean
 }
 
 export interface RepoStatus {

@@ -135,13 +135,81 @@ async function ensureViewer(): Promise<string | null> {
   return viewerInFlight
 }
 
+interface RawInboxResponse {
+  data?: {
+    repository?: {
+      pullRequests?: { totalCount?: number }
+      issues?: { totalCount?: number }
+      mine?: { totalCount?: number }
+      defaultBranchRef?: { target?: { oid?: string; statusCheckRollup?: { state?: string } | null } | null } | null
+    } | null
+    prOthers?: { issueCount?: number } | null
+  }
+}
+
+/**
+ * 把 gh 返回的原始 stdout/退出码解析成 GithubInbox。从 getGithubInbox 里单独抽出来，
+ * 是为了脱离真实 gh 子进程即可单测——限流兜底、口径标记这些分支只有这样才有办法被测试钉死。
+ * 不看退出码只看数据：gh 对含 errors 的 GraphQL 响应会非零退出，但 stdout 仍带部分数据——
+ * search 被二级限流时 repository 字段往往是好的，别因此把整个仓库的 PR/issue/CI 置 null（会冻住旧缓存）
+ * me：本次是否已知登录用户名，决定 prs/issues 走「不含自己」还是「含自己」的口径（见 byViewer）。
+ * prevPrs/prevIssues：上次缓存的 PR/issue 数——search（prOthers）与 mine 字段都可能被二级限流单独置空，
+ * 缺失时各自沿用对应的上次计数，避免在「不含自己/含自己的总数」间来回震荡，或把「自己开的」误算成 0。
+ */
+export function parseInboxResponse(
+  stdout: string,
+  code: number | null,
+  me: string | null,
+  prevPrs?: number,
+  prevIssues?: number,
+): GithubInbox | null {
+  try {
+    const j = JSON.parse(stdout) as RawInboxResponse
+    const repo = j.data?.repository
+    // pullRequests/issues 字段本身缺失 = 该字段被 GraphQL 错误置空（限流/权限），不是「0 个」——
+    // 返回 null 保留旧缓存，绝不把查询失败落盘成 prs:0/issues:0 的假干净（会顶掉之前正确的数据，还带新 TTL）
+    if (!repo || !repo.pullRequests || !repo.issues) return null
+    // gh 非零退出 = 响应带 errors。此时 defaultBranchRef 为 null 分不清「真没有默认分支」还是「该字段被错误置空」——
+    // 宁可整份丢弃保留旧缓存，别把 CI 红洗成 ciFailed:false 落盘（正常响应里它为 null 是合法的空仓库情形）
+    if (code !== 0 && !repo.defaultBranchRef) return null
+    const state = repo.defaultBranchRef?.target?.statusCheckRollup?.state
+    const totalIssues = repo.issues.totalCount ?? 0
+    // 只算别人开的：PR 用 search 计数（-author:me）。search 字段失败（限流）时沿用上次值防震荡；
+    // 取不到登录名（me=null）时必须用**新鲜总数**——这时每轮都会走 prevPrs 的话，
+    // 旧值带着新 TTL 反复回写、自我固化，合并/新开 PR 永远反映不出来
+    const prOthers = j.data?.prOthers?.issueCount
+    // mine（自己开的 issue 数）与 prOthers 同样会被二级限流单独置空——之前这里缺失时直接按 0 算，
+    // 等于把「自己开的 issue 数」算成 0，issues 总数虚高同样多，弹一条假的「Issue +N」，
+    // 12 分钟后又跌回去且没有任何更正。用上一轮缓存的 issues 数直接顶上（它已经是「减去自己」之后
+    // 的口径，可以直接复用，不必再减一次）；没有旧缓存兜底时退回未减的总数——首次查询就撞上限流属实少见，
+    // 且此时上层的 before 必为 null，notify.ts 本就不会为「首次」弹通知，退回总数不会造成误报
+    const mine = repo.mine?.totalCount
+    return {
+      prs: me ? (typeof prOthers === "number" ? prOthers : (prevPrs ?? repo.pullRequests.totalCount ?? 0)) : (repo.pullRequests.totalCount ?? 0),
+      issues: !me ? totalIssues : typeof mine === "number" ? Math.max(0, totalIssues - mine) : (prevIssues ?? totalIssues),
+      ciFailed: state === "FAILURE" || state === "ERROR",
+      // 远程默认分支的 HEAD oid：CI 红的「已处理」按它记——别人推了新提交（oid 变）新的失败才会重现。
+      // 用本地 HEAD 记的话，远端 CI 又红了而你本地没提交，永远不会再提醒
+      ciSha: repo.defaultBranchRef?.target?.oid ?? null,
+      // 口径标记：me 已知即代表 prs/issues 本轮都按「减去自己」口径计算（哪怕某个字段触发了上面的
+      // 限流兜底，兜底用的 prevPrs/prevIssues 本身也是「减去自己」口径的旧值，口径依然成立）。
+      // notify.ts 靠它判断前后两轮的计数是否可比——viewerLogin 一旦解析成功进程内不会再失效，
+      // 所以危险方向是重启之后：上一次会话缓存的是「减去自己」，这次会话首个 viewer 查询失败
+      // （me=null，开机自启/网络刚上时常见）而仓库查询成功，全部仓库会同时切回「含自己」口径，
+      // 直接做差会全线虚高，必须能分辨出口径切换了
+      byViewer: me !== null,
+    }
+  } catch {
+    return null // stdout 不是 JSON（gh 未装/未登录的报错文本）
+  }
+}
+
 /**
  * 汇总某 GitHub 仓库的「等我的」：开放 PR 数、别人开的 open issue 数、默认分支最新提交的 CI 是否失败。
  * 一次 GraphQL 拿齐（比三条 gh 子命令快约 3 倍），供后台限流轮询用。查询失败 / 仓库取不到返回 null（上层保留旧值）。
- * prevPrs：上次缓存的 PR 数——search 字段被二级限流时沿用它，避免 PR 数在「不含自己/含自己的总数」间来回震荡
- * （震荡会让队列条目闪现、「已处理」清了又回，永远消不掉）。
+ * prevPrs/prevIssues：上次缓存的 PR/issue 数，见 parseInboxResponse 的兜底说明。
  */
-export async function getGithubInbox(slug: string, prevPrs?: number): Promise<GithubInbox | null> {
+export async function getGithubInbox(slug: string, prevPrs?: number, prevIssues?: number): Promise<GithubInbox | null> {
   const [owner, name] = slug.split("/")
   if (!owner || !name) return null
   const me = await ensureViewer()
@@ -162,45 +230,7 @@ export async function getGithubInbox(slug: string, prevPrs?: number): Promise<Gi
       ]
     : ["api", "graphql", "-f", `query=${INBOX_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`]
   const res = await runGh(process.cwd(), args)
-  // 不看退出码只看数据：gh 对含 errors 的 GraphQL 响应会非零退出，但 stdout 仍带部分数据——
-  // search 被二级限流时 repository 字段往往是好的，别因此把整个仓库的 PR/issue/CI 置 null（会冻住旧缓存）
-  try {
-    const j = JSON.parse(res.stdout) as {
-      data?: {
-        repository?: {
-          pullRequests?: { totalCount?: number }
-          issues?: { totalCount?: number }
-          mine?: { totalCount?: number }
-          defaultBranchRef?: { target?: { oid?: string; statusCheckRollup?: { state?: string } | null } | null } | null
-        } | null
-        prOthers?: { issueCount?: number } | null
-      }
-    }
-    const repo = j.data?.repository
-    // pullRequests/issues 字段本身缺失 = 该字段被 GraphQL 错误置空（限流/权限），不是「0 个」——
-    // 返回 null 保留旧缓存，绝不把查询失败落盘成 prs:0/issues:0 的假干净（会顶掉之前正确的数据，还带新 TTL）
-    if (!repo || !repo.pullRequests || !repo.issues) return null
-    // gh 非零退出 = 响应带 errors。此时 defaultBranchRef 为 null 分不清「真没有默认分支」还是「该字段被错误置空」——
-    // 宁可整份丢弃保留旧缓存，别把 CI 红洗成 ciFailed:false 落盘（正常响应里它为 null 是合法的空仓库情形）
-    if (res.code !== 0 && !repo.defaultBranchRef) return null
-    const state = repo.defaultBranchRef?.target?.statusCheckRollup?.state
-    const totalIssues = repo.issues.totalCount ?? 0
-    const mine = repo.mine?.totalCount ?? 0
-    // 只算别人开的：PR 用 search 计数（-author:me）。search 字段失败（限流）时沿用上次值防震荡；
-    // 取不到登录名（me=null）时必须用**新鲜总数**——这时每轮都会走 prevPrs 的话，
-    // 旧值带着新 TTL 反复回写、自我固化，合并/新开 PR 永远反映不出来
-    const prOthers = j.data?.prOthers?.issueCount
-    return {
-      prs: me ? (typeof prOthers === "number" ? prOthers : (prevPrs ?? repo.pullRequests.totalCount ?? 0)) : (repo.pullRequests.totalCount ?? 0),
-      issues: Math.max(0, totalIssues - mine),
-      ciFailed: state === "FAILURE" || state === "ERROR",
-      // 远程默认分支的 HEAD oid：CI 红的「已处理」按它记——别人推了新提交（oid 变）新的失败才会重现。
-      // 用本地 HEAD 记的话，远端 CI 又红了而你本地没提交，永远不会再提醒
-      ciSha: repo.defaultBranchRef?.target?.oid ?? null,
-    }
-  } catch {
-    return null // stdout 不是 JSON（gh 未装/未登录的报错文本）
-  }
+  return parseInboxResponse(res.stdout, res.code, me, prevPrs, prevIssues)
 }
 
 /** 按需查询某仓库的开放 PR 与最近 CI 状态（需本机安装并登录 gh）。纯本地触发，无后台调用。 */

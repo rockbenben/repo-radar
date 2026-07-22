@@ -3,6 +3,7 @@ import { loadConfig, mergeConfig, saveConfig, validateConfigPatch, type Config }
 import { WsHub } from "./events"
 import { ACTION_ARGS, commitRepo, createBranch, createStash, currentGitIdentity, deleteBranches, discardChanges, dropStashes, getRepoDetail, getRepoDiff, listStashes, stashAction, stashDiff, switchBranch, type RepoAction } from "./git"
 import { openTarget } from "./open"
+import { PORT } from "./port"
 import { withRepoLock } from "./queue"
 import { getGithubStatus } from "./github"
 import { buildManifest, importManifest, isManifest } from "./manifest"
@@ -17,17 +18,28 @@ export interface ApiExtras {
   hub?: WsHub
   openFn?: (template: string, path: string) => void
   rescan?: () => Promise<RepoStatus[]>
+  rescanFresh?: () => Promise<RepoStatus[]> // 服务端自己改了磁盘（clone/新建）后的重扫：保证扫描在改动之后开始，不共乘进行中的一轮
   setWatch?: (enabled: boolean) => Promise<void> // 开/关文件监听实时刷新（持久化到 config.autoWatch）
   setAutoFetch?: (minutes: number) => Promise<void> // 设置定时后台 fetch 间隔（分钟，0=关）
   refreshInbox?: () => Promise<void> // 立即强制重拉各仓库的 GitHub PR/issue/CI（跳过 TTL）
+  version?: string // 应用版本，由宿主注入（桌面应用用 app.getVersion()）
+  shutdown?: () => void // /api/shutdown 的实际退出动作；不注入则端点不存在（仅单文件 exe 模式注入，服务器部署绝不暴露可杀进程的 HTTP 端点）
+  autostart?: { get: () => { supported: boolean; enabled: boolean }; set: (enabled: boolean) => { supported: boolean; enabled: boolean } } // 开机自启（仅单文件 exe 模式注入）
 }
 
 const ACTIONS = new Set<string>(Object.keys(ACTION_ARGS))
 const OPEN_TARGETS = new Set<string>(["editor", "terminal", "explorer"])
 
+// createProject 专属的锁键：不是仓库 id，也不与 cloneRepo 共享。mkdir + git init 是秒级操作，
+// 退出时 10 秒的排空上限对它绰绰有余，包一层 withRepoLock 就够（见 /api/new-project 处的注释）。
+// 只有 createProject 用这个键——不会像上一轮 "__scaffold__" 那样把慢克隆也拖进来一起排队。
+const NEW_PROJECT_LOCK_KEY = "__scaffold-new-project__"
+
+// 自身端口按 PORT 推导，不写死——REPO_RADAR_PORT 换了端口而白名单没跟着换的话，
+// 界面自己发的请求就成了「跨站」，整个 API 当场 403。5173 是 vite dev server（固定端口）
 const ALLOWED_ORIGINS = new Set([
-  "http://localhost:7420",
-  "http://127.0.0.1:7420",
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ])
@@ -42,6 +54,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   const hub = extras.hub ?? new WsHub()
   const openFn = extras.openFn ?? openTarget
   const rescan = extras.rescan ?? (() => store.refreshAll())
+  const rescanFresh = extras.rescanFresh ?? rescan
   const batchDeps: BatchDeps = {
     getRepo: (id) => store.get(id),
     refreshOne: (id) => store.refreshOne(id),
@@ -70,6 +83,38 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   app.use("/api/*", async (c, next) => {
     if (!originAllowed(c.req.header("origin"))) return c.json({ error: "forbidden origin" }, 403)
     await next()
+  })
+
+  // 「关于本实例」：
+  //   app     — 身份标识，同端口再启动的进程靠它判断占着端口的是不是 repo-radar
+  //             （防止把恰好返回 200 的别家服务误判成自己）
+  //   version — 显示在设置面板，让用户能核对自己跑的是哪一版（升级后尤其需要）
+  //   canQuit — 退出端点是否存在，UI 据此决定显不显示「退出」按钮。必须由 shutdown 是否注入
+  //             如实推导，不能借用 autostart.supported：两者是独立能力，搭车会在任一侧改动时静默失效
+  app.get("/api/version", (c) =>
+    c.json({ app: "repo-radar", version: extras.version ?? "0.0.0", canQuit: extras.shutdown !== undefined }),
+  )
+
+  // 优雅退出：新版本启动时用它替换旧实例，UI 的「退出」按钮也走它。只在注入了 shutdown 时注册——
+  // index 仅在单文件 exe 模式注入，源码/PM2 部署下这个端点不存在（长期跑的服务不能隔着 HTTP 被杀掉）。
+  // 服务只绑 127.0.0.1，且要求自定义头：带自定义头的跨域请求会触发 CORS 预检（服务端不应答预检），
+  // 恶意网页无法从浏览器把它发出来
+  if (extras.shutdown) {
+    const bye = extras.shutdown
+    app.post("/api/shutdown", (c) => {
+      if (c.req.header("x-repo-radar") !== "shutdown") return c.json({ error: "missing X-Repo-Radar header" }, 403)
+      bye()
+      return c.json({ ok: true })
+    })
+  }
+
+  // 开机自启：OS 即事实源（注册表/plist/desktop 文件），不落 config。源码模式没有稳定的可执行路径，不注入即「不支持」
+  app.get("/api/autostart", (c) => c.json(extras.autostart ? extras.autostart.get() : { supported: false, enabled: false }))
+  app.post("/api/autostart", async (c) => {
+    if (!extras.autostart) return c.json({ error: "autostart is only available in the packaged executable" }, 400)
+    const body = await jsonBody(c)
+    if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400)
+    return c.json(extras.autostart.set(body.enabled))
   })
 
   app.get("/api/repos", (c) => c.json(store.list()))
@@ -354,10 +399,17 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     }
     if (typeof body.parent !== "string" || typeof body.name !== "string")
       return c.json({ error: "parent 与 name 必填" }, 400)
+    // 提到局部 const：body 是 let，上面的类型收窄只在当次判断成立，TS 不会把它带到后面的使用点
+    const { parent, name } = body
     const cfg = loadConfig(configFile)
-    const result = await createProject(body.parent, body.name, cfg.roots)
+    // 走 withRepoLock（缺陷 4）：createProject 只是 mkdir + git init + 写一个 README，秒级操作，
+    // 10 秒的排空上限绰绰有余——包上它，退出排空才能真正等到它跑完，而不是像克隆一样两头落空。
+    // 不会重蹈上一轮 "__scaffold__" 合成键的覆辙：clone 走的是 scaffold.ts 里的临时目录方案
+    // （耗时可能是分钟级，排空对它形同虚设，见下面 /api/clone 的注释），两者时长差两个数量级，
+    // 不该用同一把锁——这里用的 NEW_PROJECT_LOCK_KEY 只有 createProject 自己在用。
+    const result = await withRepoLock(NEW_PROJECT_LOCK_KEY, () => createProject(parent, name, cfg.roots))
     if (!result.ok) return c.json({ error: result.error }, 400)
-    await rescan() // 纳入新仓库
+    await rescanFresh() // 纳入新仓库：磁盘刚变，不能共乘可能已扫过父目录的进行中一轮
     return c.json({ path: result.path })
   })
 
@@ -370,10 +422,16 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     }
     if (typeof body.url !== "string" || typeof body.parent !== "string")
       return c.json({ error: "url 与 parent 必填" }, 400)
+    // 同上：先落到局部 const，避免 body 的 let 声明让类型收窄在后面的使用点丢失
+    const { url, parent } = body
     const cfg = loadConfig(configFile)
-    const result = await cloneRepo(body.url, body.parent, cfg.roots)
+    // 不走 withRepoLock：克隆一个大仓库可能跑很久（远超 10 秒的排空上限），退出时排空对它
+    // 形同虚设，包不包锁都一样等不到它跑完——真正的保护在 cloneRepo 内部：先克隆到临时目录，
+    // 成功后才 rename 成最终名字，即便被硬切也不会留下一个顶着最终名字的半成品仓库（不做残骸
+    // 自动清理，见 scaffold.ts 顶部注释）
+    const result = await cloneRepo(url, parent, cfg.roots)
     if (!result.ok) return c.json({ error: result.error }, 400)
-    await rescan()
+    await rescanFresh() // 同 new-project：保证扫描在 clone 落盘之后开始
     return c.json({ path: result.path })
   })
 

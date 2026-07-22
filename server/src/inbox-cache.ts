@@ -32,18 +32,30 @@ export class InboxCache {
     }
   }
 
+  private write(): void {
+    try {
+      mkdirSync(dirname(this.file), { recursive: true })
+      writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.map), null, 2), "utf8")
+    } catch {
+      /* 写盘失败静默：缓存只是加速，不影响功能 */
+    }
+  }
+
   // 防抖落盘：一整轮轮询会连着 set 几十次，攒到 1s 后写一次，避免频繁写盘
   private scheduleSave(): void {
     if (this.saveTimer) return
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
-      try {
-        mkdirSync(dirname(this.file), { recursive: true })
-        writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.map), null, 2), "utf8")
-      } catch {
-        /* 写盘失败静默：缓存只是加速，不影响功能 */
-      }
+      this.write()
     }, 1000)
+  }
+
+  /** 立刻把待写的内容落盘。退出路径专用：防抖窗口是 1 秒，硬退会把最后一轮拉取结果丢掉 */
+  flush(): void {
+    if (!this.saveTimer) return // 没有待写内容，别做无谓的写盘
+    clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    this.write()
   }
 
   /** origin url 一致才返回缓存（换了远程即失效）；不看 TTL——过期与否由 isStale 决定是否后台重拉。 */
