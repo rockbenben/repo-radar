@@ -25,7 +25,7 @@ Prendi il file per la tua piattaforma da [Releases](https://github.com/rockbenbe
 
 - **Windows** — esegui `repo-radar-<version>-x64-setup.exe`; al prompt di SmartScreen clicca *Ulteriori informazioni → Esegui comunque*.
 - **macOS** — apri `repo-radar-<version>-arm64.dmg` e trascina l'app in Applications. Clic destro → Apri la prima volta; se macOS la dichiara danneggiata, rimuovi una volta il flag di quarantena con `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
 
 Oppure esegui dal codice sorgente:
 

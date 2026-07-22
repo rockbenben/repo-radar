@@ -25,7 +25,7 @@
 
 - **Windows** — รัน `repo-radar-<version>-x64-setup.exe`; ที่หน้าต่าง SmartScreen ให้คลิก *More info → Run anyway*
 - **macOS** — เปิด `repo-radar-<version>-arm64.dmg` แล้วลากแอปไปไว้ใน Applications ครั้งแรกให้คลิกขวา → Open หาก macOS บอกว่าแอปเสียหาย ให้ล้างค่า quarantine flag สักครั้งด้วย `xattr -cr /Applications/repo-radar.app`
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`
 
 หรือรันจากซอร์สโค้ด:
 

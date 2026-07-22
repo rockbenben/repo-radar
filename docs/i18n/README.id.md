@@ -25,7 +25,7 @@ Ambil file untuk platform Anda dari [Releases](https://github.com/rockbenben/rep
 
 - **Windows** — jalankan `repo-radar-<version>-x64-setup.exe`; pada prompt SmartScreen klik *More info → Run anyway*.
 - **macOS** — buka `repo-radar-<version>-arm64.dmg` lalu seret aplikasinya ke Applications. Klik kanan → Open saat pertama kali; kalau macOS menyebutnya rusak, bersihkan flag quarantine sekali dengan `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
 
 Atau jalankan dari source:
 

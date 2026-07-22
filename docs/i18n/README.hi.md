@@ -25,7 +25,7 @@
 
 - **Windows** — `repo-radar-<version>-x64-setup.exe` चलाएं; SmartScreen प्रॉम्प्ट पर *More info → Run anyway* क्लिक करें।
 - **macOS** — `repo-radar-<version>-arm64.dmg` खोलें और ऐप को Applications में खींच लाएं। पहली बार राइट-क्लिक → Open करें; अगर macOS इसे damaged कहे, तो `xattr -cr /Applications/repo-radar.app` से quarantine फ़्लैग एक बार साफ़ करें।
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`।
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`।
 
 या सोर्स से चलाएं:
 

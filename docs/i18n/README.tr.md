@@ -25,7 +25,7 @@ Platformunuza uygun dosyayı [Releases](https://github.com/rockbenben/repo-radar
 
 - **Windows** — `repo-radar-<version>-x64-setup.exe` dosyasını çalıştırın; SmartScreen isteminde *Daha fazla bilgi → Yine de çalıştır*'a tıklayın.
 - **macOS** — `repo-radar-<version>-arm64.dmg` dosyasını açıp uygulamayı Applications'a sürükleyin. İlk seferde sağ tıklayıp → Aç; macOS bozuk olduğunu söylerse karantina bayrağını bir kez `xattr -cr /Applications/repo-radar.app` ile temizleyin.
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
 
 Ya da kaynaktan çalıştırın:
 

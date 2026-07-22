@@ -25,7 +25,7 @@
 
 - **Windows** — запустите `repo-radar-<version>-x64-setup.exe`; в окне SmartScreen нажмите *Подробнее → Выполнить в любом случае*.
 - **macOS** — откройте `repo-radar-<version>-arm64.dmg` и перетащите приложение в Applications. В первый раз кликните правой кнопкой → Открыть; если macOS называет его повреждённым, один раз снимите флаг карантина командой `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
 
 Или запустите из исходников:
 

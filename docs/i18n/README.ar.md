@@ -25,7 +25,7 @@
 
 - **Windows** — شغّل `repo-radar-<version>-x64-setup.exe`؛ عند ظهور تنبيه SmartScreen اضغط *More info → Run anyway*.
 - **macOS** — افتح `repo-radar-<version>-arm64.dmg` واسحب التطبيق إلى Applications. انقر بزر الفأرة الأيمن → Open في المرة الأولى؛ وإذا وصفه macOS بأنه تالف، فامسح علامة الحجر الصحي مرة واحدة بـ `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
 
 أو شغّله من المصدر:
 

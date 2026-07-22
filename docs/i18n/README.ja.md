@@ -25,7 +25,7 @@
 
 - **Windows** —— `repo-radar-<version>-x64-setup.exe` を実行します。SmartScreen のプロンプトで *詳細情報 → 実行* をクリックしてください。
 - **macOS** —— `repo-radar-<version>-arm64.dmg` を開き、アプリを Applications にドラッグします。初回は右クリック → 開くで。macOS が「壊れている」と言い張る場合は、`xattr -cr /Applications/repo-radar.app` で隔離属性を一度クリアしてください。
-- **Linux** —— `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`。
+- **Linux** —— `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`。
 
 またはソースから実行：
 

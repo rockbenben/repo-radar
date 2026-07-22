@@ -25,7 +25,7 @@
 
 - **Windows** — `repo-radar-<version>-x64-setup.exe` চালান; SmartScreen প্রম্পটে *More info → Run anyway* ক্লিক করুন।
 - **macOS** — `repo-radar-<version>-arm64.dmg` খুলে অ্যাপটি Applications-এ টেনে নিন। প্রথমবার রাইট-ক্লিক → Open করুন; macOS যদি এটিকে damaged বলে, তাহলে `xattr -cr /Applications/repo-radar.app` দিয়ে quarantine ফ্ল্যাগটি একবার পরিষ্কার করুন।
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`।
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`।
 
 অথবা সোর্স থেকে চালান:
 

@@ -25,7 +25,7 @@ Lấy file cho nền tảng của bạn từ [Releases](https://github.com/rockb
 
 - **Windows** — chạy `repo-radar-<version>-x64-setup.exe`; ở lời nhắc SmartScreen, bấm *More info → Run anyway*.
 - **macOS** — mở `repo-radar-<version>-arm64.dmg` và kéo ứng dụng vào Applications. Nhấp chuột phải → Open ở lần đầu tiên; nếu macOS báo ứng dụng bị hỏng, hãy xóa cờ quarantine một lần bằng `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
 
 Hoặc chạy từ mã nguồn:
 

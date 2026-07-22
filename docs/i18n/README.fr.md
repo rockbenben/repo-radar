@@ -25,7 +25,7 @@ Récupérez le fichier de votre plateforme depuis [Releases](https://github.com/
 
 - **Windows** — exécutez `repo-radar-<version>-x64-setup.exe` ; sur l'invite SmartScreen, cliquez sur *Informations complémentaires → Exécuter quand même*.
 - **macOS** — ouvrez `repo-radar-<version>-arm64.dmg` et faites glisser l'app vers Applications. Clic droit → Ouvrir la première fois ; si macOS la dit endommagée, retirez une fois l'attribut de quarantaine avec `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
 
 Ou lancez depuis les sources :
 

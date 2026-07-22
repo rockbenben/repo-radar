@@ -25,7 +25,7 @@ Schnapp dir die Datei für deine Plattform von [Releases](https://github.com/roc
 
 - **Windows** — führe `repo-radar-<version>-x64-setup.exe` aus; klicke bei der SmartScreen-Meldung auf *Weitere Informationen → Trotzdem ausführen*.
 - **macOS** — öffne `repo-radar-<version>-arm64.dmg` und ziehe die App nach Applications. Beim ersten Mal Rechtsklick → Öffnen; nennt macOS sie beschädigt, entferne das Quarantäne-Flag einmalig mit `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
 
 Oder aus dem Quellcode starten:
 

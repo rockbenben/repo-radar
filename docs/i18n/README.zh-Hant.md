@@ -25,7 +25,7 @@
 
 - **Windows** —— 執行 `repo-radar-<version>-x64-setup.exe`；在 SmartScreen 提示上點擊 *其他資訊 → 仍要執行*。
 - **macOS** —— 打開 `repo-radar-<version>-arm64.dmg`，把應用程式拖進 Applications。首次請右鍵 → 打開；若 macOS 說它已損毀，用 `xattr -cr /Applications/repo-radar.app` 清一次隔離標記。
-- **Linux** —— `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`。
+- **Linux** —— `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`。
 
 或從原始碼執行：
 
