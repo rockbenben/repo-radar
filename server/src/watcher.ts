@@ -1,4 +1,5 @@
 import { watch, type FSWatcher } from "chokidar"
+import { realpathSync } from "node:fs"
 import { join } from "node:path"
 
 interface WatchedRepo {
@@ -29,8 +30,20 @@ export class RepoWatcher {
 
   async watch(repos: WatchedRepo[]): Promise<void> {
     await this.close()
-    this.repos = [...repos].sort((a, b) => b.path.length - a.path.length) // 最长前缀优先，嵌套路径归属正确
-    const targets = repos.flatMap((r) => [
+    // Windows 上 8.3 短名路径（如 CI runner 的 C:\Users\RUNNER~1\...）会触发 libuv fs-event 的
+    // 断言崩溃（src\win\fs-event.c 的 _wcsnicmp，整个进程 abort、无法 try/catch）——监听前把每个
+    // 仓库路径解析成规范长名，既规避该崩溃，也保证 chokidar 回报的事件路径与下面 handle 里的
+    // 归属前缀（file.startsWith(r.path)）用同一种形式。realpath 需要路径存在；极少数暂不可解析
+    // 的情况退回原值，至少不崩。
+    const resolved = repos.map((r) => {
+      try {
+        return { ...r, path: realpathSync.native(r.path) }
+      } catch {
+        return r
+      }
+    })
+    this.repos = [...resolved].sort((a, b) => b.path.length - a.path.length) // 最长前缀优先，嵌套路径归属正确
+    const targets = resolved.flatMap((r) => [
       join(r.path, ".git", "HEAD"),
       join(r.path, ".git", "index"),
       join(r.path, ".git", "refs"),

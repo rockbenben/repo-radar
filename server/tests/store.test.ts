@@ -9,14 +9,18 @@ import { cleanupFixtures, makeRepo } from "./fixtures"
 afterAll(cleanupFixtures)
 
 describe("deriveGroup", () => {
+  // 用原生路径（join 走当前平台分隔符）构造——deriveGroup 内部用 path.relative + path.sep，
+  // 硬编码 Windows 的 "D:\\proj" 在 Linux/macOS 上反斜杠不算分隔符，会被判成 "(manual)"。
+  // 目录无需真实存在：deriveGroup 是纯路径字符串运算。
+  const root = join(tmpdir(), "rr-proj")
   it("uses first path segment under root", () => {
-    expect(deriveGroup("D:\\proj\\365\\027", ["D:\\proj"])).toBe("365")
+    expect(deriveGroup(join(root, "365", "027"), [root])).toBe("365")
   })
   it("uses (root) for repos directly under root", () => {
-    expect(deriveGroup("D:\\proj\\solo", ["D:\\proj"])).toBe("(root)")
+    expect(deriveGroup(join(root, "solo"), [root])).toBe("(root)")
   })
   it("uses (manual) for paths outside all roots", () => {
-    expect(deriveGroup("E:\\elsewhere\\x", ["D:\\proj"])).toBe("(manual)")
+    expect(deriveGroup(join(tmpdir(), "rr-elsewhere", "x"), [root])).toBe("(manual)")
   })
   it("uses (root) when the repo is itself a configured root", () => {
     expect(deriveGroup("D:\\proj", ["D:\\proj"])).toBe("(root)")
