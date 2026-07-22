@@ -1,6 +1,15 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { summarizeInboxChanges } from "../src/notify"
 import type { InboxChange } from "../../server/src/backend"
+
+// mock electron，避免加载真实 electron 二进制（见 window.test.ts 的说明）：notify.ts 顶层 import 了
+// Notification，import 就会触发 electron 加载；本测试只验纯函数 summarizeInboxChanges，mock 掉即可。
+vi.mock("electron", () => ({
+  Notification: class {
+    show() {}
+    on() {}
+  },
+}))
 
 const inbox = (prs: number, issues: number, ciFailed = false, ciSha = "abc", byViewer = true) => ({ prs, issues, ciFailed, ciSha, byViewer })
 const change = (name: string, before: ReturnType<typeof inbox> | null, after: ReturnType<typeof inbox>): InboxChange => ({

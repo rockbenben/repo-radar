@@ -2,9 +2,17 @@ import type { BrowserWindow } from "electron"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { loadState } from "../src/window-state"
 import { saveWindowState } from "../src/window"
+
+// mock electron，避免加载真实 electron 二进制（见 window.test.ts 的说明）：saveWindowState 只调用
+// 传入的窗口对象方法，不用到 import 进来的 electron 运行时，mock 掉即可绕过二进制解压竞态。
+vi.mock("electron", () => ({
+  BrowserWindow: class {},
+  screen: { getAllDisplays: () => [] },
+  shell: { openExternal: () => {} },
+}))
 
 // 缺陷 6：窗口尺寸在真正的退出路径（quit() -> app.exit()）上从不保存，因为持久化原先只挂在
 // close 事件上，而 app.exit() 是强制终止、根本不触发 close。main.ts 现在会在 beforeExit 里

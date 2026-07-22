@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { decideCrashReload, isAllowedExternalUrl, isSameOrigin, resolveShortcut } from "../src/window"
+
+// mock electron，避免加载真实 electron 二进制。desktop 单测只验纯函数、不需要 electron 运行时；
+// 多个测试文件并行 import 真 electron 会同时解压二进制到 node_modules/electron/dist，CI windows 上
+// 撞车报 os error 183「文件已存在」而随机失败。与 autostart.test.ts 同一手法。
+vi.mock("electron", () => ({
+  BrowserWindow: class {},
+  screen: { getAllDisplays: () => [] },
+  shell: { openExternal: () => {} },
+}))
 
 // 缺陷 4：will-navigate 与 setWindowOpenHandler 拦下来的导航之前被原样交给
 // shell.openExternal——它会按系统协议关联启动对应程序，不做协议限制的话，恶意页面里的
