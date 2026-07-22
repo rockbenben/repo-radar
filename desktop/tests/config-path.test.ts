@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { resolveConfigFile } from "../src/config-path"
@@ -16,8 +17,11 @@ describe("resolveConfigFile — REPO_RADAR_CONFIG 必须是绝对路径，不再
   })
 
   it("设置为绝对路径：原样使用，不做任何 resolve/规范化", () => {
-    const result = resolveConfigFile("D:\\work\\repo-radar-config.json", home)
-    expect(result).toEqual({ ok: true, configFile: "D:\\work\\repo-radar-config.json" })
+    // 用当前平台的绝对路径：resolveConfigFile 走 isAbsolute 判定，硬编码 "D:\\work\\..." 这种盘符
+    // 路径在 Linux/macOS 上 isAbsolute=false，会被判成相对路径而报错（CI 上因此挂）。
+    const abs = join(tmpdir(), "repo-radar-config.json")
+    const result = resolveConfigFile(abs, home)
+    expect(result).toEqual({ ok: true, configFile: abs })
   })
 
   it("设置为相对路径：报错，不猜、不按 cwd 展开", () => {

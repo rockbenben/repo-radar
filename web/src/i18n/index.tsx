@@ -90,6 +90,12 @@ function translate(lang: string, key: string, params?: Record<string, string | n
 let activeLang: LangCode = readLang()
 export const gt: TFunc = (key, params) => translate(activeLang, key, params)
 export const getLang = (): LangCode => activeLang
+// 供 React 之外的代码（相对时间格式化的上层、测试）显式设定当前语言。正常运行时由
+// I18nProvider 在渲染时镜像（见下方 activeLang = lang）；测试用它钉住语言，不依赖环境
+// navigator/回退（jsdom 是 en-US，否则相对时间会输出英文，断言中文就挂）。
+export const syncActiveLang = (l: LangCode): void => {
+  activeLang = l
+}
 
 interface I18nCtx {
   lang: LangCode
