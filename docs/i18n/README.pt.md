@@ -1,107 +1,86 @@
 <p align="center">
-  <img src="../../web/public/og-image.png" width="820" alt="repo·radar — a cross-repo action queue answering what needs you now" />
+  <img src="../../web/public/og-image.png" width="820" alt="repo·radar — um painel local que fica de olho em todos os seus repos Git e sinaliza os que precisam de você" />
 </p>
 
 # repo-radar
 
-> Plano 365 Open Source #027 · Um painel local para repositórios Git — uma fila de ações entre repositórios que responde o que precisa de você agora.
+> Plano 365 Open Source #027 · Um painel local que fica de olho em todos os seus repos Git e mostra quais precisam de você.
 
 [English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · **Português** · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
-Um painel local para seus repositórios Git que escaneia todos os repositórios da sua máquina e coloca uma única tela na sua frente antes de tudo: uma **fila de ações** entre repositórios que responde *o que precisa de você agora* — clique em um item e resolva diretamente. A interface é construída sobre o antd 6, com um tema profundo de cockpit de instrumentos.
+Você tem mais repos Git do que consegue acompanhar na mão. O repo-radar fica de olho em todos eles e mostra os poucos que precisam de você agora — para que o resto saia da sua cabeça.
 
-## Início rápido
+Ele traz à tona o que você de outra forma esqueceria de checar:
+
+- **Repos que você perdeu de vista** — todos os repos que você possui em uma única tela, com busca, abra qualquer um com um clique.
+- **Trabalho que ficou pela metade** — mudanças não commitadas, não enviadas ou em stash, sinalizadas antes que você as perca.
+- **GitHub esperando por você** — PRs abertos, issues e CI falhando em todos os repos, reunidos através do seu `gh` local já autenticado.
+- **Projetos que ficam obsoletos** — os que você não toca há tempo demais, ou com lançamento atrasado.
+
+Os que precisam de ação sobem ao topo do painel como uma fila, classificados por urgência, um item por repo — clique para resolver diretamente. Dispense com ✓ e ele fica de fora até que algo realmente mude; quando não há nada esperando, ele mostra "all clear". O resto dos seus repos está sempre a uma busca de distância.
+
+## Instalação
+
+Pegue o arquivo da sua plataforma em [Releases](https://github.com/rockbenben/repo-radar/releases) — sem necessidade de Node.js. O app não é assinado digitalmente, então cada sistema operacional avisa na primeira execução:
+
+- **Windows** — execute `repo-radar-<version>-x64-setup.exe`; no aviso do SmartScreen clique em *Mais informações → Executar assim mesmo*.
+- **macOS** — abra `repo-radar-<version>-arm64.dmg` e arraste o app para Applications. Clique com o botão direito → Abrir na primeira vez; se o macOS disser que está danificado, limpe a flag de quarentena uma vez com `xattr -cr /Applications/repo-radar.app`.
+- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+
+Ou execute a partir do código-fonte:
 
 ```bash
 npm install
-npm run build   # compila o frontend
-npm start       # http://localhost:7420
+npm start
 ```
 
-No primeiro lançamento, uma configuração padrão é criada em `~/.repo-radar/config.json`. Edite `roots` para adicionar os diretórios que deseja escanear (por exemplo, `D:\Projects` — escape as barras invertidas como `D:\\Projects` no JSON) e clique em **Rescan** no painel.
+No primeiro lançamento, clique em **Adicionar diretórios de escaneamento** (ou ⚙ Configurações → Diretórios de escaneamento) e aponte para as pastas que contêm seus repos — sem JSON, sem reiniciar; ele reescaneia no instante em que você salva. As configurações ficam em `~/.repo-radar/config.json` se você preferir editá-las à mão.
 
-## Precisa de você (a tela de entrada)
+## O painel
 
-A fila **Precisa de você**, no topo do painel, é uma fila de ações entre repositórios: classificada por urgência, um item por repositório — a única coisa mais urgente, não mais um painel de vaidade de "quantos commits".
+Um cartão por repo — cor de saúde, branch, resumo da árvore de trabalho, à frente/atrás, último commit, tags — com **editor / terminal / pasta** de um clique em cada cartão. A partir daqui você pode:
 
-- **Esperando por você**: PRs abertos por outras pessoas, issues abertas por outras pessoas, CI vermelho no branch padrão (agregado em segundo plano via um `gh` local já autenticado, atualizado a cada 12 minutos, ou ↻ manualmente; seus próprios PRs/issues abertos contam como trabalho em andamento e são excluídos) — clique em um item para ir direto à página correspondente do GitHub
-- **Em risco de ser perdido**: conflitos / atrás / não commitado / não enviado — quanto mais tempo parado, mais alto na classificação — trabalho não enviado ganha um push de um clique, todo o resto abre o painel de detalhes
-- **Atrasado para release**: repositórios com hábito de criar tags que acumularam ≥3 commits desde a última tag sem lançamento — um empurrão para publicar (repositórios que nunca criam tags são deixados em paz; a última tag é escolhida pelo horário de criação em todo o repositório, independente do branch atual)
-- **Stash esquecido**: um stash parado sem uso há ≥7 dias — clique para ir direto à caixa de entrada de stashes
-- **Dispensar**: toque em ✓ para limpar um item até que algo novo aconteça — itens baseados em contagem precisam que a contagem cresça, itens baseados em mudança precisam de outro commit; dispensar um stash é um soneca que reaparece depois de 30 dias, para que um stash verdadeiramente esquecido nunca seja silenciado para sempre
-- Expanda além de 10 itens para ver tudo; mostra "tudo limpo" quando não sobra nada. Recolhe para um banner fino no topo
+- **Encontrar** — busque, clique em uma linguagem / `#tag` / lâmpada de atenção para filtrar, ordene e agrupe por pasta ou linguagem; salve qualquer filtro + ordenação + agrupamento como uma visão nomeada. ⌘/Ctrl-K abre um lançador.
+- **Agir em lotes** — selecione repos para fetch / pull (`--ff-only`) / push, ou execute um comando de shell em paralelo sobre eles (com pré-visualização de dry-run e saída por repo). A falha de um repo nunca impede os demais.
+- **Aprofundar em um repo** — o painel de detalhes dá um resumo completo de saúde, trocar / criar / descartar branches, **commit no local** com um diff ao vivo, PR e CI do GitHub sob demanda, commits recentes, stashes, um mapa de calor de 12 semanas e uma limpeza segura de um clique de branches já mesclados.
+- **Manter-se atualizado** — escaneamento automático opcional por monitoramento de arquivos e fetch agendado em segundo plano, ambos desligados por padrão. Uma aba **Stats** (mapa de calor de commits de um ano, mais/menos ativo) e uma aba **Worklog** que copia um intervalo de datas como relatório semanal em Markdown.
+- **Iniciar e mover repos** — **+ New** sugere o próximo projeto numerado, roda `git init`, escreve um README e o adota no painel; a exportação / importação de manifesto leva sua configuração entre máquinas.
 
-## Painel
+A interface é antd 6 em um tema escuro de cockpit de instrumentos, localizada em 18 idiomas (correspondida automaticamente ao seu navegador na primeira visita, RTL para o árabe).
 
-- **Cartões**: um cartão por repositório (até 4 por linha, mesma altura). A cor da borda esquerda indica a saúde (verde = tranquilo / âmbar = atenção / vermelho = alerta). Mostra o nome real · descrição · linguagem · branch (sinalizado se não for o main) · resumo da árvore de trabalho (`+staged ~modified`) · à frente/atrás · tags de saúde · último commit · link do remoto · tags. O rodapé sempre tem **editor / terminal / pasta** com um clique
-- **Linha de favoritos**: uma linha dedicada "★ favoritos" no topo do painel — clique para abrir no seu editor
-- **Conjunto de indicadores**: medidores FLEET / CRIT / WARN / CLEAN na barra superior; contagens de alerta acendem quando > 0
-- **Clique para filtrar**: clique na linguagem ou na `#tag` de um cartão para colocá-la direto na caixa de busca
-- **Ordenar**: última abertura / mais ativo recentemente (por horário de commit) / por nome — favoritos sempre flutuam para o topo
-- **Lâmpadas de atenção**: chips na barra superior resumindo tipos de problema (sem remoto / HEAD desanexado / não enviado / não commitado / atrás / stash); clique para filtrar. "Não enviado" e "atrás" têm cada um um "push/pull em todos" de um clique
-- **Agrupamento**: por pasta / por linguagem / sem agrupar (plano)
-- **Paleta de comandos ⌘/Ctrl-K**: um lançador — digite um nome, pressione enter para abrir no seu editor (botões inline para terminal / pasta / copiar caminho / abrir remoto)
-- **Filtro de tags**: seleção múltipla de tags na barra superior (E — precisa carregar todas as tags selecionadas); clique na `#tag` de um cartão para adicioná-la. Filtro + ordenação + agrupamento são salvos juntos como uma "visão" nomeada
-- **Pré-visualização inline**: o "⋯" em um cartão exibe os commits recentes sem abrir o painel de detalhes
-- **Escaneamento automático (desativado por padrão)**: um alternador "manual ⟳ / automático ⟳" na barra superior. Quando ativado, um observador de arquivos atualiza automaticamente os cartões afetados (período de espera de 60 segundos; mudanças durante a espera são mescladas, nunca descartadas). Quando desativado, o estado só é atualizado ao clicar em Rescan. O painel ainda é preenchido por um escaneamento no primeiro lançamento
-- **Busca agendada (desativada por padrão)**: "fetch: desligado / a cada 5–60 min" na barra superior — busca periodicamente em cada remoto em segundo plano para manter à frente/atrás atualizado
-- **18 idiomas**: troque o idioma da interface em ⚙ Configurações (chinês simplificado/tradicional, inglês, japonês, coreano, espanhol, francês, alemão, português, russo, italiano, árabe, hindi, bengali, tailandês, turco, vietnamita, indonésio). Na primeira visita, sem preferência salva, a interface corresponde automaticamente ao idioma do seu navegador (revertendo para o inglês se nada corresponder); o árabe muda automaticamente para RTL. Horários relativos são localizados nativamente via `Intl`. Nomes de repositórios, descrições e mensagens de commit nunca são traduzidos
+## Roda discretamente em segundo plano
 
-## Ações
+Fechar a janela leva o repo-radar para a bandeja, então o monitoramento de arquivos, os fetches agendados e os alertas do GitHub continuam rodando — clique no ícone da bandeja para trazer o painel de volta, ou saia de verdade pelo menu da bandeja. (No Linux, onde as bandejas de desktop não são confiáveis, fechar sai em vez disso; use Iniciar ao fazer login para mantê-lo residente.)
 
-- O rodapé do cartão sempre mostra botões de editor / terminal / pasta / copiar caminho; abrir um deles registra um horário de "última abertura" usado para ordenação
-- Fetch / pull (`--ff-only`) / push rodam em lotes: selecione vários cartões → ação em lote na barra superior, ou clique uma vez em toda uma lâmpada de atenção "não enviado" / "atrás". O progresso é mostrado ao vivo; a falha de um repositório não impede os demais
-- **Execute um comando em vários repositórios**: selecione cartões, digite um comando na barra de ferramentas (por exemplo, `npm install`), e ele roda em paralelo dentro do diretório de cada repositório selecionado. "Dry run" mostra antes quais repositórios seriam afetados; "ver saída" mostra o resultado por repositório depois
-- **Caixa de entrada de stashes**: com qualquer stash por aí, um link "stash inbox (N)" aparece na barra superior — lista cada mudança guardada em stash em todos os repositórios, com diff por item, `apply` / `pop` / `drop`
-- Selecionar vários cartões também permite aplicar tags em lote
-- **Exportar/importar manifesto**: exporte o manifesto completo de repositórios (caminho + remotos + grupo + tags) em **+ new** para backup ou troca de máquina; a importação readota repositórios que já existem localmente e lista os que faltam para clonagem
-- O comando de abertura é configurável por destino em `open` no config.json; `{path}` é substituído pelo caminho do repositório
-- **+ New**: sugere o próximo número de sequência (por exemplo, `028-`) e o diretório pai dos seus projetos numerados existentes, depois cria a pasta, roda `git init`, escreve um README e reescaneia para incluí-lo no painel
+Ative **Iniciar ao fazer login** em ⚙ Configurações e ele inicia sem interface com a sua sessão — sem janela até você pedir. As notificações de desktop opcionais disparam apenas quando algo *novo* chega à sua fila, mesmo com a janela fechada. As atualizações são manuais por design (sem atualização automática): execute o novo instalador sobre o antigo. Os logs vão para `<diretório de configuração>/logs/repo-radar.log`.
 
-## Verificações de saúde e estatísticas
+## Configuração
 
-- As regras (conflitado / sem remoto / HEAD desanexado / não commitado / não enviado / não rastreado / atrás / stash / obsoleto) podem ser desativadas individualmente via `health.disabledRules`; `staleDays` define o limite de "obsoleto"
-- **Branches mesclável**: os cartões sinalizam quantos branches locais já foram mesclados na HEAD (excluindo o branch atual e main/master); o painel de detalhes oferece uma limpeza `git branch -d` de um clique (só apaga branches que já estão mesclados — seguro)
-- **GitHub (opcional, via um `gh` local já autenticado)**: a fila "precisa de você" agrega PRs / issues abertos / CI do branch padrão para cada remoto `github.com` em segundo plano (sondagem limitada por taxa, persistida em disco, instantânea ao reiniciar). O painel de detalhes também pode consultar detalhes de PR aberto e a última execução de CI sob demanda; descrições de repositório são preenchidas retroativamente a partir do GitHub quando disponíveis
-- Aba **Estatísticas**: um mapa de calor de commits entre repositórios ao longo de um ano (apenas branches locais), mais ativo recentemente e os 10 repositórios não tocados há mais tempo
-- Aba **Worklog**: escolha um intervalo de datas para ver uma linha do tempo de commits entre repositórios (filtrável por autor — o padrão é "só eu", detectando automaticamente sua identidade do git), com cópia de um clique como relatório semanal em Markdown
-- Clique em um cartão para abrir o painel de detalhes: resumo completo de saúde, branches mescláveis, **trocar / criar / descartar branches locais**, **commit no local** (digite uma mensagem, ele commita) com um diff ao vivo das mudanças pendentes, PR/CI do GitHub, um mini mapa de calor de 12 semanas, commits recentes, stashes e remotos
+Tudo que a interface toca é salvo em `~/.repo-radar/config.json` — você raramente precisa abri-lo. Os campos que importam:
 
-## Organizando repositórios
+| Campo | O que faz |
+| --- | --- |
+| `roots` / `excludes` / `manualRepos` | onde escanear (encontra `.git` até 6 níveis de profundidade), o que pular e repos adicionados fora das roots |
+| `health` | `{ staleDays, disabledRules }` — ajuste o limite "stale" ou desative verificações individuais |
+| `open` | modelos de comando para os botões editor / terminal / pasta (`{path}` = o caminho do repo) |
+| `autoWatch` / `autoFetchMinutes` / `notifications` | comportamento em segundo plano — tudo desligado por padrão |
+| `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | organização por repo |
 
-- Marque um cartão com ★ para favoritá-lo (flutua para o topo); adicione/remova tags no painel de detalhes (autocompleta a partir das tags que você já usou) e mude seu grupo ("auto" restaura o agrupamento derivado da pasta)
-- **Notas / a fazer**: anote "o que vem a seguir" no painel de detalhes — aparece no cartão
-- **Excluir**: oculte repositórios que você não quer ver; repositórios excluídos ficam ocultos do painel, dos alertas e da paleta de comandos por padrão. "Excluídos (N)" na barra superior permite visualizá-los/gerenciá-los separadamente (remover exclusão no painel de detalhes)
-- As mudanças se aplicam instantaneamente e são gravadas no config.json sem disparar um rescan do Git
+`REPO_RADAR_CONFIG` e `REPO_RADAR_PORT` (7420 por padrão) substituem o caminho de configuração e a porta — defina **ambas** para executar uma segunda instância totalmente independente. O servidor só escuta em `127.0.0.1` e valida o cabeçalho Origin em cada requisição de API e WebSocket.
 
 ## Desenvolvimento
 
 ```bash
-npm run dev     # roda o server(7420) + vite(5173) juntos, o frontend faz proxy de /api
-npm test        # suíte completa de testes de server + web e ambas as verificações de tipo
+npm run dev     # vite + a janela do app com hot reload
+npm test        # suítes de teste de server + web + desktop e typechecks
+npm run dist    # compila os instaladores em dist-electron/
 ```
 
-Stack: Node + Hono (todo acesso ao git via `spawn`, zero dependências nativas), Vite + React 19 + antd 6 (profundamente customizado via variáveis CSS), chokidar + WebSocket para atualizações ao vivo.
-
-## Configuração (config.json)
-
-| Campo | Descrição |
-| --- | --- |
-| `roots` | Diretórios raiz a escanear; descobre recursivamente diretórios contendo `.git` (profundidade ≤ 6) |
-| `excludes` | Nomes de diretórios a ignorar (o padrão inclui node_modules) |
-| `manualRepos` | Caminhos de repositórios adicionados manualmente, fora das raízes configuradas |
-| `tags` / `favorites` / `groupOverrides` | Substituições de tag / favorito / grupo por repositório |
-| `notes` / `archived` | Notas / sinalizador de arquivado por repositório |
-| `health` | `{ staleDays, disabledRules }` |
-| `open` | Modelos de comando para os destinos de abertura de um clique (editor / terminal / explorador) |
-
-A variável de ambiente `REPO_RADAR_CONFIG` substitui o caminho do arquivo de configuração. O servidor só escuta em `127.0.0.1` e valida o cabeçalho Origin tanto na API quanto no WebSocket.
+Stack: shell Electron + Node + Hono (todo git via `spawn`, zero dependências nativas) + Vite / React 19 / antd 6, com chokidar + WebSocket para atualizações ao vivo. O servidor Hono roda dentro do processo principal do Electron e a janela o carrega via `127.0.0.1`, então a UI é HTTP + WebSocket comum — exatamente o que seria em um navegador.
 
 ## Sobre o Plano 365 Open Source
 
-Este é o projeto **#027** do [Plano 365 Open Source](https://github.com/rockbenben/365opensource).
-
-Uma pessoa + IA, mais de 300 projetos open-source em um ano. [Envie sua ideia →](https://365.aishort.top/)
+Projeto **#027** do [Plano 365 Open Source](https://github.com/rockbenben/365opensource) — uma pessoa + IA, mais de 300 projetos open-source em um ano. [Envie sua ideia →](https://365.aishort.top/)
 
 ## Licença
 

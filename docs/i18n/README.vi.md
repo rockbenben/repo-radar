@@ -1,107 +1,86 @@
 <p align="center">
-  <img src="../../web/public/og-image.png" width="820" alt="repo·radar — a cross-repo action queue answering what needs you now" />
+  <img src="../../web/public/og-image.png" width="820" alt="repo·radar — một bảng điều khiển cục bộ theo dõi tất cả các repo Git của bạn và đánh dấu những repo cần đến bạn" />
 </p>
 
 # repo-radar
 
-> Kế hoạch 365 Open Source #027 · Một bảng điều khiển (dashboard) Git cục bộ — một hàng đợi hành động (action queue) xuyên suốt các repo, trả lời câu hỏi điều gì cần bạn xử lý ngay bây giờ.
+> Kế hoạch 365 Open Source #027 · Một bảng điều khiển cục bộ theo dõi tất cả các repo Git của bạn và cho bạn biết cái nào cần đến bạn.
 
 [English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · **Tiếng Việt** · [Bahasa Indonesia](README.id.md)
 
-Một bảng điều khiển (dashboard) Git cục bộ quét toàn bộ repo trên máy của bạn và đưa lên một màn hình duy nhất: một **hàng đợi hành động (action queue)** xuyên suốt các repo, trả lời câu hỏi *điều gì cần bạn xử lý ngay bây giờ* — nhấp vào một mục là xử lý trực tiếp. Giao diện được xây dựng trên antd 6 với chủ đề buồng lái thiết bị (instrument-cockpit) đậm chất kỹ thuật.
+Bạn có nhiều repo Git hơn mức có thể tự theo dõi xuể. repo-radar để mắt tới tất cả và chỉ cho bạn thấy vài cái đang cần đến bạn ngay lúc này — để bạn khỏi bận tâm đến những cái còn lại.
 
-## Bắt đầu nhanh
+Nó nêu bật những thứ mà bình thường bạn hay quên kiểm tra:
+
+- **Những repo bạn đã quên** — mọi repo bạn sở hữu trên một màn hình, có thể tìm kiếm, mở bất kỳ cái nào chỉ với một cú nhấp.
+- **Việc còn dang dở** — các thay đổi chưa commit, chưa push, hoặc đang nằm trong stash, được đánh dấu trước khi bạn lỡ tay đánh mất.
+- **GitHub đang chờ bạn** — các PR mở, issue và CI thất bại trên khắp các repo, được thu thập qua `gh` đã đăng nhập sẵn cục bộ của bạn.
+- **Các dự án đang nguội dần** — những cái bạn đã quá lâu không đụng đến, hoặc quá hạn phát hành.
+
+Những cái cần xử lý sẽ được đẩy lên đầu board thành một hàng đợi, xếp theo mức độ khẩn cấp, mỗi repo một mục — nhấp vào là xử lý được ngay. Gạt đi bằng ✓ thì nó biến mất cho đến khi thực sự có gì đó thay đổi; còn khi chẳng có gì phải chờ, nó báo "all clear". Các repo còn lại thì lúc nào cũng chỉ cần gõ tìm là ra.
+
+## Cài đặt
+
+Lấy file cho nền tảng của bạn từ [Releases](https://github.com/rockbenben/repo-radar/releases) — không cần Node.js. Ứng dụng chưa được ký mã (code-sign), nên hệ điều hành nào cũng sẽ cảnh báo ở lần chạy đầu tiên:
+
+- **Windows** — chạy `repo-radar-<version>-x64-setup.exe`; ở lời nhắc SmartScreen, bấm *More info → Run anyway*.
+- **macOS** — mở `repo-radar-<version>-arm64.dmg` và kéo ứng dụng vào Applications. Nhấp chuột phải → Open ở lần đầu tiên; nếu macOS báo ứng dụng bị hỏng, hãy xóa cờ quarantine một lần bằng `xattr -cr /Applications/repo-radar.app`.
+- **Linux** — `chmod +x repo-radar-<version>-x64.AppImage && ./repo-radar-<version>-x64.AppImage`.
+
+Hoặc chạy từ mã nguồn:
 
 ```bash
 npm install
-npm run build   # build phần frontend
-npm start       # http://localhost:7420
+npm start
 ```
 
-Ở lần khởi chạy đầu tiên, một file cấu hình mặc định sẽ được tạo tại `~/.repo-radar/config.json`. Chỉnh sửa `roots` để thêm các thư mục bạn muốn quét (ví dụ `D:\Projects` — hãy escape dấu backslash thành `D:\\Projects` trong JSON), sau đó nhấp **Rescan** trong panel.
+Ở lần khởi chạy đầu tiên, nhấp **Thêm thư mục quét** (hoặc ⚙ Cài đặt → Thư mục quét) rồi trỏ đến các thư mục chứa repo của bạn — không phải đụng tới JSON, không cần khởi động lại; vừa lưu là nó quét lại ngay. Cấu hình nằm ở `~/.repo-radar/config.json` nếu bạn thích tự sửa tay.
 
-## Needs you (màn hình khởi đầu)
+## Bảng điều khiển
 
-Hàng đợi **Needs you** ở đầu bảng điều khiển là một hàng đợi hành động xuyên suốt các repo: được xếp hạng theo mức độ khẩn cấp, mỗi repo chỉ hiện một mục — điều cấp bách nhất, chứ không phải một dashboard "đếm số commit" phù phiếm khác.
+Mỗi repo một card — màu sức khỏe, nhánh, phân tích cây làm việc, ahead/behind, commit gần nhất, tag — với **editor / terminal / folder** một chạm trên mọi card. Từ đây bạn:
 
-- **Waiting on you**: các PR mở của người khác, issue mở của người khác, CI đỏ trên nhánh mặc định (được tổng hợp ngầm qua `gh` đã đăng nhập sẵn cục bộ, làm mới mỗi 12 phút, hoặc ↻ thủ công; các PR/issue mở của chính bạn được tính là WIP và bị loại trừ) — nhấp vào một mục để nhảy thẳng đến trang GitHub tương ứng
-- **At risk of being lost**: xung đột / bị tụt lại (behind) / chưa commit / chưa push, càng nằm im lâu thì thứ hạng càng cao — công việc chưa push có nút push một chạm, các trường hợp khác mở panel chi tiết
-- **Overdue for release**: các repo có thói quen gắn tag mà đã tích lũy ≥3 commit kể từ tag mới nhất mà chưa có bản phát hành — một lời nhắc để ship (các repo chưa bao giờ gắn tag sẽ được bỏ qua; tag mới nhất được chọn theo thời điểm tạo trên toàn bộ repo, không phụ thuộc vào nhánh hiện tại)
-- **Forgotten stash**: một stash nằm im không động tới ≥7 ngày — nhấp để đi thẳng đến hộp thư stash
-- **Dismiss**: nhấn ✓ để xóa một mục cho đến khi có gì đó mới xảy ra — các mục dựa trên số đếm cần số đếm tăng lên, các mục dựa trên thay đổi cần thêm một commit; việc dismiss một stash chỉ là hoãn (snooze) và sẽ xuất hiện lại sau 30 ngày để một stash thực sự bị bỏ quên không bao giờ bị im lặng vĩnh viễn
-- Mở rộng quá 10 mục để xem tất cả; hiển thị "all clear" khi không còn gì. Thu gọn thành một banner mỏng ở trên cùng
+- **Tìm** — tìm kiếm, nhấp vào một ngôn ngữ / `#tag` / đèn chú ý để lọc, sắp xếp và nhóm theo thư mục hoặc ngôn ngữ; lưu bất kỳ bộ lọc + sắp xếp + nhóm nào thành một view có tên. ⌘/Ctrl-K mở một launcher.
+- **Hành động theo lô** — chọn repo để fetch / pull (`--ff-only`) / push, hoặc chạy song song một lệnh shell trên khắp chúng (với bản xem trước dry-run và output theo từng repo). Một repo lỗi cũng không bao giờ làm gián đoạn những repo còn lại.
+- **Đào sâu vào một repo** — panel chi tiết cung cấp phân tích sức khỏe đầy đủ, chuyển / tạo / hủy nhánh, **commit tại chỗ** với diff trực tiếp, GitHub PR & CI theo yêu cầu, commit gần đây, stash, bản đồ nhiệt 12 tuần, và dọn dẹp an toàn một chạm các nhánh đã được merge.
+- **Luôn cập nhật** — tùy chọn tự động quét khi tệp thay đổi và fetch nền theo lịch, cả hai đều tắt theo mặc định. Tab **Stats** (bản đồ nhiệt commit cả năm, hoạt động nhiều/ít nhất) và tab **Worklog** sao chép một khoảng ngày thành báo cáo tuần Markdown.
+- **Khởi tạo & di chuyển repo** — **+ New** gợi ý dự án được đánh số tiếp theo, chạy `git init`, viết một README, và đưa nó vào board; xuất / nhập manifest mang thiết lập của bạn giữa các máy.
 
-## Board
+Giao diện là antd 6 với chủ đề buồng lái thiết bị (instrument-cockpit) tối, được bản địa hóa sang 18 ngôn ngữ (tự khớp với trình duyệt của bạn ở lần truy cập đầu tiên, RTL cho tiếng Ả Rập).
 
-- **Cards**: mỗi repo một card (tối đa 4 card mỗi hàng, chiều cao bằng nhau). Màu viền trái = tình trạng sức khỏe (xanh lá = yên ắng / hổ phách = cần chú ý / đỏ = báo động). Hiển thị tên thật · mô tả · ngôn ngữ · nhánh (gắn cờ nếu không phải main) · phân tích cây làm việc (`+staged ~modified`) · ahead/behind · các tag sức khỏe · commit gần nhất · liên kết remote · tag. Footer luôn có nút một chạm **editor / terminal / folder**
-- **Favorites row**: một hàng "★ favorites" riêng ở đầu board — nhấp để mở trong editor của bạn
-- **Readout cluster**: các đồng hồ đo FLEET / CRIT / WARN / CLEAN trên thanh trên cùng; số lượng cảnh báo sáng lên khi > 0
-- **Click to filter**: nhấp vào ngôn ngữ hoặc `#tag` của một card để đưa nó thẳng vào ô tìm kiếm
-- **Sort**: mở gần nhất / hoạt động gần đây nhất (theo thời điểm commit) / theo tên — favorites luôn nổi lên trên cùng
-- **Attention lamps**: các chip trên thanh trên cùng tóm tắt loại vấn đề (không có remote / detached HEAD / chưa push / chưa commit / behind / stash); nhấp để lọc. "Unpushed" và "behind" mỗi cái đều có nút "push/pull tất cả" một chạm
-- **Grouping**: theo thư mục / theo ngôn ngữ / không nhóm (phẳng)
-- **Command palette ⌘/Ctrl-K**: một launcher — gõ tên, nhấn enter để mở trong editor của bạn (có nút inline cho terminal / folder / copy path / open remote)
-- **Tag filter**: chọn nhiều tag trên thanh trên cùng (theo kiểu AND — phải mang mọi tag đã chọn); nhấp vào `#tag` của một card để thêm nó. Filter + sort + grouping được lưu cùng nhau thành một "view" có tên
-- **Inline preview**: nút "⋯" trên card hiện lên các commit gần đây mà không cần mở panel chi tiết
-- **Auto-scan (mặc định tắt)**: một nút gạt "manual ⟳ / auto ⟳" trên thanh trên cùng. Khi bật, một file watcher sẽ tự động làm mới các card bị ảnh hưởng (thời gian chờ 60 giây; các thay đổi trong lúc chờ được gộp lại, không bao giờ bị bỏ sót). Khi tắt, trạng thái chỉ cập nhật khi Rescan. Board vẫn được lấp đầy bằng một lần quét ở lần khởi chạy đầu tiên
-- **Scheduled fetch (mặc định tắt)**: "fetch: off / every 5–60 min" trên thanh trên cùng — định kỳ fetch mọi remote ở chế độ nền để giữ ahead/behind luôn mới
-- **18 ngôn ngữ**: chuyển đổi ngôn ngữ giao diện từ ⚙ Settings (Trung Quốc giản thể/phồn thể, Anh, Nhật, Hàn, Tây Ban Nha, Pháp, Đức, Bồ Đào Nha, Nga, Ý, Ả Rập, Hindi, Bengal, Thái, Thổ Nhĩ Kỳ, Việt, Indonesia). Ở lần truy cập đầu tiên chưa có tùy chọn được lưu, giao diện sẽ tự khớp với ngôn ngữ trình duyệt của bạn (mặc định về tiếng Anh nếu không khớp gì cả); tiếng Ả Rập tự động chuyển sang RTL. Thời gian tương đối được bản địa hóa gốc qua `Intl`. Tên repo, mô tả và commit message luôn được giữ nguyên, không dịch
+## Chạy âm thầm ở chế độ nền
 
-## Hành động
+Đóng cửa sổ sẽ đưa repo-radar xuống khay hệ thống (tray) để việc theo dõi tệp, fetch theo lịch và cảnh báo GitHub tiếp tục chạy — nhấp biểu tượng khay để đưa board trở lại, hoặc thoát hẳn từ menu khay. (Trên Linux, nơi khay desktop không đáng tin cậy, đóng cửa sổ sẽ thoát luôn; dùng Khởi động cùng đăng nhập để giữ nó thường trú.)
 
-- Footer của card luôn hiển thị các nút editor / terminal / folder / copy-path; mở một cái sẽ ghi lại dấu thời gian "last opened" dùng để sắp xếp
-- Fetch / pull (`--ff-only`) / push chạy theo lô: chọn nhiều card → thực hiện hành động theo lô từ thanh trên cùng, hoặc nhấp một chạm vào toàn bộ đèn chú ý "unpushed" / "behind". Tiến trình hiển thị trực tiếp; một repo lỗi không làm dừng các repo còn lại
-- **Chạy một lệnh trên nhiều repo**: chọn card, gõ một lệnh trong toolbar (ví dụ `npm install`), lệnh chạy song song trong thư mục của mỗi repo đã chọn. "Dry run" xem trước repo nào sẽ bị ảnh hưởng; "view output" hiển thị kết quả theo từng repo sau đó
-- **Stash inbox**: khi có bất kỳ stash nào đang tồn tại, một liên kết "stash inbox (N)" sẽ xuất hiện trên thanh trên cùng — liệt kê mọi thay đổi đã stash trên mọi repo, kèm diff cho từng mục, `apply` / `pop` / `drop`
-- Chọn nhiều card cũng cho phép bạn áp dụng tag hàng loạt
-- **Xuất/nhập manifest**: xuất toàn bộ manifest repo (path + remote + group + tag) từ **+ new** để sao lưu/chuyển máy; nhập lại sẽ nhận diện các repo đã tồn tại cục bộ và liệt kê những repo chưa có để clone
-- Lệnh mở có thể cấu hình riêng cho từng đích trong `open` trong config.json; `{path}` được thay thế bằng đường dẫn repo
-- **+ New**: gợi ý số thứ tự tiếp theo (ví dụ `028-`) và thư mục cha của các dự án đã đánh số hiện có của bạn, sau đó tạo thư mục, chạy `git init`, viết một README, và quét lại nó vào board
+Bật **Khởi động cùng đăng nhập** trong ⚙ Cài đặt và nó khởi động không giao diện cùng phiên của bạn — không có cửa sổ cho đến khi bạn yêu cầu. Thông báo desktop tùy chọn chỉ kích hoạt khi có gì đó *mới* đến hàng đợi của bạn, ngay cả khi cửa sổ đang đóng. Việc nâng cấp cố ý để thủ công (không tự động cập nhật): chỉ cần chạy trình cài đặt mới đè lên bản cũ. Log được ghi vào `<config dir>/logs/repo-radar.log`.
 
-## Kiểm tra sức khỏe & thống kê
+## Cấu hình
 
-- Các rule (conflicted / no remote / detached HEAD / uncommitted / unpushed / untracked / behind / stash / stale) có thể bị tắt riêng lẻ qua `health.disabledRules`; `staleDays` đặt ngưỡng "stale"
-- **Mergeable branches**: card gắn cờ số lượng nhánh cục bộ đã được merge vào HEAD (không tính nhánh hiện tại và main/master); panel chi tiết cung cấp dọn dẹp `git branch -d` một chạm (chỉ bao giờ xóa các nhánh đã được merge — an toàn)
-- **GitHub (tùy chọn, qua `gh` đã đăng nhập sẵn cục bộ)**: hàng đợi "needs you" tổng hợp PR mở / issue mở / CI nhánh mặc định cho mọi remote `github.com` ở chế độ nền (polling giới hạn tốc độ, lưu trên đĩa, tức thời khi khởi động lại). Panel chi tiết cũng có thể truy vấn chi tiết PR mở và lần chạy CI mới nhất theo yêu cầu; mô tả repo được điền bổ sung từ GitHub khi có sẵn
-- Tab **Stats**: bản đồ nhiệt commit xuyên suốt các repo trong một năm (chỉ nhánh cục bộ), hoạt động gần đây nhất, và 10 repo lâu không động tới nhất
-- Tab **Worklog**: chọn một khoảng thời gian để xem dòng thời gian commit xuyên suốt các repo (có thể lọc theo tác giả — mặc định "chỉ mình tôi" bằng cách tự động phát hiện danh tính git của bạn), với nút copy một chạm dưới dạng báo cáo tuần Markdown
-- Nhấp vào một card để mở panel chi tiết: phân tích sức khỏe đầy đủ, các nhánh có thể merge, **chuyển / tạo / hủy nhánh cục bộ**, **commit tại chỗ** (gõ một message, nó sẽ commit) với diff trực tiếp của các thay đổi đang chờ, PR/CI GitHub, bản đồ nhiệt mini 12 tuần, commit gần đây, stash, và remote
+Mọi thứ giao diện chạm tới đều được lưu vào `~/.repo-radar/config.json` — bạn hiếm khi cần mở nó. Các trường quan trọng:
 
-## Sắp xếp repo
+| Trường | Chức năng |
+| --- | --- |
+| `roots` / `excludes` / `manualRepos` | nơi quét (tìm `.git` sâu đến 6 cấp), cái gì bỏ qua, và các repo được thêm ngoài các root |
+| `health` | `{ staleDays, disabledRules }` — chỉnh ngưỡng "stale" hoặc tắt từng kiểm tra riêng lẻ |
+| `open` | mẫu lệnh cho các nút editor / terminal / folder (`{path}` = đường dẫn repo) |
+| `autoWatch` / `autoFetchMinutes` / `notifications` | hành vi nền — tất cả đều tắt theo mặc định |
+| `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | sắp xếp theo từng repo |
 
-- Gắn sao ★ cho một card để đưa vào favorite (nổi lên trên cùng); thêm/xóa tag trong panel chi tiết (tự động gợi ý từ các tag bạn đã dùng) và đổi nhóm của nó ("auto" khôi phục về nhóm suy ra từ thư mục)
-- **Notes / to-dos**: ghi chú "việc tiếp theo" trong panel chi tiết — nó hiển thị trên card
-- **Exclude**: ẩn các repo bạn không muốn thấy; các repo bị loại trừ sẽ được ẩn khỏi board, cảnh báo, và command palette theo mặc định. "Excluded (N)" trên thanh trên cùng cho phép bạn xem/quản lý chúng riêng (bỏ loại trừ từ panel chi tiết)
-- Các thay đổi được áp dụng ngay lập tức và được ghi vào config.json mà không kích hoạt quét Git lại
+`REPO_RADAR_CONFIG` và `REPO_RADAR_PORT` (mặc định 7420) ghi đè đường dẫn cấu hình và cổng — đặt **cả hai** để chạy một instance thứ hai hoàn toàn độc lập. Server chỉ bind `127.0.0.1` và xác thực header Origin trên mọi yêu cầu API và WebSocket.
 
 ## Phát triển
 
 ```bash
-npm run dev     # chạy server(7420) + vite(5173) cùng lúc, frontend proxy /api
-npm test        # bộ test đầy đủ cho server + web và cả hai typecheck
+npm run dev     # vite + cửa sổ ứng dụng với hot reload
+npm test        # bộ test server + web + desktop và typecheck
+npm run dist    # build trình cài đặt vào dist-electron/
 ```
 
-Stack: Node + Hono (mọi thao tác git đều qua `spawn`, không phụ thuộc native nào), Vite + React 19 + antd 6 (tùy biến sâu qua CSS variables), chokidar + WebSocket cho cập nhật trực tiếp.
-
-## Cấu hình (config.json)
-
-| Trường | Mô tả |
-| --- | --- |
-| `roots` | Các thư mục gốc để quét; tự động phát hiện đệ quy các thư mục chứa `.git` (độ sâu ≤ 6) |
-| `excludes` | Tên thư mục cần bỏ qua (mặc định bao gồm node_modules) |
-| `manualRepos` | Đường dẫn repo được thêm thủ công, nằm ngoài các root đã cấu hình |
-| `tags` / `favorites` / `groupOverrides` | Ghi đè tag / favorite / group theo từng repo |
-| `notes` / `archived` | Ghi chú / cờ archived theo từng repo |
-| `health` | `{ staleDays, disabledRules }` |
-| `open` | Mẫu lệnh cho các đích mở một chạm (editor / terminal / explorer) |
-
-Biến môi trường `REPO_RADAR_CONFIG` ghi đè đường dẫn file cấu hình. Server chỉ lắng nghe trên `127.0.0.1` và xác thực header Origin trên cả API lẫn WebSocket.
+Stack: lớp vỏ Electron + Node + Hono (mọi thao tác git đều qua `spawn`, không phụ thuộc native), + Vite / React 19 / antd 6, với chokidar + WebSocket cho cập nhật trực tiếp. Server Hono chạy bên trong tiến trình main của Electron và cửa sổ tải nó qua `127.0.0.1`, nên UI hoàn toàn là HTTP + WebSocket thuần — giống hệt như khi chạy trong trình duyệt.
 
 ## Giới thiệu về 365 Open Source Plan
 
-Đây là dự án **#027** của [365 Open Source Plan](https://github.com/rockbenben/365opensource).
-
-Một người + AI, hơn 300 dự án mã nguồn mở trong một năm. [Gửi ý tưởng của bạn →](https://365.aishort.top/)
+Dự án **#027** của [365 Open Source Plan](https://github.com/rockbenben/365opensource) — một người + AI, hơn 300 dự án mã nguồn mở trong một năm. [Gửi ý tưởng của bạn →](https://365.aishort.top/)
 
 ## Giấy phép
 
