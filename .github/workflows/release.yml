@@ -1,0 +1,66 @@
+# 打 v* tag 时打包，产物上传到同一条 GitHub Release 草稿（draft）。四个 job：Windows、macOS
+# 各一个 runner，Linux 拆成 x64/arm64 两个 runner（原因见下面矩阵里的注释）。
+# 草稿对普通用户不可见——全部传完、核对无误后，还需要有人去 GitHub 网页
+# 手动点「Publish release」才会真正对外发布（releaseType 见 electron-builder.yml）。
+# 产物：repo-radar Setup <version>.exe（Windows NSIS，双击安装）
+#      repo-radar-<version>-arm64.dmg / -x64.dmg（macOS，同一个 runner 上交叉出两个架构）
+#      repo-radar-<version>-x64.AppImage / -arm64.AppImage（Linux，两个 runner 各出各的）
+# 同时产出 latest*.yml。
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      # Linux 拆两个 runner、macOS 只用一个：electron-builder 在 x64 机器上交叉构建 arm64
+      # AppImage 不可靠，所以 Linux 的两个架构各自在原生 runner 上构建；macOS 反过来——
+      # electron-builder 在 arm64 runner（macos-latest）上可以直接为 x64 下载对应的
+      # Electron 二进制来构建 dmg，不需要 Rosetta，一个 runner 就能出两个架构。
+      matrix:
+        include:
+          - { os: windows-latest, label: win }
+          - { os: macos-latest, label: mac }
+          - { os: ubuntu-latest, label: linux-x64 }
+          - { os: ubuntu-24.04-arm, label: linux-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # tag 必须与 package.json 版本一致：这个版本号既显示在设置面板，也是自动更新比较的依据。
+      # 忘 bump 就会发出「版本号与 tag 对不上」的产物，用户与更新器都会被它误导
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PKG=$(node -p "require('./package.json').version")
+          test "$TAG" = "$PKG" || { echo "tag v$TAG 与 package.json 的 $PKG 不一致"; exit 1; }
+      - run: npm test
+      - run: npm run build
+      - name: Package and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
+      # 手动触发（不打 tag）时不发布，只上传成 workflow artifact，便于验证构建本身
+      - uses: actions/upload-artifact@v4
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        with:
+          name: repo-radar-${{ matrix.label }}
+          path: |
+            dist-electron/*.exe
+            dist-electron/*.dmg
+            dist-electron/*.AppImage
+            dist-electron/latest*.yml
+          if-no-files-found: ignore

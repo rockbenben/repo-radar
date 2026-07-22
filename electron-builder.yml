@@ -1,0 +1,70 @@
+# 应用根 = 仓库根（不是 desktop/）。原因：desktop/src/main.ts 用 join(__dirname, "..", "..")
+# 从 desktop/dist/main.cjs 回推仓库根，来定位 web/dist 与 scripts/ 下的图标。
+# 打包保持同样的层级，该表达式在 asar 内依然成立，主进程代码不必为打包做任何特判。
+appId: com.rockbenben.repo-radar          # 必须与 main.ts 里的 setAppUserModelId 逐字相同
+productName: repo-radar
+# 统一发布资产命名。nsis 默认会产出 `repo-radar Setup <version>.exe`——带空格，作为 GitHub
+# Release 下载链接会被编码成一串 %20，命令行下载还要加引号，且与 mac/linux 的连字符命名不一致。
+# 这里统一成全小写、连字符、带 arch、无空格的一套规则，三平台一致、URL 干净。
+# 用 ${name}（package.json 的 name，恒无空格）而非 ${productName}；nsis 段另加 -setup 标明是安装器。
+artifactName: ${name}-${version}-${arch}.${ext}
+directories:
+  output: dist-electron
+# 刻意**不设** buildResources：它默认是 build/（不存在，无妨），而如果把它指向 scripts/，
+# electron-builder 会自动把该目录排除出 asar——主进程运行时正要从 asar 里读
+# scripts/icon-256.png 当托盘图标，那样会在打包后静默失效（图标变成空白，无报错）。
+# 图标改为在下面各平台段落里用显式相对路径引用
+
+# 服务端与主进程的依赖已由 esbuild 全部打进 desktop/dist/main.cjs，
+# 因此 asar 里不需要任何 node_modules——只带三样东西
+# 注意：scripts/icon.ico 不在这里——它只在构建期被下面 win.icon 引用（生成 exe 图标资源），
+# 主进程运行时只读 icon-256.png（托盘/通知共用），把 .ico 塞进 asar 只是白占约 372KB 空间
+files:
+  - desktop/dist/main.cjs
+  - web/dist/**
+  - scripts/icon-256.png
+  # macOS 菜单栏托盘专用小图（16px）+ 其 Retina 变体（32px）；main.ts 里只有 darwin 分支用它，
+  # 但打包必须两份都带上——createFromPath("tray-icon.png") 会自动去同目录找 tray-icon@2x.png
+  - scripts/tray-icon.png
+  - scripts/tray-icon@2x.png
+  - package.json
+  - "!**/node_modules"
+
+asar: true
+
+win:
+  target: nsis
+  icon: scripts/icon.ico
+nsis:
+  artifactName: ${name}-${version}-${arch}-setup.${ext}   # -setup 标明是安装器，与 mac/linux 的绿色包区分
+  oneClick: false                          # 给出安装目录选择：便携习惯的用户不喜欢被塞进 AppData
+  perMachine: false                        # 每用户安装，不需要管理员权限（与自启走 HKCU 一致）
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true            # AUMID 挂在这个快捷方式上，Windows 通知依赖它
+  include: build/installer.nsh             # 卸载时清理运行时写入的开机自启注册表项，见该文件注释
+
+mac:
+  # 只出 dmg，不出 zip：本项目不做自动更新（人类决策），zip 在这里唯一的用途就是给
+  # electron-updater 当更新载体，没有自动更新也就没有人会去读它，留着只是重复产物。
+  # arch 同时写 arm64 与 x64：electron-builder 在 arm64 runner（macos-latest）上
+  # 也能直接为 x64 下载对应的 Electron 二进制来构建，不需要 Rosetta，一个 runner 出两份 dmg。
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  icon: scripts/icon-512.png               # electron-builder 会从 ≥512px 的 PNG 生成 icns
+  category: public.app-category.developer-tools
+
+linux:
+  target: AppImage
+  icon: scripts/icon-512.png
+  category: Development
+
+publish:
+  provider: github
+  owner: rockbenben
+  repo: repo-radar
+  # 显式写明用草稿：三个平台的产物会陆续传到同一条草稿 release，全部到齐、核对无误后
+  # 再去 GitHub 网页手动点「Publish release」才对用户可见。不用 release（自动公开）是因为
+  # 一旦发出去，自动更新就会推给所有人——多一道人工确认更稳妥
+  releaseType: draft

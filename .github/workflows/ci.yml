@@ -1,0 +1,24 @@
+# push / PR 门禁：双 typecheck + server/web 全部测试 + 构建。
+# 跑 Linux + Windows 两个平台——server 测试直接驱动真实 git，Windows 的路径/CRLF 行为值得单独验证。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm test # root 脚本 = server/web/desktop 三份 typecheck + 三套测试
+      - run: npm run build

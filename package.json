@@ -1,21 +1,34 @@
 {
   "name": "repo-radar",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
-  "description": "Local Git repo dashboard that scans all your repos — the entry screen is a cross-repo action queue answering \"what needs you now\".",
+  "description": "A local desktop app that watches all your Git repos and surfaces the few that need you — unfinished work, PRs, CI, stashes, stale projects. Local-first, tray-resident, 18 languages.",
   "license": "MIT",
   "author": "rockbenben <qingwhat@gmail.com>",
-  "repository": { "type": "git", "url": "https://github.com/rockbenben/repo-radar.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rockbenben/repo-radar.git"
+  },
   "homepage": "https://github.com/rockbenben/repo-radar#readme",
-  "engines": { "node": ">=20" },
-  "workspaces": ["server", "web"],
+  "main": "desktop/dist/main.cjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "server",
+    "web",
+    "desktop"
+  ],
   "scripts": {
-    "dev": "concurrently -n server,web \"npm run dev -w server\" \"npm run dev -w web\"",
-    "test": "npm run typecheck -w server && npm run typecheck -w web && npm test -w server && npm test -w web",
-    "build": "npm run build -w web",
-    "start": "npm run start -w server"
+    "dev": "concurrently -n web,app \"npm run dev -w web\" \"npm run dev -w desktop\"",
+    "test": "npm run typecheck -w server && npm run typecheck -w web && npm run typecheck -w desktop && npm test -w server && npm test -w web && npm test -w desktop",
+    "build": "npm run build -w web && npm run build -w desktop",
+    "start": "npm run build && npm run start -w desktop",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
   },
   "devDependencies": {
-    "concurrently": "^10.0.3"
+    "concurrently": "^10.0.3",
+    "electron-builder": "^26.15.3"
   }
 }
