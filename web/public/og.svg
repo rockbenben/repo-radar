@@ -57,19 +57,19 @@
 
   <!-- thesis headline -->
   <g font-family="system-ui, 'Segoe UI', Roboto, sans-serif" fill="#e9eff8" font-weight="700" letter-spacing="-1.5">
-    <text x="74" y="292" font-size="66">What needs</text>
-    <text x="74" y="362" font-size="66">you now.</text>
+    <text x="74" y="288" font-size="58">All your repos,</text>
+    <text x="74" y="352" font-size="58">one glance.</text>
   </g>
 
   <!-- tagline -->
   <g font-family="system-ui, 'Segoe UI', Roboto, sans-serif" fill="#8090a8">
-    <text x="76" y="416" font-size="22">One action queue across every local Git</text>
-    <text x="76" y="446" font-size="22">repo — not another repo-count dashboard.</text>
+    <text x="76" y="416" font-size="22">Keeps an eye on all your Git repos so</text>
+    <text x="76" y="446" font-size="22">the rest can stay off your mind.</text>
   </g>
 
   <!-- footer meta: nods to local-first + multilingual -->
   <text x="76" y="512" font-size="15" fill="#55647e" letter-spacing=".02em">
-    <tspan fill="#3ad68a">●</tspan> local git<tspan>   ·   </tspan>zero-config<tspan>   ·   </tspan>18 languages
+    <tspan fill="#3ad68a">●</tspan> local git<tspan>   ·   </tspan>in your tray<tspan>   ·   </tspan>18 languages
   </text>
 
   <!-- ===== the queue = the product's face (right) ===== -->
