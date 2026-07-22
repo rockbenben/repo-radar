@@ -1,14 +1,16 @@
-import { App as AntdApp, Button, Dropdown, Input, Modal, Popover, Segmented, Select, Switch } from "antd"
+import { App as AntdApp, Button, Dropdown, Input, Modal, Popconfirm, Popover, Segmented, Select, Switch } from "antd"
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CockpitHero, GITHUB_KINDS, type QueueItem } from "./components/CockpitHero"
 import { CommandPalette } from "./components/CommandPalette"
 import { DetailPanel } from "./components/DetailPanel"
 import { RepoCard } from "./components/RepoCard"
+import { RootsEditor } from "./components/RootsEditor"
 import { ScopeMark } from "./components/ScopeMark"
 import { StashView } from "./components/StashView"
 import { StatsView } from "./components/StatsView"
 import { WorklogView } from "./components/WorklogView"
 import { LANGS, useI18n } from "./i18n"
+import { resolveEmptyArea, type HasRootsState } from "./lib/emptyState"
 import { applyFilter, type FilterState } from "./lib/filter"
 import { daysSince, isGithubUrl } from "./lib/meta"
 import { mergeRepo } from "./lib/repos"
@@ -16,6 +18,10 @@ import { connectEvents, type ServerEvent } from "./lib/ws"
 import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
 
 const JSON_HEADERS = { "content-type": "application/json" }
+
+// 是否已配置过扫描来源。挂载时和保存扫描目录后都要算一次，抽出来避免两处判断口径跑偏
+const configHasRoots = (c: { roots?: unknown[]; manualRepos?: unknown[] }) =>
+  (c.roots?.length ?? 0) > 0 || (c.manualRepos?.length ?? 0) > 0
 const REPO_URL = "https://github.com/rockbenben/repo-radar" // 顶栏 GitHub 链接（与 package.json repository 一致）
 
 const days = (d?: string | null): number => daysSince(d ?? null) ?? 0
@@ -165,10 +171,18 @@ export default function App({
   const [execCmd, setExecCmd] = useState("")
   const [execResultOpen, setExecResultOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [rootsOpen, setRootsOpen] = useState(false) // 扫描目录管理弹窗
+  // 是否已配置过扫描来源（roots 或手动仓库）：null=config 还没拉到。首次引导欢迎页只在
+  // 明确「没配置过」时出现——配置了但扫出 0 个仓库的用户应看到「未发现仓库」而不是被当成新用户
+  const [hasRoots, setHasRoots] = useState<HasRootsState>(null)
+  const [autostart, setAutostart] = useState<{ supported: boolean; enabled: boolean }>({ supported: false, enabled: false }) // 开机自启（OS 为事实源；仅 exe 模式 supported）
+  // 本实例信息：版本号显示在设置里，供用户核对「我现在跑的是哪一版」——单实例不再自动替换旧版，
+  // 升级要靠「退出 → 运行新版」，这个显示就是用户确认升级是否生效的唯一凭据。
+  // canQuit 独立于 autostart：退出按钮只跟退出端点是否存在挂钩
+  const [instance, setInstance] = useState<{ version: string; canQuit: boolean }>({ version: "", canQuit: false })
   const [autoWatch, setAutoWatch] = useState(false) // 文件监听实时刷新（服务端持久化，默认关）
   const [autoFetchMin, setAutoFetchMin] = useState(0) // 定时后台 fetch 间隔（分钟，0=关）
-  const [notify, setNotify] = useState(() => pref("notify", "0") === "1")
-  const notified = useRef(false)
+  const [notifications, setNotifications] = useState(false) // 「等我的」新增时弹系统通知（服务端持久化，默认关）
   const manifestFileRef = useRef<HTMLInputElement>(null)
   const [bootAnim, setBootAnim] = useState(false) // 初次载入时的开机错峰淡入（仅一次，不在筛选/刷新时重播）
   const bootedRef = useRef(false)
@@ -250,7 +264,6 @@ export default function App({
 
   async function rescan() {
     setScanning(true)
-    notified.current = false // 每次显式重扫后可再次提醒
     try {
       const res = await fetch("/api/scan", { method: "POST" })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -328,7 +341,6 @@ export default function App({
   useEffect(() => savePref("view", view), [view])
   useEffect(() => savePref("group", groupMode), [groupMode])
   useEffect(() => savePref("arch", showArchived ? "1" : "0"), [showArchived])
-  useEffect(() => savePref("notify", notify ? "1" : "0"), [notify])
   useEffect(() => savePref("views", JSON.stringify(views)), [views])
   useEffect(() => savePref("log", JSON.stringify(log)), [log])
 
@@ -578,26 +590,85 @@ export default function App({
     }
   }
 
-  async function toggleNotify() {
-    const next = !notify
-    setNotify(next)
-    notified.current = false
-    if (next && "Notification" in window && Notification.permission === "default") {
-      await Notification.requestPermission()
-    }
-  }
-
-  // 自动化开关状态存服务端 config（autoWatch 文件监听、autoFetchMinutes 定时拉取），均默认关闭
-  useEffect(() => {
-    fetch("/api/config")
-      .then((r) => (r.ok ? r.json() : null))
+  // 自动化开关状态存服务端 config（autoWatch 文件监听、autoFetchMinutes 定时拉取、notifications 系统通知），均默认关闭。
+  // 抽成具名函数：挂载时调一次，配置错误态里的「重试」按钮也调它——一份逻辑，两处触发
+  const loadConfigStatus = useCallback(() => {
+    return fetch("/api/config")
+      .then((r) => {
+        // r.ok 为假时原先直接返回 null、外层 then 里 `if (!c) return` 悄悄跳过——
+        // hasRoots 永远停在 null，等价于「一直在加载中」。这里改成抛错走 catch 统一处理
+        if (!r.ok) throw new Error(`config fetch failed: ${r.status}`)
+        return r.json()
+      })
       .then((c) => {
-        if (!c) return
         setAutoWatch(!!c.autoWatch)
         setAutoFetchMin(typeof c.autoFetchMinutes === "number" ? c.autoFetchMinutes : 0)
+        setNotifications(!!c.notifications)
+        setHasRoots(configHasRoots(c))
+      })
+      .catch(() => {
+        // 请求真的失败了（后端还在跑启动扫描、休眠唤醒后 socket 被重置等）：hasRoots 置为
+        // "unknown"，与「还没拉到结果」的 null 严格区分开——unknown 走明确的错误提示 + 重试
+        // 入口，绝不能被当成「确知没配置过」去显示首次运行的欢迎文案（缺陷 2）
+        setHasRoots("unknown")
+      })
+  }, [])
+  const retryConfigStatus = useCallback(() => {
+    setHasRoots(null) // 退回「加载中」，与挂载首帧同一个中性态，不是继续停在错误页干等
+    void loadConfigStatus()
+  }, [loadConfigStatus])
+  useEffect(() => {
+    void loadConfigStatus()
+    fetch("/api/autostart")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s) => {
+        if (s) setAutostart(s as { supported: boolean; enabled: boolean })
       })
       .catch(() => {})
-  }, [])
+    fetch("/api/version")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v) => {
+        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true })
+      })
+      .catch(() => {})
+    // loadConfigStatus 是 useCallback([]) 稳定引用，列进依赖数组不会多触发一次——只是照规则补齐
+  }, [loadConfigStatus])
+  async function toggleAutostart() {
+    const next = !autostart.enabled
+    setAutostart({ ...autostart, enabled: next })
+    try {
+      const r = await fetch("/api/autostart", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ enabled: next }) })
+      if (!r.ok) throw new Error()
+      setAutostart((await r.json()) as { supported: boolean; enabled: boolean }) // 以服务端读回的 OS 实际状态为准
+    } catch {
+      setAutostart({ ...autostart, enabled: !next }) // 失败回滚
+      message.error(t("msg.autostartFail"))
+    }
+  }
+  // 退出后台服务（仅 exe 模式；macOS 的 .app 没有 Dock 图标和控制台，这是唯一的退出途径）
+  async function quitApp() {
+    let ok = true
+    try {
+      const r = await fetch("/api/shutdown", { method: "POST", headers: { "x-repo-radar": "shutdown" } })
+      ok = r.ok // 404/403（如后端已换成源码模式，端点不存在）不能谎报「已停止」
+    } catch {
+      // 请求抛错 ≠ 服务已停：可能是网络层瞬时错误（休眠恢复、socket 重置），也可能是响应
+      // 在服务端已受理之后丢失。服务端收到退出请求后要留约 200ms 宽限期让响应送达，
+      // 期间它仍然应答——所以必须给足时间轮询，只探一次会把「正在退出」误报成「退出失败」
+      ok = !(await stillServing())
+    }
+    if (ok) message.success(t("msg.quitDone"), 8)
+    else message.error(t("msg.quitFail"))
+  }
+  /** 轮询到连不上为止（≈已退出）；到期仍在应答才算真没退 */
+  async function stillServing() {
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, 250))
+      const up = await fetch("/api/version").then(() => true).catch(() => false)
+      if (!up) return false
+    }
+    return true
+  }
   async function toggleWatch() {
     const next = !autoWatch
     setAutoWatch(next)
@@ -608,6 +679,20 @@ export default function App({
     } catch {
       setAutoWatch(!next) // 失败回滚
       message.error(t("msg.watchFail"))
+    }
+  }
+  // 通知开关只是个纯配置字段（主进程在事件发生时现读 config），不需要服务端立即起停任何东西，
+  // 所以直接走通用的 PUT /api/config，不用像 autoWatch/autoFetch 那样走专用端点
+  async function toggleNotifications() {
+    const next = !notifications
+    setNotifications(next)
+    try {
+      const r = await fetch("/api/config", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ notifications: next }) })
+      if (!r.ok) throw new Error()
+      message.success(next ? t("msg.notifyOn") : t("msg.notifyOff"))
+    } catch {
+      setNotifications(!next) // 失败回滚：开关显示成开着却没生效，比直接报错更糟
+      message.error(t("msg.saveFail"))
     }
   }
   async function changeAutoFetch(minutes: number) {
@@ -638,23 +723,6 @@ export default function App({
   const allTags = useMemo(() => [...new Set(repos.flatMap((r) => r.tags))].sort(), [repos])
   const active = useMemo(() => repos.filter((r) => !r.archived), [repos])
 
-  // 搁置提醒：开启后，每次显式重扫若有未推送 / 改动搁置≥7天，弹一次桌面通知
-  useEffect(() => {
-    if (!notify || notified.current || active.length === 0) return
-    if (!("Notification" in window) || Notification.permission !== "granted") return
-    const unpushed = active.filter((r) => r.ahead > 0).length
-    const staleDirty = active.filter((r) => {
-      const changes = r.dirty.staged + r.dirty.unstaged + r.dirty.untracked
-      if (changes === 0 || !r.lastCommit) return false
-      return (Date.now() - new Date(r.lastCommit.date).getTime()) / 86_400_000 >= 7
-    }).length
-    if (unpushed === 0 && staleDirty === 0) return
-    notified.current = true
-    const parts: string[] = []
-    if (unpushed) parts.push(t("notify.unpushed", { n: unpushed }))
-    if (staleDirty) parts.push(t("notify.staleDirty", { n: staleDirty }))
-    new Notification(t("notify.title"), { body: parts.join(" · "), icon: "/favicon.svg" })
-  }, [notify, active, t])
   const counts = useMemo(() => {
     const crit = active.filter((r) => r.error !== null || r.health.some((h) => h.severity === "error")).length
     const warn = active.filter((r) => r.health.some((h) => h.severity === "warn")).length
@@ -935,6 +1003,8 @@ export default function App({
           rootClassName="rr-settings-pop"
           content={
             <div className="rr-settings">
+              {/* 显示：语言与主题——纯展示偏好放在最前 */}
+              <div className="grp">{t("settings.grpDisplay")}</div>
               <div className="row">
                 <span className="lb">Language</span>
                 <Select
@@ -959,6 +1029,8 @@ export default function App({
                   ]}
                 />
               </div>
+              {/* 自动化：后台会自己跑的行为——扫描、拉取、通知 */}
+              <div className="grp">{t("settings.grpAutomation")}</div>
               <div className="row">
                 <span className="lb">
                   {t("settings.autoScan")}<span className="hint">{t("settings.autoScanHint")}</span>
@@ -987,8 +1059,44 @@ export default function App({
                 <span className="lb">
                   {t("settings.notify")}<span className="hint">{t("settings.notifyHint")}</span>
                 </span>
-                <Switch size="small" checked={notify} onChange={toggleNotify} />
+                <Switch size="small" checked={notifications} onChange={toggleNotifications} />
               </div>
+              {/* 系统：扫描来源管理 + 开机自启 + 退出 + 版本——本机/本实例相关的操作放最后 */}
+              <div className="grp">{t("settings.grpSystem")}</div>
+              <div className="row">
+                <span className="lb">{t("roots.title")}</span>
+                <Button size="small" onClick={() => setRootsOpen(true)}>
+                  {t("settings.manage")}
+                </Button>
+              </div>
+              {autostart.supported && (
+                <div className="row">
+                  <span className="lb">
+                    {t("settings.autostart")}<span className="hint">{t("settings.autostartHint")}</span>
+                  </span>
+                  <Switch size="small" checked={autostart.enabled} onChange={() => void toggleAutostart()} />
+                </div>
+              )}
+              {instance.canQuit && (
+                <div className="row">
+                  <span className="lb">
+                    {t("settings.quit")}<span className="hint">{t("settings.quitHint")}</span>
+                  </span>
+                  <Popconfirm title={t("settings.quitHint")} onConfirm={() => void quitApp()}>
+                    <Button size="small" danger>
+                      {t("settings.quitBtn")}
+                    </Button>
+                  </Popconfirm>
+                </div>
+              )}
+              {instance.version !== "" && (
+                <div className="row">
+                  <span className="lb">
+                    {t("settings.version")}<span className="hint">{t("settings.versionHint")}</span>
+                  </span>
+                  <span className="rr-ver">v{instance.version}</span>
+                </div>
+              )}
               <a className="rr-settings-gh" href={REPO_URL} target="_blank" rel="noreferrer noopener">
                 <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                   <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
@@ -1002,8 +1110,8 @@ export default function App({
           <Button
             size="small"
             className="rr-gear"
-            type={autoWatch || autoFetchMin > 0 || notify ? "primary" : "default"}
-            ghost={autoWatch || autoFetchMin > 0 || notify}
+            type={autoWatch || autoFetchMin > 0 || notifications ? "primary" : "default"}
+            ghost={autoWatch || autoFetchMin > 0 || notifications}
             title={t("settings.tip")}
           >
             ⚙
@@ -1259,15 +1367,57 @@ export default function App({
             ))
           )}
           {loadError !== null && <div className="rr-empty err">{loadError}</div>}
-          {loadError === null && visible.length === 0 && !scanning && (
-            <div className="rr-empty">
-              {showArchived
-                ? t("empty.noExcluded")
-                : attention || filter.query || filter.group || (filter.tags?.length ?? 0) > 0
-                  ? t("empty.noMatch")
-                  : t("empty.noRepos")}
-            </div>
-          )}
+          {/* 空状态：三态分流交给 resolveEmptyArea 纯函数（好单测）。缺陷 2 的要点是永远不能把
+              「不知道」显示成「首次运行」——loading（配置请求还没回来）和 configError（请求确实
+              失败了）都要有各自明确的展示，只有确知 hasRoots===false 才走欢迎页；任何一种都不能
+              导致主区域什么都不渲染 */}
+          {(() => {
+            const area = resolveEmptyArea({ loadError, scanning, hasRoots, reposCount: repos.length })
+            if (area === "hidden") return null
+            if (area === "loading") {
+              // 中性加载态：既不是欢迎页也不是空白，避免被误当成「你还没配置过」
+              return <div className="rr-empty">{t("common.loading")}</div>
+            }
+            if (area === "configError") {
+              return (
+                <div className="rr-welcome">
+                  <div className="tt">{t("empty.configErrorTitle")}</div>
+                  <div className="ht">{t("empty.configErrorHint")}</div>
+                  <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+                    <Button onClick={retryConfigStatus}>{t("common.retry")}</Button>
+                    <Button type="primary" ghost onClick={() => setRootsOpen(true)}>
+                      {t("empty.welcomeCta")}
+                    </Button>
+                  </div>
+                </div>
+              )
+            }
+            if (area === "welcome") {
+              // 首次使用：明确还没配置任何扫描来源——引导用户添加扫描目录；
+              // 已配置但扫出 0 个仓库的场景走下面的「未发现仓库」，不能假装人家没配置过
+              return (
+                <div className="rr-welcome">
+                  <div className="tt">{t("empty.welcomeTitle")}</div>
+                  <div className="ht">{t("empty.welcomeHint")}</div>
+                  <Button type="primary" ghost onClick={() => setRootsOpen(true)}>
+                    {t("empty.welcomeCta")}
+                  </Button>
+                </div>
+              )
+            }
+            // area === "list"：已有卡片时这里什么都不必加；已知配置过但扫出 0 个/筛掉全部时给出对应文案
+            return (
+              visible.length === 0 && (
+                <div className="rr-empty">
+                  {showArchived
+                    ? t("empty.noExcluded")
+                    : attention || filter.query || filter.group || (filter.tags?.length ?? 0) > 0
+                      ? t("empty.noMatch")
+                      : t("empty.noRepos")}
+                </div>
+              )
+            )
+          })()}
         </main>
       )}
 
@@ -1287,6 +1437,16 @@ export default function App({
       )}
 
       <CommandPalette open={paletteOpen} repos={active} onClose={() => setPaletteOpen(false)} onOpen={openRepo} onCopyPath={copyPath} />
+      <RootsEditor
+        open={rootsOpen}
+        onClose={() => setRootsOpen(false)}
+        onSaved={() => {
+          void rescan()
+          // 保存后同步「是否已配置扫描来源」，欢迎页/空状态的分流才不会用旧值；
+          // 复用 loadConfigStatus 而不是另抄一份 fetch——两处对 hasRoots 的写入必须走同一套判定
+          void loadConfigStatus()
+        }}
+      />
 
       <Modal
         open={newOpen}
