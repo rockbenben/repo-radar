@@ -4,7 +4,9 @@
 
 # repo-radar
 
-> 365 ओपन सोर्स प्लान #027 · एक लोकल डैशबोर्ड जो आपके सभी Git रिपो पर नज़र रखता है और दिखाता है कि किन्हें आपकी ज़रूरत है।
+> एक लोकल डैशबोर्ड जो आपके सभी Git रिपो पर नज़र रखता है और दिखाता है कि किन्हें आपकी ज़रूरत है।
+
+[![365 Open Source Plan #027](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
 
 [English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · **हिन्दी** · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
@@ -80,8 +82,4 @@ Stack: Electron शेल + Node + Hono (सारे git ऑपरेशन `sp
 
 ## 365 ओपन सोर्स प्लान के बारे में
 
-[365 ओपन सोर्स प्लान](https://github.com/rockbenben/365opensource) का प्रोजेक्ट **#027** — एक व्यक्ति + AI, एक साल में 300+ ओपन सोर्स प्रोजेक्ट्स। [अपना आइडिया सबमिट करें →](https://365.aishort.top/)
-
-## लाइसेंस
-
-[MIT](../../LICENSE)
+[365 ओपन सोर्स प्लान](https://github.com/rockbenben/365opensource) का प्रोजेक्ट **#027** — एक व्यक्ति + AI, एक साल में 300+ ओपन सोर्स प्रोजेक्ट्स। [अपना आइडिया सबमिट करें →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

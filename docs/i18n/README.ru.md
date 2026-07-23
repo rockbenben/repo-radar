@@ -4,7 +4,9 @@
 
 # repo-radar
 
-> 365 Open Source Plan #027 · Локальная панель, которая следит за всеми вашими Git-репозиториями и показывает, какие из них требуют вашего внимания.
+> Локальная панель, которая следит за всеми вашими Git-репозиториями и показывает, какие из них требуют вашего внимания.
+
+[![365 Open Source Plan #027](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
 
 [English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · **Русский** · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
@@ -80,8 +82,4 @@ npm run dist    # сборка установщиков в dist-electron/
 
 ## О плане 365 Open Source
 
-Проект **#027** из [плана 365 Open Source](https://github.com/rockbenben/365opensource) — один человек + ИИ, 300+ открытых проектов за год. [Предложить свою идею →](https://365.aishort.top/)
-
-## Лицензия
-
-[MIT](../../LICENSE)
+Проект **#027** из [плана 365 Open Source](https://github.com/rockbenben/365opensource) — один человек + ИИ, 300+ открытых проектов за год. [Предложить свою идею →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

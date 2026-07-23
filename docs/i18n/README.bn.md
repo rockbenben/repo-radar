@@ -80,8 +80,4 @@ npm run dist    # dist-electron/-এ ইনস্টলার বিল্ড �
 
 ## ৩৬৫ ওপেন সোর্স প্ল্যান সম্পর্কে
 
-[৩৬৫ ওপেন সোর্স প্ল্যান](https://github.com/rockbenben/365opensource)-এর প্রজেক্ট **#027** — একজন মানুষ + AI, এক বছরে ৩০০+ ওপেন সোর্স প্রজেক্ট। [আপনার আইডিয়া জমা দিন →](https://365.aishort.top/)
-
-## লাইসেন্স
-
-[MIT](../../LICENSE)
+[৩৬৫ ওপেন সোর্স প্ল্যান](https://github.com/rockbenben/365opensource)-এর প্রজেক্ট **#027** — একজন মানুষ + AI, এক বছরে ৩০০+ ওপেন সোর্স প্রজেক্ট। [আপনার আইডিয়া জমা দিন →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

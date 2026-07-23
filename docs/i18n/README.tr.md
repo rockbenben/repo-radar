@@ -4,7 +4,9 @@
 
 # repo-radar
 
-> 365 Açık Kaynak Planı #027 · Tüm Git repolarınızı izleyen ve hangilerinin sizi beklediğini gösteren yerel bir pano.
+> Tüm Git repolarınızı izleyen ve hangilerinin sizi beklediğini gösteren yerel bir pano.
+
+[![365 Open Source Plan #027](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
 
 [English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · **Türkçe** · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
@@ -80,8 +82,4 @@ Yığın (stack): Electron kabuğu + Node + Hono (tüm git `spawn` üzerinden, s
 
 ## 365 Açık Kaynak Planı hakkında
 
-[365 Açık Kaynak Planı](https://github.com/rockbenben/365opensource) kapsamındaki **#027** numaralı proje — bir kişi + yapay zeka, bir yılda 300'den fazla açık kaynak proje. [Fikrinizi paylaşın →](https://365.aishort.top/)
-
-## Lisans
-
-[MIT](../../LICENSE)
+[365 Açık Kaynak Planı](https://github.com/rockbenben/365opensource) kapsamındaki **#027** numaralı proje — bir kişi + yapay zeka, bir yılda 300'den fazla açık kaynak proje. [Fikrinizi paylaşın →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

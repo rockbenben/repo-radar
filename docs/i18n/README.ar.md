@@ -80,8 +80,4 @@ npm run dist    # بناء المثبِّتات في dist-electron/
 
 ## عن خطة 365 مفتوح المصدر
 
-المشروع **#027** من [خطة 365 مفتوح المصدر](https://github.com/rockbenben/365opensource) — شخص واحد + ذكاء اصطناعي، أكثر من 300 مشروع مفتوح المصدر في عام واحد. [شارك فكرتك ←](https://365.aishort.top/)
-
-## الترخيص
-
-[MIT](../../LICENSE)
+المشروع **#027** من [خطة 365 مفتوح المصدر](https://github.com/rockbenben/365opensource) — شخص واحد + ذكاء اصطناعي، أكثر من 300 مشروع مفتوح المصدر في عام واحد. [شارك فكرتك ←](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

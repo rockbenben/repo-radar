@@ -4,7 +4,9 @@
 
 # repo-radar
 
-> 365 开源计划 #027 · 一个本地面板，替你盯着所有 Git 仓库，告诉你其中哪些需要你出手。
+> 一个本地面板，替你盯着所有 Git 仓库，告诉你其中哪些需要你出手。
+
+[![365 开源计划 #027](https://img.shields.io/badge/365%20%E5%BC%80%E6%BA%90%E8%AE%A1%E5%88%92-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
 
 [English](../../README.md) · **简体中文** · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
@@ -80,8 +82,4 @@ npm run dist    # 构建安装包到 dist-electron/
 
 ## 关于 365 开源计划
 
-[365 开源计划](https://github.com/rockbenben/365opensource) 的第 **#027** 个项目——一个人 + AI，一年 300+ 个开源项目。[提交你的需求 →](https://365.aishort.top/)
-
-## 许可
-
-[MIT](../../LICENSE)
+[365 开源计划](https://github.com/rockbenben/365opensource) 的第 **#027** 个项目——一个人 + AI，一年 300+ 个开源项目。[提交你的需求 →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

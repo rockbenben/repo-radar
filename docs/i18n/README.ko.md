@@ -4,7 +4,9 @@
 
 # repo-radar
 
-> 365 오픈소스 프로젝트 #027 · 모든 Git 저장소를 지켜보며 그중 어느 것에 당신의 손이 필요한지 알려주는 로컬 대시보드.
+> 모든 Git 저장소를 지켜보며 그중 어느 것에 당신의 손이 필요한지 알려주는 로컬 대시보드.
+
+[![365 Open Source Plan #027](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
 
 [English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · **한국어** · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
@@ -80,8 +82,4 @@ npm run dist    # dist-electron/ 에 설치 파일 빌드
 
 ## 365 오픈소스 프로젝트 소개
 
-[365 오픈소스 프로젝트](https://github.com/rockbenben/365opensource)의 **#027**번째 프로젝트 — 한 사람 + AI, 1년에 오픈소스 프로젝트 300개 이상. [아이디어 제안하기 →](https://365.aishort.top/)
-
-## 라이선스
-
-[MIT](../../LICENSE)
+[365 오픈소스 프로젝트](https://github.com/rockbenben/365opensource)의 **#027**번째 프로젝트 — 한 사람 + AI, 1년에 오픈소스 프로젝트 300개 이상. [아이디어 제안하기 →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

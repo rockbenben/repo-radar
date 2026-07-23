@@ -4,7 +4,9 @@
 
 # repo-radar
 
-> 365 開源計劃 #027 · 一個本機面板，替你盯著所有 Git 儲存庫，告訴你其中哪些需要你出手。
+> 一個本機面板，替你盯著所有 Git 儲存庫，告訴你其中哪些需要你出手。
+
+[![365 開源計畫 #027](https://img.shields.io/badge/365%20%E9%96%8B%E6%BA%90%E8%A8%88%E7%95%AB-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
 
 [English](../../README.md) · [简体中文](README.zh-Hans.md) · **繁體中文** · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
@@ -80,8 +82,4 @@ npm run dist    # 建置安裝包到 dist-electron/
 
 ## 關於 365 開源計劃
 
-[365 開源計劃](https://github.com/rockbenben/365opensource) 的第 **#027** 個專案——一人 + AI，一年 300+ 個開源專案。[提交你的點子 →](https://365.aishort.top/)
-
-## 授權條款
-
-[MIT](../../LICENSE)
+[365 開源計劃](https://github.com/rockbenben/365opensource) 的第 **#027** 個專案——一人 + AI，一年 300+ 個開源專案。[提交你的點子 →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

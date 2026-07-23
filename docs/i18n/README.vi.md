@@ -80,8 +80,4 @@ Stack: lớp vỏ Electron + Node + Hono (mọi thao tác git đều qua `spawn`
 
 ## Giới thiệu về 365 Open Source Plan
 
-Dự án **#027** của [365 Open Source Plan](https://github.com/rockbenben/365opensource) — một người + AI, hơn 300 dự án mã nguồn mở trong một năm. [Gửi ý tưởng của bạn →](https://365.aishort.top/)
-
-## Giấy phép
-
-[MIT](../../LICENSE)
+Dự án **#027** của [365 Open Source Plan](https://github.com/rockbenben/365opensource) — một người + AI, hơn 300 dự án mã nguồn mở trong một năm. [Gửi ý tưởng của bạn →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

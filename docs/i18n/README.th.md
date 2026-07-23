@@ -80,8 +80,4 @@ Stack: เชลล์ Electron + Node + Hono (การเข้าถึง gi
 
 ## เกี่ยวกับโครงการ 365 Open Source
 
-โปรเจกต์ **#027** ของ[โครงการ 365 Open Source](https://github.com/rockbenben/365opensource) — หนึ่งคน + AI, มากกว่า 300 โปรเจกต์โอเพนซอร์สในหนึ่งปี [ส่งไอเดียของคุณ →](https://365.aishort.top/)
-
-## สัญญาอนุญาต
-
-[MIT](../../LICENSE)
+โปรเจกต์ **#027** ของ[โครงการ 365 Open Source](https://github.com/rockbenben/365opensource) — หนึ่งคน + AI, มากกว่า 300 โปรเจกต์โอเพนซอร์สในหนึ่งปี [ส่งไอเดียของคุณ →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

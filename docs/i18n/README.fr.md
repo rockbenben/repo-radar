@@ -80,8 +80,4 @@ Stack : shell Electron + Node + Hono (tout Git via `spawn`, aucune dépendance n
 
 ## À propos du 365 Open Source Plan
 
-Projet **#027** du [365 Open Source Plan](https://github.com/rockbenben/365opensource) — une personne + l'IA, plus de 300 projets open source en un an. [Proposez votre idée →](https://365.aishort.top/)
-
-## Licence
-
-[MIT](../../LICENSE)
+Projet **#027** du [365 Open Source Plan](https://github.com/rockbenben/365opensource) — une personne + l'IA, plus de 300 projets open source en un an. [Proposez votre idée →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)
