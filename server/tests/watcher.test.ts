@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
-import { RepoWatcher } from "../src/watcher"
+import { RepoWatcher, shouldIgnorePath, watcherErrorIsNoise } from "../src/watcher"
 import { cleanupFixtures, git, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
@@ -154,5 +154,90 @@ describe("RepoWatcher", () => {
     expect(fired.length).toBe(1) // 仍在冷却期，尚未补触发
     await waitFor(() => fired.length === 2, 3000) // 冷却结束后补触发——没有被丢弃
     await watcher.close()
+  })
+})
+
+// 构建产物目录的内容由构建工具高频重写，Windows 上这些临时文件还常带独占锁——chokidar 去
+// watch 就是 EBUSY，日志被刷满跟仓库状态毫无关系的错误（实测：MSBuild 的
+// app\obj\*_wpftmp.csproj.nuget.g.props）。这些目录基本都在 .gitignore 里，变化本来也不进 git status
+describe("shouldIgnorePath — 监听时跳过的路径", () => {
+  it("跳过 node_modules 与常见构建产物目录", () => {
+    for (const seg of ["node_modules", "obj", "bin", "target", "dist", "build", ".next", "__pycache__", ".venv"]) {
+      expect(shouldIgnorePath(join("D:", "repo", seg, "x.tmp"))).toBe(true)
+    }
+  })
+
+  it("按路径段匹配，不做子串匹配", () => {
+    // 仓库恰好放在名字含 node_modules 的目录下时，整个仓库都会被静默忽略
+    expect(shouldIgnorePath(join("D:", "my node_modules stuff", "repo", "src", "a.ts"))).toBe(false)
+    expect(shouldIgnorePath(join("D:", "repo", "obj-loader", "a.ts"))).toBe(false)
+    expect(shouldIgnorePath(join("D:", "repo", "rebuild", "a.ts"))).toBe(false)
+  })
+
+  // 仓库自己或它的上级目录叫 build/vendor 完全合法，那不该让整个仓库停止刷新
+  it("只看仓库根目录以下的段：根目录自身叫 build/vendor 也照常监听", () => {
+    const roots = [join("D:", "projects", "build"), join("D:", "vendor", "myrepo")]
+    expect(shouldIgnorePath(join("D:", "projects", "build"), roots)).toBe(false)
+    expect(shouldIgnorePath(join("D:", "projects", "build", "src", "a.ts"), roots)).toBe(false)
+    expect(shouldIgnorePath(join("D:", "vendor", "myrepo", "src", "a.ts"), roots)).toBe(false)
+    // 但根目录**以下**的 build/ 依然跳过
+    expect(shouldIgnorePath(join("D:", "projects", "build", "build", "out.js"), roots)).toBe(true)
+    expect(shouldIgnorePath(join("D:", "vendor", "myrepo", "vendor", "x.go"), roots)).toBe(true)
+  })
+
+  it("嵌套仓库按最长匹配根归属（调用方按长度倒序传入）", () => {
+    const roots = [join("D:", "repo", "dist", "inner"), join("D:", "repo")] // 长度倒序
+    // inner 是一个独立仓库，虽然它位于外层仓库的 dist/ 下，它自己的文件不该被忽略
+    expect(shouldIgnorePath(join("D:", "repo", "dist", "inner", "src", "a.ts"), roots)).toBe(false)
+    // 外层仓库的 dist/ 里的其它文件照常忽略
+    expect(shouldIgnorePath(join("D:", "repo", "dist", "bundle.js"), roots)).toBe(true)
+  })
+
+  it("不碰 .git 内部：HEAD/index/refs 正是我们要监听的东西", () => {
+    expect(shouldIgnorePath(join("D:", "repo", ".git", "HEAD"))).toBe(false)
+    expect(shouldIgnorePath(join("D:", "repo", ".git", "index"))).toBe(false)
+    expect(shouldIgnorePath(join("D:", "repo", ".git", "refs", "heads", "main"))).toBe(false)
+  })
+
+  it("仓库根目录本身不被忽略", () => {
+    expect(shouldIgnorePath(join("D:", "repo"))).toBe(false)
+    expect(shouldIgnorePath(join("D:", "repo", "src", "index.ts"))).toBe(false)
+  })
+})
+
+// 绑定成功后的监听期错误分两类：EBUSY/EPERM/ENOENT 是「文件正被别人锁着 / 刚被删掉」的
+// 日常噪音，对仓库状态没有任何信息量；其余的（比如 EMFILE 句柄耗尽）是真问题，必须留在日志里
+describe("watcherErrorIsNoise — 监听期错误分级", () => {
+  const targets = [join("D:", "repo"), join("D:", "repo", ".git", "index")]
+  const err = (code: string, path?: string) => ({ code, path }) as NodeJS.ErrnoException
+
+  it("监听目标底下某个文件锁着/没了 → 噪音", () => {
+    for (const code of ["EBUSY", "EPERM", "ENOENT"]) {
+      expect(watcherErrorIsNoise(err(code, join("D:", "repo", "obj", "x.tmp")), targets)).toBe(true)
+    }
+  })
+
+  // 同样的错误码打在监听目标本身上，后果是整个仓库从此不再刷新——界面永远停在过期状态，
+  // 而打包后日志是唯一诊断面。这是这批修复里最要紧的一条分级
+  it("监听目标本身出错 → 必须报出来（整个仓库失去监听）", () => {
+    for (const code of ["EBUSY", "EPERM", "ENOENT"]) {
+      expect(watcherErrorIsNoise(err(code, join("D:", "repo")), targets)).toBe(false)
+      expect(watcherErrorIsNoise(err(code, join("D:", "repo", ".git", "index")), targets)).toBe(false)
+    }
+  })
+
+  it("路径不明 → 报出来（影响面说不清，宁可多一条日志）", () => {
+    expect(watcherErrorIsNoise(err("EBUSY"), targets)).toBe(false)
+    expect(watcherErrorIsNoise(err("EPERM", undefined), targets)).toBe(false)
+  })
+
+  it("句柄耗尽等真问题永远报出来", () => {
+    for (const code of ["EMFILE", "ENOSPC"]) {
+      expect(watcherErrorIsNoise(err(code, join("D:", "repo", "obj", "x.tmp")), targets)).toBe(false)
+    }
+  })
+
+  it.runIf(process.platform === "win32")("Windows 上按大小写不敏感比对监听目标", () => {
+    expect(watcherErrorIsNoise(err("EPERM", join("d:", "REPO")), targets)).toBe(false)
   })
 })

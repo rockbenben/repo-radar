@@ -8,6 +8,74 @@ interface WatchedRepo {
 }
 
 /**
+ * 监听时整段跳过的目录名。除了 node_modules，主要是各语言的构建产物目录：内容由构建工具
+ * 高频重写，Windows 上这些临时文件还常带独占锁——chokidar 一去 watch 就是 EBUSY，日志被刷满
+ * 跟仓库状态毫无关系的错误（实测 MSBuild 的 app\obj\*_wpftmp.csproj.nuget.g.props）。
+ * 它们基本都在 .gitignore 里，变化本来就不进 git status，少监听不会漏掉任何看板上的变化。
+ *
+ * 代价：仓库里如果有同名的**受版本控制**的目录（比如手写的 dist/），改动不会即时触发刷新，
+ * 要等兜底重扫。相比日志被噪音淹没、以及 EBUSY 可能连带拖垮整个监听实例，这个代价值得。
+ */
+const IGNORED_DIRS = new Set([
+  "node_modules",
+  "obj",
+  "bin",
+  "target",
+  "dist",
+  "build",
+  "out",
+  ".next",
+  ".nuxt",
+  ".turbo",
+  ".gradle",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "vendor",
+])
+
+/**
+ * 按**路径段**判断，不做子串匹配：`p.includes("node_modules")` 会让「仓库恰好放在名字含
+ * node_modules 的目录下」时整个仓库被静默忽略——看板永远不刷新，且没有任何提示。
+ *
+ * 只看仓库根目录**以下**的段。仓库自己或它的上级目录叫 build/vendor/dist 完全合法
+ * （`D:\vendor\myrepo`、`D:\projects\build`），拿绝对路径整条去匹配的话这些仓库会被整个
+ * 忽略掉——同样是「静默不刷新」，比噪音严重得多。roots 为空时退化成整条路径匹配。
+ */
+export function shouldIgnorePath(p: string, roots: readonly string[] = []): boolean {
+  // 前缀必须停在分隔符上：裸 startsWith 会让根 `D:\repo` 认领 `D:\repo-other\...`，
+  // 那个仓库的 build/ 判断就跑到别人的坐标系里去了
+  const root = roots.find((r) => p === r || (p.startsWith(r) && /[\\/]/.test(p[r.length] ?? "")))
+  const rest = root === undefined ? p : p.slice(root.length)
+  return rest.split(/[\\/]/).some((seg) => IGNORED_DIRS.has(seg))
+}
+
+/**
+ * 监听期错误分级。EBUSY/EPERM（文件被独占锁着）、ENOENT（readdir 到 watch 之间文件没了）
+ * 出现在**监听目标底下的某个文件**上时是本地开发的日常噪音，对仓库状态零信息量。
+ *
+ * 但同样这三个码出现在**监听目标本身**上时是完全另一回事：网络共享上的仓库、被杀软锁住的
+ * 目录、被删掉或改名的仓库，chokidar 报的就是这几个码，而后果是那个仓库**从此不再刷新**——
+ * 界面上它会永远停在一个过期状态，其它仓库照常更新。打包后日志是唯一的诊断面，这种情况
+ * 必须留下痕迹，否则用户和维护者都无从判断。
+ *
+ * 因此按「出事的路径是不是监听目标本身」分级；路径不明时一律报出来（宁可多一条日志，
+ * 也不要把一个说不清影响面的错误咽掉）。其余错误码（EMFILE 句柄耗尽、ENOSPC inotify 上限）
+ * 永远是真问题。
+ */
+export function watcherErrorIsNoise(err: NodeJS.ErrnoException, targets: readonly string[] = []): boolean {
+  if (err.code !== "EBUSY" && err.code !== "EPERM" && err.code !== "ENOENT") return false
+  const failed = err.path
+  if (typeof failed !== "string") return false
+  return !targets.some((t) => samePath(t, failed))
+}
+
+/** Windows 路径大小写不敏感，且同一目录可能以不同大小写回报；比较前统一 */
+function samePath(a: string, b: string): boolean {
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/**
  * 文件监听：仓库有变化时通知刷新。两段窗口，任何真实变更都不会被丢弃：
  * - 非冷却期：防抖 debounceMs，合并连发事件后触发一次
  * - 冷却期内（触发后 cooldownMs）：真实变更延迟到冷却结束统一补一次（合并，不丢弃）
@@ -18,6 +86,7 @@ interface WatchedRepo {
 export class RepoWatcher {
   private watcher: FSWatcher | null = null
   private repos: WatchedRepo[] = []
+  private watchTargets: string[] = [] // 本轮交给 chokidar 的监听目标，error 分级要用
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private pendingTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private cooldownUntil = new Map<string, number>()
@@ -69,13 +138,18 @@ export class RepoWatcher {
       join(r.path, ".git", "refs"),
       r.path,
     ])
+    // 留给 error 处理器判分级用：出事的是这些目标之一，就意味着某个仓库整体失去监听，
+    // 不是可以咽掉的单文件噪音（见 watcherErrorIsNoise）
+    this.watchTargets = targets
     this.watcher = watch(targets, {
       ignoreInitial: true,
       depth: 2,
-      ignored: (p) => p.includes("node_modules"),
+      // this.repos 已按 path 长度倒序，find 拿到的就是最长匹配根——嵌套仓库下归属正确
+      ignored: (p) => shouldIgnorePath(p, this.repos.map((r) => r.path)),
     })
     this.watcher.on("all", (_event, file) => this.handle(file))
     this.watcher.on("error", (err) => {
+      if (watcherErrorIsNoise(err as NodeJS.ErrnoException, this.watchTargets)) return
       console.error(`[repo-radar] 监听器错误：${err instanceof Error ? err.message : String(err)}`)
     })
   }
