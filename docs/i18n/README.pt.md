@@ -43,7 +43,7 @@ Um cartão por repo — cor de saúde, branch, resumo da árvore de trabalho, à
 - **Encontrar** — busque, clique em uma linguagem / `#tag` / lâmpada de atenção para filtrar, ordene e agrupe por pasta ou linguagem; salve qualquer filtro + ordenação + agrupamento como uma visão nomeada. ⌘/Ctrl-K abre um lançador.
 - **Agir em lotes** — selecione repos para fetch / pull (`--ff-only`) / push, ou execute um comando de shell em paralelo sobre eles (com pré-visualização de dry-run e saída por repo). A falha de um repo nunca impede os demais.
 - **Aprofundar em um repo** — o painel de detalhes dá um resumo completo de saúde, trocar / criar / descartar branches, **commit no local** com um diff ao vivo, PR e CI do GitHub sob demanda, commits recentes, stashes, um mapa de calor de 12 semanas e uma limpeza segura de um clique de branches já mesclados.
-- **Manter-se atualizado** — escaneamento automático opcional por monitoramento de arquivos e fetch agendado em segundo plano, ambos desligados por padrão. Uma aba **Stats** (mapa de calor de commits de um ano, mais/menos ativo) e uma aba **Worklog** que copia um intervalo de datas como relatório semanal em Markdown.
+- **Manter-se atualizado** — o escaneamento automático por monitoramento de arquivos vem ligado por padrão (apenas local, sem rede), com um reescaneamento a cada 30 minutos para cobrir eventos perdidos e um indicador de “último escaneamento” na barra; acima do limite de monitoramento (200 repos por padrão, ajustável até sem limite) os favoritos e os de commit recente são monitorados primeiro e o restante vai pelo reescaneamento — o painel de configurações mostra a cobertura real (“monitorando M de N”). O fetch agendado em segundo plano é opcional. Uma aba **Stats** (mapa de calor de commits de um ano, mais/menos ativo) e uma aba **Worklog** que copia um intervalo de datas como relatório semanal em Markdown.
 - **Iniciar e mover repos** — **+ New** sugere o próximo projeto numerado, roda `git init`, escreve um README e o adota no painel; a exportação / importação de manifesto leva sua configuração entre máquinas.
 
 A interface é antd 6 em um tema escuro de cockpit de instrumentos, localizada em 18 idiomas (correspondida automaticamente ao seu navegador na primeira visita, RTL para o árabe).
@@ -63,7 +63,7 @@ Tudo que a interface toca é salvo em `~/.repo-radar/config.json` — você rara
 | `roots` / `excludes` / `manualRepos` | onde escanear (encontra `.git` até 6 níveis de profundidade), o que pular e repos adicionados fora das roots |
 | `health` | `{ staleDays, disabledRules }` — ajuste o limite "stale" ou desative verificações individuais |
 | `open` | modelos de comando para os botões editor / terminal / pasta (`{path}` = o caminho do repo) |
-| `autoWatch` / `autoFetchMinutes` / `notifications` | comportamento em segundo plano — tudo desligado por padrão |
+| `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | comportamento em segundo plano — `autoWatch` ligado, `autoScanMinutes` em 30 e `watchLimit` em 200 por padrão (0 = sem limite), os outros dois desligados |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | organização por repo |
 
 `REPO_RADAR_CONFIG` e `REPO_RADAR_PORT` (7420 por padrão) substituem o caminho de configuração e a porta — defina **ambas** para executar uma segunda instância totalmente independente. O servidor só escuta em `127.0.0.1` e valida o cabeçalho Origin em cada requisição de API e WebSocket.

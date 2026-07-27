@@ -45,7 +45,7 @@ npm start
 - **查找** —— 搜索，点击语言 / `#tag` / 告警灯来筛选，按目录或语言排序和分组；把任意筛选 + 排序 + 分组存成一个命名视图。⌘/Ctrl-K 打开启动器。
 - **批量操作** —— 选中若干仓库来 fetch / pull（`--ff-only`）/ push，或在选中的仓库里并行执行一条 shell 命令（支持 dry-run 预演，并能查看每个仓库的输出）。单个仓库失败绝不会拖住其余的。
 - **深入某个仓库** —— 详情面板给出完整的健康明细、切换 / 新建 / 丢弃分支、带实时 diff 的 **就地提交**、按需拉取的 GitHub PR 与 CI、最近提交、stash、12 周热力图，以及对已合并分支的安全一键清理。
-- **保持最新** —— 可选的文件监听自动扫描和定时后台 fetch，两者默认都关闭。一个 **统计** tab（一年的提交热力图、最活跃/最不活跃）和一个 **工作记录** tab，可把某个日期范围复制成 Markdown 周报。
+- **保持最新** —— 文件监听自动扫描默认开启（纯本地、不走网络），并有 30 分钟的兜底重扫补上监听漏掉的事件，顶栏还会显示「上次扫描」是多久以前；仓库数超过监听上限（默认 200，可调，也可设为无上限）时优先监听收藏和最近提交的，其余靠兜底重扫刷新，设置面板会如实显示「N 个中监听 M 个」。定时后台 fetch 需自行开启。一个 **统计** tab（一年的提交热力图、最活跃/最不活跃）和一个 **工作记录** tab，可把某个日期范围复制成 Markdown 周报。
 - **新建与迁移仓库** —— **＋新建** 会建议下一个编号项目、运行 `git init`、写一个 README 并把它纳入看板；清单导出 / 导入让你的配置在不同机器间迁移。
 
 界面是 antd 6，采用深色仪表舱主题，本地化为 18 种语言（首次访问时自动匹配你的浏览器，阿拉伯语为 RTL）。
@@ -65,7 +65,7 @@ npm start
 | `roots` / `excludes` / `manualRepos` | 扫描哪里（向下 6 层内查找 `.git`）、跳过什么，以及在 roots 之外添加的仓库 |
 | `health` | `{ staleDays, disabledRules }` —— 调整「长期未动」阈值或禁用单项检查 |
 | `open` | 编辑器 / 终端 / 目录 按钮的命令模板（`{path}` = 仓库路径） |
-| `autoWatch` / `autoFetchMinutes` / `notifications` | 后台行为——默认全部关闭 |
+| `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | 后台行为——`autoWatch` 默认开启、`autoScanMinutes` 默认 30 分钟、`watchLimit` 默认 200（0 = 无上限），另两个默认关闭 |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | 按仓库的组织信息 |
 
 `REPO_RADAR_CONFIG` 和 `REPO_RADAR_PORT`（默认 7420）覆盖配置路径和端口——**两个都**设置就能跑第二份完全独立的实例。服务器只绑定 `127.0.0.1`，并对每个 API 和 WebSocket 请求校验 Origin 头。

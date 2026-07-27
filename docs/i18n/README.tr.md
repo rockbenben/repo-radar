@@ -45,7 +45,7 @@ Repo başına bir kart — sağlık rengi, branch, çalışma ağacı dökümü,
 - **Bulun** — arayın, filtrelemek için bir dile / `#tag`'e / dikkat lambasına tıklayın, klasöre veya dile göre sıralayın ve gruplayın; herhangi bir filtre + sıralama + gruplamayı adlandırılmış bir görünüm olarak kaydedin. ⌘/Ctrl-K bir başlatıcı açar.
 - **Toplu iş yapın** — fetch / pull (`--ff-only`) / push için repo seçin ya da hepsinde paralel olarak bir shell komutu çalıştırın (dry-run önizlemesi ve repo başına çıktı ile). Bir reponun başarısız olması diğerlerini asla durdurmaz.
 - **Bir repoya derinlemesine dalın** — detay paneli tam bir sağlık dökümü, branch değiştirme / oluşturma / atma, canlı diff ile **yerinde commit**, talep üzerine GitHub PR ve CI, son commit'ler, stash'ler, 12 haftalık ısı haritası ve halihazırda birleştirilmiş branch'lerin tek tıkla güvenli temizliğini sunar.
-- **Güncel kalın** — isteğe bağlı dosya izlemeli otomatik tarama ve zamanlanmış arka plan fetch, ikisi de varsayılan kapalı. Ayrıca bir **İstatistikler** sekmesi (bir yıllık commit ısı haritası, en çok/en az aktif) ve bir tarih aralığını Markdown biçiminde haftalık rapor olarak kopyalayan bir **Çalışma günlüğü** sekmesi bulunur.
+- **Güncel kalın** — dosya izlemeli otomatik tarama varsayılan olarak açık (yalnızca yerel, ağ kullanmaz); kaçan olayları 30 dakikada bir dönen tam tarama yakalar ve araç çubuğunda «son tarama» görünür; izleme sınırını (varsayılan 200, ayarlanabilir, sınırsız da yapılabilir) aşınca önce favoriler ve son commit atılanlar izlenir, kalanı tam tarama toplar — ayarlar paneli gerçek kapsamı («N repodan M izleniyor») gösterir. Zamanlanmış arka plan fetch ise isteğe bağlı. Ayrıca bir **İstatistikler** sekmesi (bir yıllık commit ısı haritası, en çok/en az aktif) ve bir tarih aralığını Markdown biçiminde haftalık rapor olarak kopyalayan bir **Çalışma günlüğü** sekmesi bulunur.
 - **Repo başlatın ve taşıyın** — **+ New** bir sonraki numaralı projeyi önerir, `git init` çalıştırır, bir README yazar ve panoya alır; manifest dışa/içe aktarma kurulumunuzu makineler arasında taşır.
 
 Arayüz, koyu bir kokpit-enstrüman temasında antd 6'dır ve 18 dile yerelleştirilmiştir (ilk ziyarette tarayıcınıza otomatik eşlenir, Arapça için RTL).
@@ -65,7 +65,7 @@ Arayüzün dokunduğu her şey `~/.repo-radar/config.json` dosyasına kaydedilir
 | `roots` / `excludes` / `manualRepos` | nerede taranacağı (6 derinliğe kadar `.git` bulur), neyin atlanacağı ve köklerin dışında eklenen repolar |
 | `health` | `{ staleDays, disabledRules }` — "eskimiş" eşiğini ayarlayın veya tek tek kontrolleri devre dışı bırakın |
 | `open` | editör / terminal / klasör düğmeleri için komut şablonları (`{path}` = repo yolu) |
-| `autoWatch` / `autoFetchMinutes` / `notifications` | arka plan davranışı — hepsi varsayılan kapalı |
+| `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | arka plan davranışı — varsayılan olarak `autoWatch` açık, `autoScanMinutes` 30 ve `watchLimit` 200 (0 = sınırsız), diğer ikisi kapalı |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | repo başına düzenleme |
 
 `REPO_RADAR_CONFIG` ve `REPO_RADAR_PORT` (varsayılan 7420) yapılandırma yolunu ve portu geçersiz kılar — ikinci ve tamamen bağımsız bir örnek çalıştırmak için **ikisini birden** ayarlayın. Sunucu yalnızca `127.0.0.1`'e bağlanır ve her API ve WebSocket isteğinde Origin başlığını doğrular.

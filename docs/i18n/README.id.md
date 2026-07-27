@@ -43,7 +43,7 @@ Satu kartu per repo — warna kesehatan, branch, rincian working-tree, ahead/beh
 - **Temukan** — cari, klik bahasa / `#tag` / lampu perhatian untuk memfilter, urutkan, dan kelompokkan berdasarkan folder atau bahasa; simpan filter + urutan + pengelompokan mana pun sebagai view bernama. ⌘/Ctrl-K membuka launcher.
 - **Bertindak secara batch** — pilih repo untuk fetch / pull (`--ff-only`) / push, atau jalankan perintah shell secara paralel di seluruhnya (dengan pratinjau dry-run dan output per-repo). Satu repo yang gagal tak akan pernah menghentikan yang lainnya.
 - **Gali sebuah repo** — panel detail memberi rincian kesehatan lengkap, beralih / membuat / membuang branch, **commit di tempat** dengan diff langsung, PR & CI GitHub sesuai permintaan, commit terbaru, stash, heatmap 12 minggu, dan pembersihan sekali klik yang aman untuk branch yang sudah ter-merge.
-- **Selalu terkini** — pemindaian otomatis saat file berubah dan fetch latar terjadwal yang opsional, keduanya nonaktif secara default. Tab **Stats** (heatmap commit setahun, paling/paling tidak aktif) dan tab **Worklog** yang menyalin rentang tanggal sebagai laporan mingguan Markdown.
+- **Selalu terkini** — pemindaian otomatis saat file berubah aktif secara default (lokal saja, tanpa jaringan), dengan pemindaian ulang tiap 30 menit untuk menutup peristiwa yang terlewat dan penanda “terakhir dipindai” di bilah atas; di atas batas pemantauan (bawaan 200, bisa diubah hingga tanpa batas) repo favorit dan yang baru di-commit dipantau lebih dulu, sisanya mengandalkan pemindaian ulang — panel pengaturan menampilkan cakupan sebenarnya ("memantau M dari N"). Fetch latar terjadwal bersifat opsional. Tab **Stats** (heatmap commit setahun, paling/paling tidak aktif) dan tab **Worklog** yang menyalin rentang tanggal sebagai laporan mingguan Markdown.
 - **Mulai & pindahkan repo** — **+ New** menyarankan proyek bernomor berikutnya, menjalankan `git init`, menulis README, dan mengadopsinya ke papan; ekspor / impor manifest membawa setelan Anda antar-mesin.
 
 UI-nya antd 6 dengan tema instrument-cockpit gelap, dilokalkan ke dalam 18 bahasa (otomatis dicocokkan dengan browser Anda pada kunjungan pertama, RTL untuk bahasa Arab).
@@ -63,7 +63,7 @@ Semua yang disentuh UI disimpan ke `~/.repo-radar/config.json` — Anda jarang p
 | `roots` / `excludes` / `manualRepos` | tempat memindai (menemukan `.git` hingga kedalaman 6), apa yang dilewati, dan repo yang ditambahkan di luar roots |
 | `health` | `{ staleDays, disabledRules }` — atur ambang "stale" atau nonaktifkan pemeriksaan tertentu |
 | `open` | template perintah untuk tombol editor / terminal / folder (`{path}` = path repo) |
-| `autoWatch` / `autoFetchMinutes` / `notifications` | perilaku latar belakang — semuanya nonaktif secara default |
+| `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | perilaku latar belakang — default `autoWatch` aktif, `autoScanMinutes` 30 dan `watchLimit` 200 (0 = tanpa batas), dua lainnya nonaktif |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | pengaturan per-repo |
 
 `REPO_RADAR_CONFIG` dan `REPO_RADAR_PORT` (bawaan 7420) mengganti path config dan port — atur **keduanya** untuk menjalankan instance kedua yang sepenuhnya independen. Server hanya mengikat `127.0.0.1` dan memvalidasi header Origin pada setiap permintaan API dan WebSocket.

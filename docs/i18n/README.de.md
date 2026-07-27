@@ -45,7 +45,7 @@ Eine Karte pro Repo — Health-Farbe, Branch, Working-Tree-Aufschlüsselung, ahe
 - **Finden** — suchen, auf eine Sprache / einen `#tag` / eine Warnleuchte klicken, um zu filtern, sortieren und nach Ordner oder Sprache gruppieren; speichere jeden Filter + Sortierung + Gruppierung als benannte Ansicht. ⌘/Strg-K öffnet einen Launcher.
 - **In Batches handeln** — wähle Repos für fetch / pull (`--ff-only`) / push aus oder führe einen Shell-Befehl parallel über sie hinweg aus (mit Dry-Run-Vorschau und Ausgabe pro Repo). Ein fehlschlagendes Repo stoppt nie die übrigen.
 - **In ein Repo eintauchen** — das Detail-Panel liefert eine vollständige Health-Aufschlüsselung, Branches wechseln / erstellen / verwerfen, **an Ort und Stelle committen** mit Live-Diff, GitHub-PR & -CI auf Anfrage, letzte Commits, Stashes, eine 12-Wochen-Heatmap und ein sicheres Ein-Klick-Aufräumen bereits gemergter Branches.
-- **Aktuell bleiben** — optionaler Auto-Scan per Datei-Überwachung und geplanter Hintergrund-Fetch, beide standardmäßig aus. Ein **Stats**-Tab (jahresübergreifende Commit-Heatmap, aktivste/inaktivste) und ein **Worklog**-Tab, der einen Zeitraum als Markdown-Wochenbericht kopiert.
+- **Aktuell bleiben** — Auto-Scan per Datei-Überwachung ist standardmäßig an (nur lokal, kein Netzwerk), abgesichert durch einen Rescan alle 30 Minuten für verpasste Ereignisse und eine „Zuletzt gescannt“-Anzeige in der Leiste; oberhalb des Watch-Limits (standardmäßig 200, einstellbar bis unbegrenzt) werden Favoriten und zuletzt committete Repos zuerst überwacht, der Rest läuft über den Rescan — das Einstellungspanel zeigt die tatsächliche Abdeckung („M von N überwacht“). Der geplante Hintergrund-Fetch ist opt-in. Ein **Stats**-Tab (jahresübergreifende Commit-Heatmap, aktivste/inaktivste) und ein **Worklog**-Tab, der einen Zeitraum als Markdown-Wochenbericht kopiert.
 - **Repos starten & verschieben** — **+ New** schlägt das nächste nummerierte Projekt vor, führt `git init` aus, schreibt eine README und übernimmt es ins Board; Manifest-Export / -Import trägt deine Einrichtung von Rechner zu Rechner.
 
 Die UI ist antd 6 in einem dunklen Instrumenten-Cockpit-Theme, in 18 Sprachen lokalisiert (beim ersten Besuch automatisch an deinen Browser angeglichen, RTL für Arabisch).
@@ -65,7 +65,7 @@ Alles, was die UI berührt, wird in `~/.repo-radar/config.json` gespeichert — 
 | `roots` / `excludes` / `manualRepos` | wo gescannt wird (findet `.git` bis 6 Ebenen tief), was übersprungen wird, und außerhalb der Roots hinzugefügte Repos |
 | `health` | `{ staleDays, disabledRules }` — passe den „stale“-Schwellenwert an oder deaktiviere einzelne Checks |
 | `open` | Befehlsvorlagen für die Buttons Editor / Terminal / Ordner (`{path}` = der Repo-Pfad) |
-| `autoWatch` / `autoFetchMinutes` / `notifications` | Hintergrundverhalten — alles standardmäßig aus |
+| `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | Hintergrundverhalten — `autoWatch` an, `autoScanMinutes` 30 und `watchLimit` 200 als Standard (0 = unbegrenzt), die anderen beiden aus |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | Organisation pro Repo |
 
 `REPO_RADAR_CONFIG` und `REPO_RADAR_PORT` (Standard 7420) überschreiben Konfigurationspfad und Port — setze **beide**, um eine zweite, vollständig unabhängige Instanz zu betreiben. Der Server bindet nur `127.0.0.1` und validiert den Origin-Header bei jeder API- und WebSocket-Anfrage.
