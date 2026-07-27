@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { createBackend } from "../../server/src/backend"
 import { loadConfig } from "../../server/src/config"
 import { FileLog, installConsoleTee, logFilePath } from "../../server/src/logger"
+import { DEFAULT_PORT, PORT, PORT_IS_EXPLICIT } from "../../server/src/port"
 import { cleanupLegacyEntries, getAutostart, setAutostart } from "./autostart"
 import { resolveConfigFile } from "./config-path"
 import { showNotification, summarizeInboxChanges } from "./notify"
@@ -88,17 +89,26 @@ if (process.platform === "darwin" && app.isPackaged) {
 // REPO_RADAR_CONFIG 是「再跑一份互不干扰的实例」这个能力的入口（19 份 README 都如此承诺），
 // 但 Electron 的单实例锁（requestSingleInstanceLock）锁的是 userData 目录，与端口/配置文件无关——
 // 不改 userData 的话，换了端口换了配置文件的第二个进程照样会在锁竞争里直接输掉、退场。
-// 因此显式设置 REPO_RADAR_CONFIG 时，派生一个独立的 userData 目录，让锁域跟着配置走。
+// 因此用**非默认**配置时派生一个独立的 userData 目录，让锁域跟着配置走。
+//
+// 条件是「配置文件是不是那份默认的」，不是「有没有设环境变量」。差别很关键：
+// `REPO_RADAR_CONFIG=<默认路径>` 用的是同一份配置、同一批仓库，却会因为 userData 被挪走而
+// 自成一个锁域，于是两个后端同时跑——两边都往 config.json 写（后写的把前面的设置抹掉）、
+// 都对同一批仓库做 git 写操作（抢 .git/index.lock）。端口曾经是这种情况的最后一道拦截
+// （第二个进程绑不上就死掉），而端口回退把那道拦截也拿掉了，只剩这里。
+//
+// 默认配置继续用 Electron 的默认 userData 目录，不能改：那里存着窗口的 localStorage
+// （保存的视图、活动日志、主题、语言），换目录等于把老用户的数据全部丢掉。
 // 必须在 app.whenReady() 之前调用（Electron 的硬性要求），这里在 requestSingleInstanceLock()
 // 之前设置，天然满足。
-if (process.env.REPO_RADAR_CONFIG) {
+if (!configResolution.isDefault) {
   app.setPath("userData", join(configDir, "electron-userData"))
 }
 
 // 开发时前端由 vite dev server 提供（热更新）；打包后由后端从 asar 里的 web/dist 服务。
 // 不能只判 !app.isPackaged：根 package.json 的 "start" 脚本（npm start）跑的也是未打包的
 // electron，但它不会顺带起 vite——那样会一直去连 5173、连不上白屏（ERR_CONNECTION_REFUSED）。
-// 因此额外要求显式环境变量 REPO_RADAR_DEV=1（由 "dev" 脚本设置），"start" 没设它就老实走 7420。
+// 因此额外要求显式环境变量 REPO_RADAR_DEV=1（由 "dev" 脚本设置），"start" 没设它就老实走后端端口。
 const isDev = !app.isPackaged && process.env.REPO_RADAR_DEV === "1"
 // 不能用 app.getAppPath()：它返回的是 desktop/package.json 所在目录（desktop/），
 // 拼出来的 desktop/web/dist（以及 desktop/scripts/icon-256.png）根本不存在。
@@ -146,7 +156,25 @@ function bootstrap(): void {
     process.platform === "darwin" ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }]) : null,
   )
 
-  function showWindow(): void {
+  // 后端绑定完成的信号。窗口 URL 里烧的是 backend.port，而这个值在 listen 回调里才定下来
+  // （端口回退可能要试好几轮）。second-instance / activate 是在 whenReady 之前就注册的，
+  // 用户在启动过程中再双击一次图标就会在绑定完成前调到 showWindow()，把回退前的端口烧进
+  // 窗口 URL——createWindow 不做重试也不重载，结果是永久白屏 ERR_CONNECTION_REFUSED，
+  // 只能杀进程。因此建窗口前先等这个 promise。
+  let markBackendReady!: () => void
+  let markBackendFailed!: (err: unknown) => void
+  const backendReady = new Promise<void>((res, rej) => {
+    markBackendReady = res
+    markBackendFailed = rej
+  })
+  backendReady.catch(() => {}) // 启动失败已有专门的错误框+退出流程，这里只是避免 unhandled rejection
+
+  async function showWindow(): Promise<void> {
+    try {
+      await backendReady
+    } catch {
+      return // 后端没起来，错误框已经弹过、进程正在退出，不该再建窗口
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.show()
@@ -162,7 +190,7 @@ function bootstrap(): void {
     })
   }
 
-  app.on("second-instance", () => showWindow()) // 再次双击应用 = 把面板叫回来
+  app.on("second-instance", () => void showWindow()) // 再次双击应用 = 把面板叫回来
 
   // shutdown 引用的 quit 在下面才用 const 声明——这里只是把箭头函数存进 extras，
   // 真正求值 quit 是在 /api/shutdown 被调用时（那时 quit 早已初始化），不构成 TDZ 违规
@@ -170,6 +198,15 @@ function bootstrap(): void {
     configFile,
     staticRoot,
     version: appVersion,
+    // 端口绑不上时可否改用别的。两种情况下必须响亮地失败，而不是换个端口装作一切正常：
+    // - 用户显式设了 REPO_RADAR_PORT：那是对外承诺（书签、反向代理上游、脚本里写死的 URL），
+    //   悄悄换掉之后它们全部 ECONNREFUSED，而窗口一切正常，用户没有任何线索
+    // - 开发模式：vite 的代理目标在配置加载时就定死了（web/vite.config.ts），后端换端口
+    //   等于 /api 全部 502、WebSocket 连不上，看板空白且没有任何报错——比起不来还难查
+    allowPortFallback: !PORT_IS_EXPLICIT && !isDev,
+    // vite dev server（5173）只在开发模式下可信。5173 是 vite 的默认端口，发行版里放行它
+    // 等于让用户机器上任何别的前端项目、或一个恶意页面都能驱动本地 API（见 routes.ts）
+    devOrigins: isDev,
     extras: {
       autostart: { get: () => getAutostart(), set: (enabled) => setAutostart(enabled) },
       shutdown: () => void quit(),
@@ -209,7 +246,7 @@ function bootstrap(): void {
     }
     if (!enabled) return
     const content = summarizeInboxChanges(changes)
-    if (content) showNotification(content, appIconPath, showWindow) // 点通知 = 把面板叫回来；通知图标用 256px 大图
+    if (content) showNotification(content, appIconPath, () => void showWindow()) // 点通知 = 把面板叫回来；通知图标用 256px 大图
   })
 
   // 托盘退出、显式 app.quit() 都走 before-quit，收尾路径不能被绕开
@@ -258,7 +295,7 @@ function bootstrap(): void {
   // 不接这个事件的话，配合上面 macOS 上 hideOnClose 为真、window-all-closed 因此不退出，
   // 用户在 macOS 上关窗后点 Dock 图标会毫无反应——而 macOS 的托盘惯例是左键弹菜单（见 tray.ts），
   // 不像 Windows/Linux 那样点一下就能显示面板，Dock 图标就是 macOS 上唯一的等价入口。
-  app.on("activate", () => showWindow())
+  app.on("activate", () => void showWindow())
 
   app
     .whenReady()
@@ -290,23 +327,37 @@ function bootstrap(): void {
 
       try {
         await backend.start()
+        markBackendReady() // 端口定下来了，showWindow() 可以放行
       } catch (err) {
+        markBackendFailed(err)
         const e = err as NodeJS.ErrnoException
-        const msg =
-          e.code === "EADDRINUSE"
-            ? `端口 ${backend.port} 被其它程序占用，无法启动；请退出它后重试。`
-            : `启动失败：${e.message}`
+        const portIssue = e.code === "EADDRINUSE" || e.code === "EACCES"
+        // 关掉回退时（显式端口 / 开发模式）失败的就是那一个端口，得说清楚是哪个、以及为什么
+        // 没有自动换——否则用户会以为应用"随便挑个端口"这件事失灵了
+        const msg = !portIssue
+          ? `启动失败：${e.message}`
+          : PORT_IS_EXPLICIT
+            ? `端口 ${PORT} 无法监听（${e.code}）。这是你通过 REPO_RADAR_PORT 指定的端口，不会自动改用别的——` +
+              `换一个再试，或去掉该变量改用默认端口 ${DEFAULT_PORT}。`
+            : isDev
+              ? `端口 ${PORT} 无法监听（${e.code}）。开发模式下不自动换端口（vite 的代理目标是固定的），` +
+                `请设置 REPO_RADAR_PORT 换一个端口，它会同时作用于后端和 vite。`
+              : `本机所有候选端口都无法监听（${e.code}）：${e.message}\n可能是安全软件/防火墙拦截了本地回环监听。`
+        // 必须先落日志再弹框：对话框里指向的就是这个日志文件，而"启动失败"恰恰是最需要
+        // 日志的场景。原先这条路径只弹框不写日志，用户打开日志只会看到一片与本次失败无关的
+        // 旧内容，等于把唯一的线索指向了空白
+        console.error(`[repo-radar] 后端启动失败（${e.code ?? "no code"}）: ${e.stack ?? e.message}`)
         dialog.showErrorBox("repo-radar", `${msg}\n\n日志：${logFilePath(configDir)}`)
         app.exit(1)
         return
       }
       tray = createTray(trayIconPath, {
-        show: showWindow,
+        show: () => void showWindow(),
         rescan: () => void fetch(`http://127.0.0.1:${backend.port}/api/scan`, { method: "POST" }).catch(() => {}),
         openLogs: () => void shell.openPath(logFilePath(configDir)),
         quit: () => void quit(),
       })
-      if (!startsHidden(process.argv, app.getLoginItemSettings().wasOpenedAsHidden)) showWindow()
+      if (!startsHidden(process.argv, app.getLoginItemSettings().wasOpenedAsHidden)) void showWindow()
     })
     .catch((err) => {
       // backend.start() 失败已经在上面的 try/catch 里弹过框、app.exit(1) 并 return 了，

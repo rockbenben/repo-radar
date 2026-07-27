@@ -196,7 +196,14 @@ export default function App({
   // 本实例信息：版本号显示在设置里，供用户核对「我现在跑的是哪一版」——单实例不再自动替换旧版，
   // 升级要靠「退出 → 运行新版」，这个显示就是用户确认升级是否生效的唯一凭据。
   // canQuit 独立于 autostart：退出按钮只跟退出端点是否存在挂钩
-  const [instance, setInstance] = useState<{ version: string; canQuit: boolean }>({ version: "", canQuit: false })
+  // port：后端实际绑定的端口。默认端口绑不上时会自动换一个，而端口是本页 origin 的一部分——
+  // 显示出来用户才知道自己实际跑在哪（书签/脚本要用），也才解释得了换端口后 localStorage
+  // 里的视图和活动日志为何像是"没了"
+  const [instance, setInstance] = useState<{ version: string; canQuit: boolean; port: number }>({
+    version: "",
+    canQuit: false,
+    port: 0,
+  })
   // 自动化开关的占位值必须与服务端默认值一致：/api/config 拉到之前（以及拉失败时）显示的
   // 就是这几个值，对不上就等于在骗人说后台没在跑。configLoaded 为假时控件一律禁用——
   // 拉失败时我们并不知道服务端的真实状态，禁用比展示一个可能相反的开关诚实
@@ -694,7 +701,7 @@ export default function App({
     fetch("/api/version")
       .then((r) => (r.ok ? r.json() : null))
       .then((v) => {
-        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true })
+        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true, port: Number(v.port) || 0 })
       })
       .catch(() => {})
     // loadConfigStatus 是 useCallback([]) 稳定引用，列进依赖数组不会多触发一次——只是照规则补齐
@@ -1284,7 +1291,12 @@ export default function App({
                   <span className="lb">
                     {t("settings.version")}<span className="hint">{t("settings.versionHint")}</span>
                   </span>
-                  <span className="rr-ver">v{instance.version}</span>
+                  {/* 端口跟在版本号后面，不另起一行、也不新增文案键：数字本身就说明问题，
+                      而 18 份翻译为一个端口号加一条新字符串不值当 */}
+                  <span className="rr-ver">
+                    v{instance.version}
+                    {instance.port > 0 && ` · 127.0.0.1:${instance.port}`}
+                  </span>
                 </div>
               )}
               <a className="rr-settings-gh" href={REPO_URL} target="_blank" rel="noreferrer noopener">

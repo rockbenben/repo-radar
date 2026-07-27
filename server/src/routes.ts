@@ -27,6 +27,8 @@ export interface ApiExtras {
   lastScanAt?: () => string | null // 最近一次全量扫描完成时刻（ISO）；还没扫完过则为 null
   watchCoverage?: () => { watched: number; total: number } // 实际挂上监听的仓库数 / 本该监听的总数
   refreshInbox?: () => Promise<void> // 立即强制重拉各仓库的 GitHub PR/issue/CI（跳过 TTL）
+  boundPort?: () => number // 实际绑定的端口，同源白名单按它算。取函数而非数值：createApi 在 bind 之前就调用了，那时端口还没定
+  devOrigins?: boolean // 放行 vite dev server（5173）。**只能在开发模式下为真**，见 DEV_ORIGINS
   version?: string // 应用版本，由宿主注入（桌面应用用 app.getVersion()）
   shutdown?: () => void // /api/shutdown 的实际退出动作；不注入则端点不存在（仅单文件 exe 模式注入，服务器部署绝不暴露可杀进程的 HTTP 端点）
   autostart?: { get: () => { supported: boolean; enabled: boolean }; set: (enabled: boolean) => { supported: boolean; enabled: boolean } } // 开机自启（仅单文件 exe 模式注入）
@@ -40,18 +42,27 @@ const OPEN_TARGETS = new Set<string>(["editor", "terminal", "explorer"])
 // 只有 createProject 用这个键——不会像上一轮 "__scaffold__" 那样把慢克隆也拖进来一起排队。
 const NEW_PROJECT_LOCK_KEY = "__scaffold-new-project__"
 
-// 自身端口按 PORT 推导，不写死——REPO_RADAR_PORT 换了端口而白名单没跟着换的话，
-// 界面自己发的请求就成了「跨站」，整个 API 当场 403。5173 是 vite dev server（固定端口）
-const ALLOWED_ORIGINS = new Set([
-  `http://localhost:${PORT}`,
-  `http://127.0.0.1:${PORT}`,
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-])
+// 自身端口按**实际绑定的**端口推导，不写死、也不能只按 PORT 推：原端口被占用/被系统保留时
+// backend 会回退到别的端口（见 port.ts 的 portCandidates），白名单没跟着换的话，界面自己发的
+// 请求就成了「跨站」，整个 API 当场 403——表现是「窗口开着、按钮全都点不动」，比起不来更难查。
+/**
+ * vite dev server 的固定端口。**必须由 allowDev 显式开启，绝不能编进发行版**：
+ * 5173 是 vite 的默认端口，用户机器上随便哪个别的前端项目、或者一个恶意页面，都可能正跑在
+ * 那上面。而本服务对 API 的唯一跨站防线就是 Origin 校验（全程不发任何 CORS 头），
+ * 且破坏性端点全是无需预检的简单请求——一个 `fetch('http://127.0.0.1:17420/api/exec', {method:'POST'})`
+ * 就够了，攻击者读不到响应也无所谓，副作用本身就是目的（discard 丢改动、pull/push、拉起编辑器）。
+ */
+const DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
-/** 无 Origin 头（curl、同源导航）放行；有则必须在白名单内（防跨站页面驱动本地 API） */
-export function originAllowed(origin: string | undefined): boolean {
-  return origin === undefined || ALLOWED_ORIGINS.has(origin)
+/**
+ * 无 Origin 头（curl、同源导航）放行；有则必须在白名单内（防跨站页面驱动本地 API）。
+ * port 省略时按 PORT——只有「还没绑定成功」的调用点会走到这个默认值。
+ * allowDev 默认 false：漏传的后果是开发时自己不方便，而不是给发行版开一个洞。
+ */
+export function originAllowed(origin: string | undefined, port: number = PORT, allowDev = false): boolean {
+  if (origin === undefined) return true
+  if (origin === `http://localhost:${port}` || origin === `http://127.0.0.1:${port}`) return true
+  return allowDev && DEV_ORIGINS.includes(origin)
 }
 
 export function createApi(store: RepoStore, configFile: string, extras: ApiExtras = {}): Hono {
@@ -85,8 +96,10 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     }
   }
 
+  const boundPort = extras.boundPort ?? (() => PORT)
+  const devOrigins = extras.devOrigins ?? false
   app.use("/api/*", async (c, next) => {
-    if (!originAllowed(c.req.header("origin"))) return c.json({ error: "forbidden origin" }, 403)
+    if (!originAllowed(c.req.header("origin"), boundPort(), devOrigins)) return c.json({ error: "forbidden origin" }, 403)
     await next()
   })
 
@@ -96,8 +109,16 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   //   version — 显示在设置面板，让用户能核对自己跑的是哪一版（升级后尤其需要）
   //   canQuit — 退出端点是否存在，UI 据此决定显不显示「退出」按钮。必须由 shutdown 是否注入
   //             如实推导，不能借用 autostart.supported：两者是独立能力，搭车会在任一侧改动时静默失效
+  //   port    — 实际绑定的端口。默认端口绑不上时会自动换一个（见 backend.start），而端口是
+  //             窗口 origin 的一部分——不显示出来的话，用户既不知道自己实际跑在哪个端口上
+  //             （书签、脚本要用），也无从解释"保存的视图怎么没了"（换 origin = 换 localStorage）
   app.get("/api/version", (c) =>
-    c.json({ app: "repo-radar", version: extras.version ?? "0.0.0", canQuit: extras.shutdown !== undefined }),
+    c.json({
+      app: "repo-radar",
+      version: extras.version ?? "0.0.0",
+      canQuit: extras.shutdown !== undefined,
+      port: boundPort(),
+    }),
   )
 
   // 优雅退出：新版本启动时用它替换旧实例，UI 的「退出」按钮也走它。只在注入了 shutdown 时注册——

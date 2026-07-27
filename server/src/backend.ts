@@ -9,7 +9,8 @@ import { WsHub } from "./events"
 import { runRepoAction } from "./git"
 import { getGithubDescription, getGithubInbox, ghAvailable, githubRemoteUrl, githubSlug } from "./github"
 import { InboxCache } from "./inbox-cache"
-import { PORT } from "./port"
+import { isPortUnavailable, PORT, portCandidates } from "./port"
+import { forgetRememberedPort, loadRememberedPort, saveRememberedPort } from "./port-state"
 import { drainRepoLocks, pendingRepoOps, withRepoLock } from "./queue"
 import { type ApiExtras, createApi, originAllowed } from "./routes"
 import { createSerialQueue } from "./serial"
@@ -24,7 +25,9 @@ export interface BackendOptions {
   configFile: string
   staticRoot: string // 前端 web/dist 的绝对路径
   version: string
-  port?: number // 仅测试用；正常走 REPO_RADAR_PORT / 默认 7420
+  port?: number // 仅测试用；正常走 REPO_RADAR_PORT / DEFAULT_PORT
+  allowPortFallback?: boolean // 端口绑不上时可否改用别的（默认 true）。显式端口/开发模式下必须关掉，见 portCandidateList
+  devOrigins?: boolean // 是否放行 vite dev server（5173）作为同源。**只能在开发模式下为真**，见 routes.ts 的 DEV_ORIGINS
   extras?: Pick<ApiExtras, "autostart" | "shutdown">
 }
 
@@ -96,7 +99,14 @@ const INBOX_REFRESH_MS = 12 * 60 * 1000
 const DRAIN_TIMEOUT_MS = 10_000
 export function createBackend(options: BackendOptions): Backend {
   const { configFile, staticRoot, version } = options
-  const port = options.port ?? PORT
+  const wantedPort = options.port ?? PORT
+  // 默认允许回退：backend 是库，「什么时候可以换端口」是宿主的策略决定（desktop/src/main.ts
+  // 按「显式端口 / 开发模式」关掉它）。测试里两种都要能构造，所以做成显式选项而不是内部推导
+  const allowPortFallback = options.allowPortFallback ?? true
+  const portStateFile = join(dirname(configFile), "port-state.json")
+  // 实际绑定的端口。原端口绑不上时会回退（见 start()），窗口 URL、托盘的 rescan、同源白名单
+  // 全都得按这个值走，不能各自按 wantedPort 推
+  let boundPort = wantedPort
 
   if (!existsSync(configFile)) {
     saveConfig(configFile, DEFAULT_CONFIG)
@@ -308,6 +318,8 @@ export function createBackend(options: BackendOptions): Backend {
     lastScanAt: () => lastScanAt,
     watchCoverage: () => automation.coverage(),
     refreshInbox,
+    boundPort: () => boundPort,
+    devOrigins: options.devOrigins ?? false,
     version,
     ...(options.extras ?? {}),
   })
@@ -318,7 +330,7 @@ export function createBackend(options: BackendOptions): Backend {
     onClose: (_evt, ws) => hub.remove(ws),
   }))
   app.get("/ws", async (c, next) => {
-    if (!originAllowed(c.req.header("origin"))) return c.text("forbidden", 403)
+    if (!originAllowed(c.req.header("origin"), boundPort, options.devOrigins ?? false)) return c.text("forbidden", 403)
     return wsUpgrade(c, next)
   })
   app.use("/*", diskStatic(staticRoot))
@@ -328,13 +340,15 @@ export function createBackend(options: BackendOptions): Backend {
   let stopped: Promise<void> | null = null
 
   /** 绑定端口。失败走返回值；绑定成功后的运行期 error 只记日志——文件描述符耗尽时
-   *  服务器也会 emit error，绝不能因此把健康实例拆掉 */
-  function bindOnce(): Promise<{ ok: true } | { ok: false; err: NodeJS.ErrnoException }> {
+   *  服务器也会 emit error，绝不能因此把健康实例拆掉。
+   *  端口 0 时实际端口由系统分配，只能从 listen 回调的 AddressInfo 里读 */
+  function bindOnce(p: number): Promise<{ ok: true } | { ok: false; err: NodeJS.ErrnoException }> {
     return new Promise((resolve) => {
       let listening = false
-      const s = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
+      const s = serve({ fetch: app.fetch, port: p, hostname: "127.0.0.1" }, (info) => {
         listening = true
         server = s
+        boundPort = info.port
         resolve({ ok: true })
       })
       s.on("error", (err: NodeJS.ErrnoException) => {
@@ -343,6 +357,25 @@ export function createBackend(options: BackendOptions): Backend {
       })
       injectWebSocket(s)
     })
+  }
+
+  /**
+   * 本次启动要依次尝试的端口。
+   *
+   * 不允许回退时只有一个候选——绑不上就如实失败。这不是保守，是因为「悄悄换个端口」在两种
+   * 场景下会制造出更难查的故障：
+   * - 用户显式设了 REPO_RADAR_PORT：那是对外承诺（书签、反向代理上游、脚本），换掉之后
+   *   它们全部 ECONNREFUSED，而界面一切正常
+   * - 开发模式：vite 的代理目标在配置加载时就定死了，后端换端口 = /api 全部 502、
+   *   WebSocket 连不上，看板空白且没有任何报错
+   * 记住的端口排在最前（见 port-state.ts）：origin 稳定比用上默认端口重要。
+   */
+  function portCandidateList(): number[] {
+    if (!allowPortFallback) return [wantedPort]
+    const ladder = portCandidates(wantedPort)
+    const remembered = loadRememberedPort(portStateFile)
+    if (remembered === null || remembered === wantedPort) return ladder
+    return [...new Set([remembered, ...ladder])]
   }
 
   const shutdown = createShutdown({
@@ -356,19 +389,46 @@ export function createBackend(options: BackendOptions): Backend {
   })
 
   return {
-    port,
+    get port() {
+      return boundPort
+    },
     onInboxChanged(listener) {
       inboxEmitter.subscribe(listener)
     },
     async start() {
-      let bound = await bindOnce()
+      const candidates = portCandidateList()
+      let bound = await bindOnce(candidates[0])
       if (!bound.ok && bound.err.code === "EADDRINUSE") {
         // 上一个实例刚退出时端口可能还在释放中（「退出 → 立刻重开」是常见动作）。
         // 等一拍再抢一次；仍失败才是真的被别的程序占着
         await new Promise((r) => setTimeout(r, 300))
-        bound = await bindOnce()
+        bound = await bindOnce(candidates[0])
+      }
+      // 顺着阶梯换。tried 必须跟着走：日志里报错的端口如果永远是第一个候选，第二跳之后就在
+      // 说谎——「17420 绑不上，改试 19420」会让照着日志去查 excludedportrange 的人永远
+      // 不知道 18420 也被占了，然后手动设成 18420 再失败一次
+      let tried = candidates[0]
+      for (const alt of candidates.slice(1)) {
+        if (bound.ok || !isPortUnavailable(bound.err)) break
+        console.warn(
+          `[repo-radar] 端口 ${tried} 无法绑定（${bound.err.code}），改试 ${alt === 0 ? "系统分配的端口" : alt} / port unavailable, trying next`,
+        )
+        bound = await bindOnce(alt)
+        tried = alt
       }
       if (!bound.ok) throw bound.err
+      if (boundPort !== wantedPort) {
+        // 两种情况都不是 wantedPort，但原因完全不同，日志不能混为一谈：沿用记住的端口时
+        // wantedPort 往往是空着的，写「原 X 不可用」就是在说假话，会把照着日志排查端口占用的人带偏
+        const reason =
+          boundPort === candidates[0]
+            ? `沿用上次记住的端口 / reusing remembered port`
+            : `原 ${wantedPort} 不可用 / ${wantedPort} unavailable`
+        console.log(`[repo-radar] 使用端口 ${boundPort}（${reason}）`)
+        saveRememberedPort(portStateFile, boundPort) // origin 稳定优先，见 port-state.ts
+      } else {
+        forgetRememberedPort(portStateFile) // 用回了原端口，别把一次偶发冲突永久固化
+      }
 
       intervalTimer = setInterval(() => void enrichGithubInbox(), INBOX_REFRESH_MS)
 

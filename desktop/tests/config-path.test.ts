@@ -13,7 +13,7 @@ describe("resolveConfigFile — REPO_RADAR_CONFIG 必须是绝对路径，不再
 
   it("未设置 REPO_RADAR_CONFIG：退回默认路径（~/.repo-radar/config.json）", () => {
     const result = resolveConfigFile(undefined, home)
-    expect(result).toEqual({ ok: true, configFile: join(home, ".repo-radar", "config.json") })
+    expect(result).toEqual({ ok: true, configFile: join(home, ".repo-radar", "config.json"), isDefault: true })
   })
 
   it("设置为绝对路径：原样使用，不做任何 resolve/规范化", () => {
@@ -21,7 +21,7 @@ describe("resolveConfigFile — REPO_RADAR_CONFIG 必须是绝对路径，不再
     // 路径在 Linux/macOS 上 isAbsolute=false，会被判成相对路径而报错（CI 上因此挂）。
     const abs = join(tmpdir(), "repo-radar-config.json")
     const result = resolveConfigFile(abs, home)
-    expect(result).toEqual({ ok: true, configFile: abs })
+    expect(result).toEqual({ ok: true, configFile: abs, isDefault: false })
   })
 
   it("设置为相对路径：报错，不猜、不按 cwd 展开", () => {
@@ -45,11 +45,43 @@ describe("resolveConfigFile — REPO_RADAR_CONFIG 必须是绝对路径，不再
   // 后果是应用启动瞬间弹原生错误框并直接退出——而用户很可能压根没打算设这个变量。
   it("空字符串：视为未设置，退回默认路径，而不是报错（缺陷 3）", () => {
     const result = resolveConfigFile("", home)
-    expect(result).toEqual({ ok: true, configFile: join(home, ".repo-radar", "config.json") })
+    expect(result).toEqual({ ok: true, configFile: join(home, ".repo-radar", "config.json"), isDefault: true })
   })
 
   it("纯空白字符串：同样视为未设置（缺陷 3）", () => {
     const result = resolveConfigFile("   ", home)
-    expect(result).toEqual({ ok: true, configFile: join(home, ".repo-radar", "config.json") })
+    expect(result).toEqual({ ok: true, configFile: join(home, ".repo-radar", "config.json"), isDefault: true })
+  })
+})
+
+// isDefault 决定 main.ts 要不要把 userData 挪走，也就决定了 Electron 单实例锁的锁域。
+// 判定必须看「最终用的是不是那份默认配置」，而不是「有没有设环境变量」：
+// REPO_RADAR_CONFIG=<默认路径> 用的是同一份配置、同一批仓库，如果因为"设了变量"就自成锁域，
+// 两个后端会同时跑——都往 config.json 写（后写的抹掉前面的设置）、都对同一批仓库做 git 写
+// 操作（抢 .git/index.lock）。端口曾是这种情况的最后一道拦截，端口回退把它也拿掉了
+describe("resolveConfigFile — isDefault 决定单实例锁域", () => {
+  const home = tmpdir() // 用当前平台的真实绝对路径，isAbsolute 才成立
+  const defaultFile = join(home, ".repo-radar", "config.json")
+
+  it("显式指向默认路径 → isDefault 为真（与没设变量的进程共享锁域）", () => {
+    const result = resolveConfigFile(defaultFile, home)
+    expect(result).toEqual({ ok: true, configFile: defaultFile, isDefault: true })
+  })
+
+  it("指向别处 → isDefault 为假（自成锁域，这正是多档案能力的用意）", () => {
+    const other = join(home, "rr-profile", "config.json")
+    const result = resolveConfigFile(other, home)
+    if (result.ok) expect(result.isDefault).toBe(false)
+  })
+
+  it("同一路径的不同写法也算默认（含 . 与 .. 段）", () => {
+    const roundabout = join(home, ".repo-radar", "sub", "..", "config.json")
+    const result = resolveConfigFile(roundabout, home)
+    if (result.ok) expect(result.isDefault).toBe(true)
+  })
+
+  it.runIf(process.platform === "win32")("Windows 上大小写不同也算同一份配置", () => {
+    const result = resolveConfigFile(defaultFile.toUpperCase(), home)
+    if (result.ok) expect(result.isDefault).toBe(true)
   })
 })

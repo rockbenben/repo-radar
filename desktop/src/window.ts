@@ -20,9 +20,9 @@ export function isAllowedExternalUrl(url: string): boolean {
 
 /**
  * will-navigate 专用：导航目标是否与站内同源。必须比较解析后的 origin，不能用字符串
- * 前缀比较（曾经的写法 `targetUrl.startsWith(baseUrl)`）——`http://127.0.0.1:7420@evil.example/`
+ * 前缀比较（曾经的写法 `targetUrl.startsWith(baseUrl)`）——`http://127.0.0.1:17420@evil.example/`
  * 这类带 userinfo 的地址会通过前缀比较（`@` 前面只是 userinfo，真正的 host 是
- * evil.example），`http://127.0.0.1:74209/`（端口只是多一位数字）也会通过；而窗口没有
+ * evil.example），`http://127.0.0.1:174209/`（端口只是多一位数字）也会通过；而窗口没有
  * 地址栏、菜单也被去掉了，用户完全看不出已经离开本应用。解析失败的一律判定为非同源
  * （拦下交给系统浏览器），不能因为解析失败就放行。
  */
@@ -135,7 +135,7 @@ export function createWindow(options: WindowOptions): BrowserWindow {
   // 站内 origin：前端所有 `target="_blank"`/`window.open` 都指向外部链接（GitHub 仓库/PR/issue），
   // 不拦截的话 Electron 默认行为是新建一个没有地址栏/前进后退、却与主窗口共用 session 的裸窗口——
   // 既是功能倒退（用户到不了系统浏览器），也是安全边界缺口（该窗口仍能任意导航、加载任意站点）。
-  // baseUrl 用调用方传入的 url 派生，dev（5173）与 prod（7420）都能正确算作「站内」。
+  // baseUrl 用调用方传入的 url 派生，dev（5173）与 prod（17420）都能正确算作「站内」。
   const baseUrl = new URL(url).origin
   // 打开外部链接前统一过一遍协议白名单（见 isAllowedExternalUrl 的注释）——
   // 只放行 http/https，其余记一行日志、直接忽略，不交给 shell.openExternal

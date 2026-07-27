@@ -36,21 +36,21 @@ describe("isAllowedExternalUrl — 是否可以放行给 shell.openExternal（�
 })
 
 // will-navigate 判断"是否离开了站内"要比较解析后的 origin，不能用字符串前缀比较——
-// 那种写法会被 `http://127.0.0.1:7420@evil.example/` 这类带 userinfo 的地址骗过去
+// 那种写法会被 `http://127.0.0.1:17420@evil.example/` 这类带 userinfo 的地址骗过去
 // （@ 前面只是用户信息，真正的 host 是 evil.example）
 describe("isSameOrigin — will-navigate 的同源判定（缺陷 4 覆盖要求之一）", () => {
-  const baseOrigin = "http://127.0.0.1:7420"
+  const baseOrigin = "http://127.0.0.1:17420"
 
   it("完全同源：协议+host+端口都一致", () => {
-    expect(isSameOrigin("http://127.0.0.1:7420/some/path", baseOrigin)).toBe(true)
+    expect(isSameOrigin("http://127.0.0.1:17420/some/path", baseOrigin)).toBe(true)
   })
 
   it("带 userinfo 的地址被判定为非同源，即使前缀看起来像本站", () => {
-    expect(isSameOrigin("http://127.0.0.1:7420@evil.example/login", baseOrigin)).toBe(false)
+    expect(isSameOrigin("http://127.0.0.1:17420@evil.example/login", baseOrigin)).toBe(false)
   })
 
   it("端口不同（哪怕只多一位数字）判定为非同源", () => {
-    expect(isSameOrigin("http://127.0.0.1:74209/", baseOrigin)).toBe(false)
+    expect(isSameOrigin("http://127.0.0.1:174209/", baseOrigin)).toBe(false)
   })
 
   it("host 不同判定为非同源", () => {

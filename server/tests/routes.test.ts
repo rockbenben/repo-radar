@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { afterAll, describe, expect, it, vi } from "vitest"
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type Config } from "../src/config"
+import { DEFAULT_PORT } from "../src/port"
 import { pendingRepoOps } from "../src/queue"
 import { createApi } from "../src/routes"
 import { RepoStore } from "../src/store"
@@ -447,11 +448,28 @@ describe("api", () => {
     const forbidden = await t.app.request("/api/repos", { headers: { origin: "https://evil.example" } })
     expect(forbidden.status).toBe(403)
 
-    const allowed = await t.app.request("/api/repos", { headers: { origin: "http://localhost:5173" } })
+    const allowed = await t.app.request("/api/repos", { headers: { origin: `http://127.0.0.1:${DEFAULT_PORT}` } })
     expect(allowed.status).toBe(200)
 
     const noOrigin = await t.app.request("/api/repos")
     expect(noOrigin.status).toBe(200)
+
+    t.cleanup()
+  })
+
+  // 5173 是 vite 的默认端口，用户机器上任何别的前端项目、或一个恶意页面都可能跑在那上面。
+  // Origin 校验是本服务对 API 的唯一跨站防线（全程不发 CORS 头），而破坏性端点（exec、discard、
+  // pull/push、open）全是无需预检的简单请求——放行 5173 只能是开发模式下的显式选择
+  it("vite dev origin 默认被拒，只有显式开 devOrigins 才放行", async () => {
+    const t = setup()
+    await t.store.refreshAll()
+
+    const blocked = await t.app.request("/api/repos", { headers: { origin: "http://localhost:5173" } })
+    expect(blocked.status).toBe(403)
+
+    const dev = createApi(t.store, t.configFile, { devOrigins: true })
+    const allowed = await dev.request("/api/repos", { headers: { origin: "http://localhost:5173" } })
+    expect(allowed.status).toBe(200)
 
     t.cleanup()
   })
