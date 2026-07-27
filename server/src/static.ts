@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { extname, resolve, sep } from "node:path"
 import type { MiddlewareHandler } from "hono"
 
@@ -49,13 +49,35 @@ export function diskStatic(root: string): MiddlewareHandler {
     // 路径是否等于 base 或以 "base + 分隔符" 开头——对跨盘符、UNC 路径、任意绝对路径注入
     // 都成立，不依赖 relative() 的字符串形状。
     if (file !== base && !file.startsWith(base + sep)) return next()
-    if (!existsSync(file) || !statSync(file).isFile()) return next() // 非静态资源：交给后面的路由，最终落 404
+
+    // 直接读、读不出来就 next()，而不是先 existsSync + statSync 再读。三个理由：
+    // 1. 打包后前端在 asar 里，每次 stat 都要过 Electron 的 asar 垫片，而那个垫片用已废弃的
+    //    fs.Stats 构造器造返回值 —— 每次启动都会往日志里写一条 DEP0180 弃用告警（且被记成 ERR，
+    //    看起来像故障）。少两次 stat，这条噪音就没了
+    // 2. 判存与真正读取之间文件可能消失/被锁（TOCTOU），原写法那一刻会让 readFileSync 抛穿
+    //    中间件变成裸 500；现在任何读不出来的原因都统一落到 next()，最终是 404
+    // 3. 三次文件系统往返变一次
+    // 目录也走这条路：读目录抛 EISDIR，被 catch 接住 → next()，与原先 !isFile() 的结果一致
+    let bytes: Buffer
+    try {
+      bytes = readFileSync(file)
+    } catch (err) {
+      // 「文件不在」「路径是目录」是正常的未命中——API 路由的 404 每次都会走到这里，记日志只会刷屏。
+      // 其余（EACCES 权限、EBUSY 被杀软锁住、EMFILE 句柄耗尽、EIO 坏扇区）是真故障：文件明明该在
+      // 却读不出来，界面表现是白屏，而打包后日志是唯一的诊断面——静默 404 会让"构建产物缺失"和
+      // "文件读不出来"完全无法区分
+      const e = err as NodeJS.ErrnoException
+      if (e.code !== "ENOENT" && e.code !== "EISDIR" && e.code !== "ENOTDIR") {
+        console.error(`[repo-radar] 静态资源读取失败（${e.code ?? "no code"}）/ static asset unreadable: ${file}`)
+      }
+      return next() // 无论哪种原因都交给后面的路由，最终落 404——绝不抛穿中间件变成裸 500
+    }
 
     const type = MIME[extname(file).toLowerCase()] ?? "application/octet-stream"
     // 只有 assets/ 下带内容哈希的构建产物才长缓存；index.html 与 public/ 下原样落地、
     // 文件名不带哈希的资源（favicon.svg、logo.svg、og-image.png 等）一律 no-cache，
     // 否则升级后浏览器仍会用一年前钉住的旧文件
     const cacheControl = HASHED_ASSET.test(rel) ? "public, max-age=31536000, immutable" : "no-cache"
-    return c.body(new Uint8Array(readFileSync(file)), 200, { "content-type": type, "cache-control": cacheControl })
+    return c.body(new Uint8Array(bytes), 200, { "content-type": type, "cache-control": cacheControl })
   }
 }

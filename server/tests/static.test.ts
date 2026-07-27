@@ -103,6 +103,30 @@ describe("diskStatic", () => {
     })
   })
 
+  // root 下确实存在、但不是文件的路径（目录）。读它会抛 EISDIR，绝不能变成裸 500——
+  // 「未命中就 next()」这条前提对任何读不出内容的原因都要成立
+  it("请求目录落到 next()，不是 500", async () => {
+    const app = appWith(fixture())
+    app.all("*", (c) => c.text("fell through", 404))
+    const res = await app.request("/assets")
+    expect(res.status).toBe(404)
+    expect(await res.text()).toBe("fell through")
+  })
+
+  // 存在但读不出来（权限、被独占锁、坏扇区……）：同样只能 next()，不能把异常抛穿中间件。
+  // 用一个「刚被删掉」的路径模拟——判存与真正读取之间任何时刻文件都可能消失（TOCTOU）
+  it("判存之后文件消失也只是 next()，不抛异常", async () => {
+    const root = fixture()
+    const doomed = join(root, "vanishing.txt")
+    writeFileSync(doomed, "bye")
+    const app = appWith(root)
+    app.all("*", (c) => c.text("fell through", 404))
+    rmSync(doomed, { force: true })
+    const res = await app.request("/vanishing.txt")
+    expect(res.status).toBe(404)
+    expect(await res.text()).toBe("fell through")
+  })
+
   // 畸形百分号编码：decodeURIComponent("/%") 会抛 URIError。中间件的设计前提是
   // "未命中就 next()"，畸形请求不该穿出去变成裸 500，应同样落到后面的路由（最终 404）。
   it("畸形百分号编码不抛异常、落到 next()", async () => {
