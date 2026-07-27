@@ -46,7 +46,7 @@ One card per repo — health color, branch, working-tree breakdown, ahead/behind
 - **Find** — search, click a language / `#tag` / attention-lamp to filter, sort, and group by folder or language; save any filter + sort + group as a named view. ⌘/Ctrl-K opens a launcher.
 - **Act in batches** — select repos to fetch / pull (`--ff-only`) / push, or run a shell command in parallel across them (with a dry-run preview and per-repo output). One repo failing never stops the rest.
 - **Dig into a repo** — the detail panel gives a full health breakdown, switch / create / discard branches, **commit in place** with a live diff, GitHub PR & CI on demand, recent commits, stashes, a 12-week heatmap, and a safe one-click cleanup of already-merged branches.
-- **Stay fresh** — file-watch auto-scan is on by default (local only, no network), backed by a 30-minute fallback rescan for events the watcher misses and a "last scanned" readout in the toolbar; past the watch limit (200 repos by default, adjustable up to no limit) favorites and recently committed repos are watched first and the rest ride the rescan, with the settings panel showing the live "watching N of M" coverage. Scheduled background fetch is opt-in. A **Stats** tab (year-long commit heatmap, most/least active) and a **Worklog** tab that copies a date range as a Markdown weekly report.
+- **Stay fresh** — file-watch auto-scan is on by default (local only, no network; `node_modules` and build-output directories like `dist` / `obj` / `target` are skipped), backed by a 30-minute fallback rescan for events the watcher misses and a "last scanned" readout in the toolbar; past the watch limit (200 repos by default, adjustable up to no limit) favorites and recently committed repos are watched first and the rest ride the rescan, with the settings panel showing the live "watching N of M" coverage. Scheduled background fetch is opt-in. A **Stats** tab (year-long commit heatmap, most/least active) and a **Worklog** tab that copies a date range as a Markdown weekly report.
 - **Start & move repos** — **+ New** suggests the next numbered project, runs `git init`, writes a README, and adopts it into the board; manifest export / import carries your setup between machines.
 
 The UI is antd 6 in a dark instrument-cockpit theme, localized into 18 languages (auto-matched to your browser on first visit, RTL for Arabic).
@@ -69,7 +69,13 @@ Everything the UI touches is saved to `~/.repo-radar/config.json` — you rarely
 | `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | background behavior — `autoWatch` on, `autoScanMinutes` 30 and `watchLimit` 200 by default (0 = no limit); the other two off |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | per-repo organization |
 
-`REPO_RADAR_CONFIG` and `REPO_RADAR_PORT` (default 7420) override the config path and port — set **both** to run a second, fully independent instance. The server binds `127.0.0.1` only and validates the Origin header on every API and WebSocket request.
+`REPO_RADAR_CONFIG` and `REPO_RADAR_PORT` (default 17420) override the config path and port — set **both** to run a second, fully independent instance. The server binds `127.0.0.1` only and validates the Origin header on every API and WebSocket request.
+
+The default port sits above the OS dynamic port range on purpose: Windows uses 49152–65535 by default but 1024–15000 once Hyper-V/WSL2 is installed, and the system reserves whole blocks out of the active range — a port inside it fails to bind with `EACCES`, and the blocks move across reboots.
+
+If the **default** port still can't be bound, repo-radar falls back (`+1000`, `+2000`, `+3000`, then an OS-assigned port) rather than refusing to start, remembers the port it landed on and reuses it on later launches, and shows it next to the version in ⚙ Settings. Reusing it matters because the port is part of the page's origin, and the board keeps saved views, the activity log, theme and language in origin-scoped browser storage — letting the port bounce back and forth would make that data appear to vanish and return. Delete `<config dir>/port-state.json` to go back to the default port.
+
+A port you set yourself via `REPO_RADAR_PORT` is never substituted — it's a promise to your bookmarks, reverse-proxy upstreams and scripts, so an unbindable one fails loudly instead. Same in `npm run dev`, where the vite proxy target is fixed at config-load time.
 
 ## Development
 

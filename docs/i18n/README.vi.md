@@ -43,7 +43,7 @@ Mỗi repo một card — màu sức khỏe, nhánh, phân tích cây làm việ
 - **Tìm** — tìm kiếm, nhấp vào một ngôn ngữ / `#tag` / đèn chú ý để lọc, sắp xếp và nhóm theo thư mục hoặc ngôn ngữ; lưu bất kỳ bộ lọc + sắp xếp + nhóm nào thành một view có tên. ⌘/Ctrl-K mở một launcher.
 - **Hành động theo lô** — chọn repo để fetch / pull (`--ff-only`) / push, hoặc chạy song song một lệnh shell trên khắp chúng (với bản xem trước dry-run và output theo từng repo). Một repo lỗi cũng không bao giờ làm gián đoạn những repo còn lại.
 - **Đào sâu vào một repo** — panel chi tiết cung cấp phân tích sức khỏe đầy đủ, chuyển / tạo / hủy nhánh, **commit tại chỗ** với diff trực tiếp, GitHub PR & CI theo yêu cầu, commit gần đây, stash, bản đồ nhiệt 12 tuần, và dọn dẹp an toàn một chạm các nhánh đã được merge.
-- **Luôn cập nhật** — tự động quét khi tệp thay đổi được bật sẵn theo mặc định (chỉ cục bộ, không dùng mạng), kèm một lượt quét lại mỗi 30 phút để bù các sự kiện bị bỏ sót và dòng «quét lần cuối» trên thanh công cụ; vượt quá giới hạn theo dõi (mặc định 200, chỉnh được, có thể bỏ giới hạn) thì ưu tiên theo dõi repo yêu thích và mới commit, số còn lại dựa vào lượt quét lại — bảng cài đặt hiển thị đúng mức phủ («đang theo dõi M/N»). Fetch nền theo lịch là tùy chọn. Tab **Stats** (bản đồ nhiệt commit cả năm, hoạt động nhiều/ít nhất) và tab **Worklog** sao chép một khoảng ngày thành báo cáo tuần Markdown.
+- **Luôn cập nhật** — tự động quét khi tệp thay đổi được bật sẵn theo mặc định (chỉ cục bộ, không dùng mạng; bỏ qua `node_modules` và các thư mục kết quả build như `dist` / `obj` / `target`), kèm một lượt quét lại mỗi 30 phút để bù các sự kiện bị bỏ sót và dòng «quét lần cuối» trên thanh công cụ; vượt quá giới hạn theo dõi (mặc định 200, chỉnh được, có thể bỏ giới hạn) thì ưu tiên theo dõi repo yêu thích và mới commit, số còn lại dựa vào lượt quét lại — bảng cài đặt hiển thị đúng mức phủ («đang theo dõi M/N»). Fetch nền theo lịch là tùy chọn. Tab **Stats** (bản đồ nhiệt commit cả năm, hoạt động nhiều/ít nhất) và tab **Worklog** sao chép một khoảng ngày thành báo cáo tuần Markdown.
 - **Khởi tạo & di chuyển repo** — **+ New** gợi ý dự án được đánh số tiếp theo, chạy `git init`, viết một README, và đưa nó vào board; xuất / nhập manifest mang thiết lập của bạn giữa các máy.
 
 Giao diện là antd 6 với chủ đề buồng lái thiết bị (instrument-cockpit) tối, được bản địa hóa sang 18 ngôn ngữ (tự khớp với trình duyệt của bạn ở lần truy cập đầu tiên, RTL cho tiếng Ả Rập).
@@ -66,7 +66,13 @@ Mọi thứ giao diện chạm tới đều được lưu vào `~/.repo-radar/co
 | `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | hành vi nền — mặc định `autoWatch` bật, `autoScanMinutes` là 30 và `watchLimit` là 200 (0 = không giới hạn), hai mục còn lại tắt |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | sắp xếp theo từng repo |
 
-`REPO_RADAR_CONFIG` và `REPO_RADAR_PORT` (mặc định 7420) ghi đè đường dẫn cấu hình và cổng — đặt **cả hai** để chạy một instance thứ hai hoàn toàn độc lập. Server chỉ bind `127.0.0.1` và xác thực header Origin trên mọi yêu cầu API và WebSocket.
+`REPO_RADAR_CONFIG` và `REPO_RADAR_PORT` (mặc định 17420) ghi đè đường dẫn cấu hình và cổng — đặt **cả hai** để chạy một instance thứ hai hoàn toàn độc lập. Server chỉ bind `127.0.0.1` và xác thực header Origin trên mọi yêu cầu API và WebSocket.
+
+Cổng mặc định được đặt cao hơn dải cổng động của hệ điều hành một cách có chủ đích: Windows mặc định dùng 49152–65535, nhưng thành 1024–15000 ngay khi cài Hyper-V/WSL2, và hệ thống giữ chỗ trọn từng khối trong dải đang hoạt động — cổng nằm trong đó sẽ bind thất bại với `EACCES`, và các khối này còn dịch chuyển sau mỗi lần khởi động lại.
+
+Nếu vẫn không bind được cổng **mặc định**, repo-radar chuyển sang ứng viên kế tiếp (`+1000`, `+2000`, `+3000`, rồi để hệ điều hành cấp) thay vì từ chối khởi động, ghi nhớ cổng đã dùng và tái sử dụng ở những lần chạy sau, đồng thời hiển thị nó cạnh số phiên bản trong ⚙ Cài đặt. Việc ghi nhớ quan trọng vì cổng là một phần origin của trang, còn bảng điều khiển lưu các khung nhìn đã lưu, nhật ký hoạt động, giao diện và ngôn ngữ trong bộ nhớ trình duyệt gắn theo origin — để cổng nhảy qua nhảy lại sẽ khiến dữ liệu đó như biến mất rồi hiện lại. Xóa `<thư mục cấu hình>/port-state.json` để quay về cổng mặc định.
+
+Cổng do bạn tự đặt qua `REPO_RADAR_PORT` không bao giờ bị thay — đó là cam kết với dấu trang, upstream reverse proxy và script của bạn, nên nếu không bind được thì nó báo lỗi rõ ràng. `npm run dev` cũng vậy, vì đích proxy của vite đã cố định từ lúc nạp cấu hình.
 
 ## Phát triển
 
