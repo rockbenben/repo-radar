@@ -4,6 +4,9 @@ export type ServerEvent =
   | { type: "repo:updated"; payload: { repo: RepoStatus } }
   | { type: "batch:progress"; payload: BatchProgress }
   | { type: "scan:progress"; payload: { scanned: number; total: number } }
+  // 全量扫描完成（含兜底定时重扫）。带上整份 repos：定时那一轮没人在等 HTTP 响应，
+  // 只发时刻的话界面会停在旧数据却显示「刚扫过」；而 repo:updated 表达不了「仓库没了」
+  | { type: "scan:done"; payload: { at: string; repos: RepoStatus[] } }
 
 const RECONNECT_MS = 3000
 

@@ -14,10 +14,27 @@ import { resolveEmptyArea, type HasRootsState } from "./lib/emptyState"
 import { applyFilter, type FilterState } from "./lib/filter"
 import { daysSince, isGithubUrl } from "./lib/meta"
 import { mergeRepo } from "./lib/repos"
+import { relativeTime } from "./lib/time"
 import { connectEvents, type ServerEvent } from "./lib/ws"
 import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
 
 const JSON_HEADERS = { "content-type": "application/json" }
+
+/** 顶栏下拉的角色标记：三个 Select 外观相同、值又会变，没有常驻图标就分不清谁是谁。
+ *  漏斗=按分组筛选、双向箭头=排序、栅格=分组方式；currentColor 内联 SVG，随主题走 */
+function SelIcon({ kind }: { kind: "filter" | "sort" | "group" }) {
+  const path =
+    kind === "filter"
+      ? "M2 3h12l-4.5 5.2V13l-3-1.5V8.2L2 3Z" // 漏斗
+      : kind === "sort"
+        ? "M5 3v10M5 13l-2.4-2.6M5 13l2.4-2.6M11 13V3M11 3l-2.4 2.6M11 3l2.4 2.6" // 上下双箭头
+        : "M2.5 2.5h4.6v4.6H2.5zM8.9 2.5h4.6v4.6H8.9zM2.5 8.9h4.6v4.6H2.5zM8.9 8.9h4.6v4.6H8.9z" // 四宫格
+  return (
+    <svg className="rr-sel-ic" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+      <path d={path} />
+    </svg>
+  )
+}
 
 // 是否已配置过扫描来源。挂载时和保存扫描目录后都要算一次，抽出来避免两处判断口径跑偏
 const configHasRoots = (c: { roots?: unknown[]; manualRepos?: unknown[] }) =>
@@ -180,8 +197,18 @@ export default function App({
   // 升级要靠「退出 → 运行新版」，这个显示就是用户确认升级是否生效的唯一凭据。
   // canQuit 独立于 autostart：退出按钮只跟退出端点是否存在挂钩
   const [instance, setInstance] = useState<{ version: string; canQuit: boolean }>({ version: "", canQuit: false })
-  const [autoWatch, setAutoWatch] = useState(false) // 文件监听实时刷新（服务端持久化，默认关）
+  // 自动化开关的占位值必须与服务端默认值一致：/api/config 拉到之前（以及拉失败时）显示的
+  // 就是这几个值，对不上就等于在骗人说后台没在跑。configLoaded 为假时控件一律禁用——
+  // 拉失败时我们并不知道服务端的真实状态，禁用比展示一个可能相反的开关诚实
+  const [autoWatch, setAutoWatch] = useState(true) // 文件监听实时刷新（服务端持久化，默认开）
+  const [autoScanMin, setAutoScanMin] = useState(30) // 兜底全量重扫间隔（分钟，0=关；默认 30）
+  const [configLoaded, setConfigLoaded] = useState(false)
   const [autoFetchMin, setAutoFetchMin] = useState(0) // 定时后台 fetch 间隔（分钟，0=关）
+  const [watchLimit, setWatchLimit] = useState(200) // 同时监听的仓库数上限（0=无上限；默认 200）
+  // 实际挂上监听的仓库数 / 本该监听的总数。截断只写服务端日志的话，常驻托盘的应用
+  // 等于什么都没说——用户没法回答「为什么这个仓库不自动刷新」，所以要在面板上如实显示
+  const [watchCov, setWatchCov] = useState<{ watched: number; total: number }>({ watched: 0, total: 0 })
+  const [lastScanAt, setLastScanAt] = useState<string | null>(null) // 最近一次全量扫描完成时刻（ISO）
   const [notifications, setNotifications] = useState(false) // 「等我的」新增时弹系统通知（服务端持久化，默认关）
   const manifestFileRef = useRef<HTMLInputElement>(null)
   const [bootAnim, setBootAnim] = useState(false) // 初次载入时的开机错峰淡入（仅一次，不在筛选/刷新时重播）
@@ -262,6 +289,26 @@ export default function App({
     setDetailId(id)
   }
 
+  // 扫描时刻 + 监听覆盖数。挂载、WebSocket 重连、以及改动监听设置之后各拉一次：
+  // 断线期间跑过的兜底重扫其 scan:done 我们没收到，覆盖数也只有服务端算得出来
+  const syncScanStatus = useCallback(() => {
+    return fetch("/api/scan")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((s: { lastScanAt: string | null; watch: { watched: number; total: number } } | null) => {
+        if (!s) return
+        if (s.lastScanAt) setLastScanAt(s.lastScanAt)
+        if (s.watch) setWatchCov(s.watch)
+      })
+      .catch(() => {})
+  }, [])
+
+  // 一轮全量扫描的结果落到界面：整份替换（能表达「仓库没了」，mergeRepo 做不到），
+  // 顺手把已经不存在的仓库从选中集里摘掉，免得批量操作打在幽灵 id 上
+  const applyScanResult = useCallback((data: RepoStatus[]) => {
+    setRepos(data)
+    setSelected((s) => new Set([...s].filter((id) => data.some((r) => r.id === id))))
+  }, [])
+
   async function rescan() {
     setScanning(true)
     try {
@@ -269,8 +316,10 @@ export default function App({
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setLoadError(null)
       const data = (await res.json()) as RepoStatus[]
-      setRepos(data)
-      setSelected((s) => new Set([...s].filter((id) => data.some((r) => r.id === id))))
+      applyScanResult(data)
+      // WebSocket 正常时 scan:done 已经把这个值填好了；这里补一次是为了 WS 断着的情况——
+      // 服务端和界面在同一台机器上，客户端的 now 与服务端的完成时刻只差毫秒级
+      setLastScanAt(new Date().toISOString())
     } catch (err) {
       setLoadError(t("msg.loadError", { err: String(err) }))
       addLog(false, t("msg.scanFail", { err: String(err) }))
@@ -304,14 +353,26 @@ export default function App({
           )
         }
       } else if (e.type === "scan:progress") setScanProgress(e.payload.scanned >= e.payload.total ? null : e.payload)
+      else if (e.type === "scan:done") {
+        // 定时兜底重扫没有任何 HTTP 响应可以承载结果——不在这里把仓库列表换掉，看板就会
+        // 停在旧数据（删掉的仓库还在、新克隆的不出现），顶栏却已经写着「上次扫描 刚刚」
+        setLastScanAt(e.payload.at)
+        applyScanResult(e.payload.repos)
+        // 监听覆盖数只有服务端算得出来，且每轮扫描的 applyWatch 都会更新它。挂载时拉到的
+        // 是「启动扫描完成前」的 0/0——不在这里补拉，「250 个中监听 200 个」整个会话都不显示
+        void syncScanStatus()
+      }
     }
     return connectEvents(handler, () => {
       void fetch("/api/repos")
         .then((res) => (res.ok ? res.json() : null))
         .then((data: RepoStatus[] | null) => {
-          if (data) setRepos(data)
+          if (data) applyScanResult(data)
         })
         .catch(() => {})
+      // 断线期间跑过的兜底重扫，其 scan:done 广播我们没收到——重连时补拉一次时刻，
+      // 否则「上次扫描」会一直停在断线前的旧值，比不显示更误导
+      void syncScanStatus()
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -590,7 +651,8 @@ export default function App({
     }
   }
 
-  // 自动化开关状态存服务端 config（autoWatch 文件监听、autoFetchMinutes 定时拉取、notifications 系统通知），均默认关闭。
+  // 自动化开关状态存服务端 config：autoWatch 文件监听默认开启（纯本地、无网络、无打扰），
+  // autoFetchMinutes 定时拉取与 notifications 系统通知默认关闭（走网络 / 会打扰，一律 opt-in）。
   // 抽成具名函数：挂载时调一次，配置错误态里的「重试」按钮也调它——一份逻辑，两处触发
   const loadConfigStatus = useCallback(() => {
     return fetch("/api/config")
@@ -602,11 +664,15 @@ export default function App({
       })
       .then((c) => {
         setAutoWatch(!!c.autoWatch)
+        setAutoScanMin(typeof c.autoScanMinutes === "number" ? c.autoScanMinutes : 0)
+        setWatchLimit(typeof c.watchLimit === "number" ? c.watchLimit : 0)
         setAutoFetchMin(typeof c.autoFetchMinutes === "number" ? c.autoFetchMinutes : 0)
         setNotifications(!!c.notifications)
         setHasRoots(configHasRoots(c))
+        setConfigLoaded(true)
       })
       .catch(() => {
+        setConfigLoaded(false)
         // 请求真的失败了（后端还在跑启动扫描、休眠唤醒后 socket 被重置等）：hasRoots 置为
         // "unknown"，与「还没拉到结果」的 null 严格区分开——unknown 走明确的错误提示 + 重试
         // 入口，绝不能被当成「确知没配置过」去显示首次运行的欢迎文案（缺陷 2）
@@ -675,6 +741,7 @@ export default function App({
     try {
       const r = await fetch("/api/watch", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ enabled: next }) })
       if (!r.ok) throw new Error()
+      void syncScanStatus() // 开/关监听会改变覆盖数，面板上的读数得跟着走
       message.success(next ? t("msg.watchOn") : t("msg.watchOff"))
     } catch {
       setAutoWatch(!next) // 失败回滚
@@ -693,6 +760,32 @@ export default function App({
     } catch {
       setNotifications(!next) // 失败回滚：开关显示成开着却没生效，比直接报错更糟
       message.error(t("msg.saveFail"))
+    }
+  }
+  async function changeWatchLimit(limit: number) {
+    const prev = watchLimit
+    setWatchLimit(limit)
+    try {
+      const r = await fetch("/api/watch-limit", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ limit }) })
+      if (!r.ok) throw new Error()
+      const { watch } = (await r.json()) as { watch: { watched: number; total: number } }
+      setWatchCov(watch) // 服务端算完实际挂了多少，立刻显示出来
+      message.success(limit > 0 ? t("msg.watchLimitOn", { n: limit }) : t("msg.watchLimitOff"))
+    } catch {
+      setWatchLimit(prev) // 失败回滚
+      message.error(t("msg.saveFail"))
+    }
+  }
+  async function changeAutoScan(minutes: number) {
+    const prev = autoScanMin
+    setAutoScanMin(minutes)
+    try {
+      const r = await fetch("/api/auto-scan", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ minutes }) })
+      if (!r.ok) throw new Error()
+      message.success(minutes > 0 ? t("msg.scanEveryOn", { n: minutes }) : t("msg.scanEveryOff"))
+    } catch {
+      setAutoScanMin(prev) // 失败回滚
+      message.error(t("msg.scanEveryFail"))
     }
   }
   async function changeAutoFetch(minutes: number) {
@@ -724,8 +817,11 @@ export default function App({
   const active = useMemo(() => repos.filter((r) => !r.archived), [repos])
 
   const counts = useMemo(() => {
-    const crit = active.filter((r) => r.error !== null || r.health.some((h) => h.severity === "error")).length
-    const warn = active.filter((r) => r.health.some((h) => h.severity === "warn")).length
+    // 按「最坏严重度」互斥分桶：一个仓库既有 error 级又有 warn 级健康项时只算 CRIT。
+    // 两个桶各数各的会把它计两次，clean = fleet - crit - warn 直接变负数挂在顶栏上
+    const isCrit = (r: RepoStatus) => r.error !== null || r.health.some((h) => h.severity === "error")
+    const crit = active.filter(isCrit).length
+    const warn = active.filter((r) => !isCrit(r) && r.health.some((h) => h.severity === "warn")).length
     const attn = Object.fromEntries(ATTENTION.map((a) => [a.key, active.filter(a.test).length])) as Record<AttentionKey, number>
     return { fleet: active.length, crit, warn, clean: active.length - crit - warn, attn, archived: repos.length - active.length }
   }, [active, repos])
@@ -868,18 +964,30 @@ export default function App({
               allowClear
               value={filter.query}
               onChange={(e) => setFilter({ ...filter, query: e.target.value })}
-              placeholder={`🔍 ${t("bar.search")}`}
+              // 放大镜做成 prefix 而不是拼进 placeholder：开始输入后图标仍在（affordance 不消失），
+              // 占位文案保持纯文本。内联 SVG 走 currentColor，与设置面板底部的 GitHub 图标同一做法
+              prefix={
+                <svg className="rr-search-ic" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+                  <circle cx="7" cy="7" r="4.6" />
+                  <path d="M10.4 10.4 L14 14" strokeLinecap="round" />
+                </svg>
+              }
+              placeholder={t("bar.search")}
               style={{ width: 260 }}
               size="small"
             />
-            <Button size="small" type="text" onClick={() => setPaletteOpen(true)} title={t("bar.paletteTip")}>
+            <Button size="small" type="text" className="rr-kbd" onClick={() => setPaletteOpen(true)} title={t("bar.paletteTip")}>
               ⌘K
             </Button>
             <span className="rr-sep" />
+            {/* 三个下拉长得一模一样，且「按分组筛选」和「分组方式」都带「分组」二字——
+                选了值之后（如分组筛选选中某个文件夹名）控件角色彻底消失。prefix 微图标
+                是常驻的角色标记：漏斗=筛选、双向箭头=排序、栅格=分组方式 */}
             <Select
               size="small"
               value={filter.group ?? ""}
               style={{ width: 124 }}
+              prefix={<SelIcon kind="filter" />}
               onChange={(v) => setFilter({ ...filter, group: v || null })}
               options={[{ label: t("bar.allGroups"), value: "" }, ...groups.map((g) => ({ label: g, value: g }))]}
             />
@@ -901,6 +1009,7 @@ export default function App({
               size="small"
               value={filter.sort}
               style={{ width: 124 }}
+              prefix={<SelIcon kind="sort" />}
               onChange={(v) => setFilter({ ...filter, sort: v as FilterState["sort"] })}
               options={[
                 { label: t("sort.opened"), value: "opened" },
@@ -912,6 +1021,7 @@ export default function App({
               size="small"
               value={groupMode}
               style={{ width: 108 }}
+              prefix={<SelIcon kind="group" />}
               onChange={(v) => setGroupMode(v)}
               options={[
                 { label: t("group.folder"), value: "folder" },
@@ -965,6 +1075,21 @@ export default function App({
             <span className="v ok">{counts.clean}</span>
             <span className="k">CLEAN</span>
           </span>
+          {/* 看板数据有多新——没有这个，兜底重扫是否真的在跑就完全看不见。做成第五格仪表
+              而不是按钮旁的游离文本：扫描新鲜度和舰队状态是同一类读数，且仪表格在扫描期间
+              保持稳定（旧实现扫描时文本消失、按钮变宽，整条顶栏跟着抖）。
+              相对时间必须按真实 Date.now() 算：把每分钟的 clockTick 当 now 传进去，窗口被
+              最小化时浏览器会节流那个 interval，而 WebSocket 照收，于是 lastScanAt 可能比
+              快照更新，算出正的差值、渲染成「3 分钟后」。走动靠 clockTick 触发的整体重渲 */}
+          {lastScanAt !== null && (
+            <span
+              className="cell"
+              title={`${t("bar.lastScan", { t: relativeTime(lastScanAt) })} · ${new Date(lastScanAt).toLocaleString(lang, { hour12: false })}`}
+            >
+              <span className="v time">{relativeTime(lastScanAt)}</span>
+              <span className="k">SCAN</span>
+            </span>
+          )}
         </span>
         <Button size="small" loading={scanning} onClick={rescan}>
           {scanning ? (scanProgress ? t("bar.scanProgress", { done: scanProgress.scanned, total: scanProgress.total }) : t("bar.scanning")) : t("bar.rescan")}
@@ -1029,14 +1154,78 @@ export default function App({
                   ]}
                 />
               </div>
-              {/* 自动化：后台会自己跑的行为——扫描、拉取、通知 */}
-              <div className="grp">{t("settings.grpAutomation")}</div>
+              {/* 本地刷新 / 联网与提醒 分成两组：组标题本身承载产品的成本模型——本地、
+                  不走网络的行为默认开；会发请求或打扰人的行为一律 opt-in。混在一个「自动化」
+                  组里时这条界线是隐形的，用户分不清哪个开关有网络代价 */}
+              <div className="grp">{t("settings.grpLocal")}</div>
               <div className="row">
                 <span className="lb">
                   {t("settings.autoScan")}<span className="hint">{t("settings.autoScanHint")}</span>
                 </span>
-                <Switch size="small" checked={autoWatch} onChange={toggleWatch} />
+                <Switch size="small" checked={autoWatch} onChange={toggleWatch} disabled={!configLoaded} />
               </div>
+              {/* 监听上限：真正的约束是文件句柄和 CPU（每个仓库 4 个监听目标），而这在
+                  Linux（调大 inotify.max_user_watches 后能上几千）、Windows、网络盘之间
+                  差一个数量级——没有哪个硬编码值对所有人都对，所以交给用户。
+                  sub 缩进 + 连接线：它是上面开关的子参数，开关关掉整行收起。
+                  hint 是实况读数而不是静态说明：正常时报「正在监听全部 N 个」，截断时换
+                  琥珀色实数——只写服务端日志的话，常驻托盘的应用等于什么都没说，
+                  用户没法回答「为什么这个仓库不自动刷新」。扫描还没跑完（0/0）才退回说明文案 */}
+              {autoWatch && (
+                <div className="row sub">
+                  <span className="lb">
+                    {t("settings.watchLimit")}
+                    <span className={`hint${watchCov.total > watchCov.watched ? " warn" : ""}`}>
+                      {watchCov.total > watchCov.watched
+                        ? t("settings.watchLimitCapped", { watched: watchCov.watched, total: watchCov.total })
+                        : watchCov.total > 0
+                          ? t("settings.watchLive", { n: watchCov.total })
+                          : t("settings.watchLimitHint")}
+                    </span>
+                  </span>
+                  <Select
+                    size="small"
+                    value={watchLimit}
+                    style={{ width: 96 }}
+                    onChange={changeWatchLimit}
+                    disabled={!configLoaded}
+                    options={[
+                      { label: t("watch.unlimited"), value: 0 },
+                      { label: "100", value: 100 },
+                      { label: "200", value: 200 },
+                      { label: "500", value: 500 },
+                      { label: "1000", value: 1000 },
+                    ]}
+                  />
+                </div>
+              )}
+              {/* 兜底重扫独立于上面的开关：文件监听最不可靠的场合（网络盘、WSL、云同步目录、
+                  机器休眠）恰恰就是最需要它的场合，把它挂在 autoWatch 下面反而会一起失效 */}
+              <div className="row">
+                <span className="lb">
+                  {t("settings.scanEvery")}
+                  {/* 自动扫描一关，这个定时器就是看板唯一的自动刷新途径——后果要在
+                      做决定的现场说出来，而不是让用户以后纳闷看板为什么不动了 */}
+                  <span className="hint">{autoWatch ? t("settings.scanEveryHint") : t("settings.scanEveryOnly")}</span>
+                </span>
+                <Select
+                  size="small"
+                  value={autoScanMin}
+                  style={{ width: 96 }}
+                  onChange={changeAutoScan}
+                  disabled={!configLoaded}
+                  options={[
+                    { label: t("fetch.off"), value: 0 },
+                    { label: t("fetch.min", { n: 10 }), value: 10 },
+                    { label: t("fetch.min", { n: 30 }), value: 30 },
+                    { label: t("fetch.min", { n: 60 }), value: 60 },
+                    { label: t("fetch.min", { n: 180 }), value: 180 },
+                  ]}
+                />
+              </div>
+              {/* 从这里开始的开关有网络代价或会打扰人——这正是它们默认关闭的原因，
+                  组标题把这条线画给用户看。齿轮的高亮逻辑与本组一致：本组有开启项才点亮 */}
+              <div className="grp">{t("settings.grpNetwork")}</div>
               <div className="row">
                 <span className="lb">
                   {t("settings.autoFetch")}<span className="hint">{t("settings.autoFetchHint")}</span>
@@ -1046,6 +1235,7 @@ export default function App({
                   value={autoFetchMin}
                   style={{ width: 96 }}
                   onChange={changeAutoFetch}
+                  disabled={!configLoaded}
                   options={[
                     { label: t("fetch.off"), value: 0 },
                     { label: t("fetch.min", { n: 5 }), value: 5 },
@@ -1059,7 +1249,7 @@ export default function App({
                 <span className="lb">
                   {t("settings.notify")}<span className="hint">{t("settings.notifyHint")}</span>
                 </span>
-                <Switch size="small" checked={notifications} onChange={toggleNotifications} />
+                <Switch size="small" checked={notifications} onChange={toggleNotifications} disabled={!configLoaded} />
               </div>
               {/* 系统：扫描来源管理 + 开机自启 + 退出 + 版本——本机/本实例相关的操作放最后 */}
               <div className="grp">{t("settings.grpSystem")}</div>
@@ -1110,8 +1300,10 @@ export default function App({
           <Button
             size="small"
             className="rr-gear"
-            type={autoWatch || autoFetchMin > 0 || notifications ? "primary" : "default"}
-            ghost={autoWatch || autoFetchMin > 0 || notifications}
+            /* 高亮只标「用户自己额外开的后台行为」：自动扫描已是默认开启，算进来会让齿轮
+               永远亮着、信号归零；定时拉取（走网络）和系统通知（会打扰）才需要提示 */
+            type={autoFetchMin > 0 || notifications ? "primary" : "default"}
+            ghost={autoFetchMin > 0 || notifications}
             title={t("settings.tip")}
           >
             ⚙

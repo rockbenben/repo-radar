@@ -211,6 +211,9 @@ export const RepoCard = memo(function RepoCard({
         </div>
       )}
 
+      {/* 弹簧：网格里矮内容的卡片被拉到同排高度时，多余空间吸收在这里——
+          「最近提交 + 底部控制条」因此永远锚成页脚，而不是提交行悬在半空 */}
+      <div className="rr-c-spring" />
       <div className="rr-c-last">
         {repo.error ? (
           <span className="msg" style={{ color: "var(--crit)" }}>
