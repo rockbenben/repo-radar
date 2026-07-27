@@ -1,5 +1,5 @@
 import { type Context, Hono } from "hono"
-import { loadConfig, mergeConfig, saveConfig, validateConfigPatch, type Config } from "./config"
+import { checkMinutes, loadConfig, mergeConfig, saveConfig, validateConfigPatch, type Config } from "./config"
 import { WsHub } from "./events"
 import { ACTION_ARGS, commitRepo, createBranch, createStash, currentGitIdentity, deleteBranches, discardChanges, dropStashes, getRepoDetail, getRepoDiff, listStashes, stashAction, stashDiff, switchBranch, type RepoAction } from "./git"
 import { openTarget } from "./open"
@@ -20,7 +20,12 @@ export interface ApiExtras {
   rescan?: () => Promise<RepoStatus[]>
   rescanFresh?: () => Promise<RepoStatus[]> // 服务端自己改了磁盘（clone/新建）后的重扫：保证扫描在改动之后开始，不共乘进行中的一轮
   setWatch?: (enabled: boolean) => Promise<void> // 开/关文件监听实时刷新（持久化到 config.autoWatch）
+  setAutoScan?: (minutes: number) => Promise<void> // 设置兜底全量重扫间隔（分钟，0=关）
   setAutoFetch?: (minutes: number) => Promise<void> // 设置定时后台 fetch 间隔（分钟，0=关）
+  setWatchLimit?: (limit: number) => Promise<void> // 设置同时监听的仓库数上限（0=无上限）
+  applyConfig?: (next: Config, prev: Config) => Promise<void> // PUT /api/config 落盘后让监听器/定时器跟上（内部按 prev 逐字段 diff，只重装变了的）
+  lastScanAt?: () => string | null // 最近一次全量扫描完成时刻（ISO）；还没扫完过则为 null
+  watchCoverage?: () => { watched: number; total: number } // 实际挂上监听的仓库数 / 本该监听的总数
   refreshInbox?: () => Promise<void> // 立即强制重拉各仓库的 GitHub PR/issue/CI（跳过 TTL）
   version?: string // 应用版本，由宿主注入（桌面应用用 app.getVersion()）
   shutdown?: () => void // /api/shutdown 的实际退出动作；不注入则端点不存在（仅单文件 exe 模式注入，服务器部署绝不暴露可杀进程的 HTTP 端点）
@@ -362,30 +367,76 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     return c.json({ ok: true })
   })
 
-  // 开/关文件监听实时刷新；持久化到 config.autoWatch，默认关闭
-  app.post("/api/watch", async (c) => {
-    let body: { enabled?: unknown }
+  /** 解析 JSON body 并要求它是个普通对象。`null` 是合法 JSON——c.req.json() 不会抛，
+   *  直接 `body.xxx` 就是对 null 取属性，TypeError 会把本该 400 的校验错变成 500 */
+  async function readBodyObject(c: Context): Promise<Record<string, unknown> | null> {
     try {
-      body = await c.req.json()
+      const body: unknown = await c.req.json()
+      return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null
     } catch {
-      return c.json({ error: "invalid JSON body" }, 400)
+      return null
     }
+  }
+
+  // 开/关文件监听实时刷新；持久化到 config.autoWatch，默认开启
+  app.post("/api/watch", async (c) => {
+    const body = await readBodyObject(c)
+    if (body === null) return c.json({ error: "body must be a JSON object" }, 400)
     if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400)
     if (extras.setWatch) await extras.setWatch(body.enabled)
     return c.json({ ok: true, autoWatch: body.enabled })
   })
 
+  // 设置兜底全量重扫间隔（分钟，0=关）；持久化到 config.autoScanMinutes
+  app.post("/api/auto-scan", async (c) => {
+    const body = await readBodyObject(c)
+    if (body === null) return c.json({ error: "body must be a JSON object" }, 400)
+    // 和 PUT /api/config 共用 checkMinutes：同一个字段两个入口，校验口径必须一致。
+    // checkMinutes 把 undefined 当「patch 没带这个字段」放行，但这里 minutes 是必填——
+    // 不先挡 undefined 的话 Math.floor(undefined)=NaN 会一路走到落盘，写成 null。
+    // 报错一律写 minutes（本端点的请求字段），不写配置字段名
+    if (body.minutes === undefined) return c.json({ error: "minutes must be a non-negative number" }, 400)
+    const problem = checkMinutes({ autoScanMinutes: body.minutes }, "autoScanMinutes", "minutes")
+    if (problem !== null) return c.json({ error: problem }, 400)
+    const minutes = body.minutes as number // checkMinutes 已保证是整数，无须 floor
+    if (extras.setAutoScan) await extras.setAutoScan(minutes)
+    return c.json({ ok: true, autoScanMinutes: minutes })
+  })
+
+  // 最近一次全量扫描完成时刻 + 监听覆盖情况。挂载时和 WebSocket 重连后各拉一次即可——
+  // 之后的每一轮扫描都会广播 scan:done，界面不需要轮询这个端点。
+  // watch 让面板能如实显示「250 个中监听 200 个」：截断只写日志的话，常驻托盘的应用
+  // 等于什么都没说，用户没法回答「为什么这个仓库不自动刷新」
+  app.get("/api/scan", (c) =>
+    c.json({
+      lastScanAt: extras.lastScanAt?.() ?? null,
+      watch: extras.watchCoverage?.() ?? { watched: 0, total: 0 },
+    }),
+  )
+
+  // 设置同时监听的仓库数上限（0=无上限）；持久化到 config.watchLimit 并立即重挂监听
+  app.post("/api/watch-limit", async (c) => {
+    const body = await readBodyObject(c)
+    if (body === null) return c.json({ error: "body must be a JSON object" }, 400)
+    // limit 在这个端点是必填：validateConfigPatch 把 undefined 当「patch 没带这个字段」
+    // 放行，不先挡住就会一路落盘成 null，`limit > 0` 恒假 → 静默变成「无上限」。
+    // 和 PUT /api/config 同口径（见 validateConfigPatch 里的 watchLimit 分支），
+    // 但报错写 limit（本端点的请求字段），不写配置字段名
+    if (body.limit === undefined || validateConfigPatch({ watchLimit: body.limit }) !== null)
+      return c.json({ error: "limit must be a non-negative integer" }, 400)
+    const limit = body.limit as number
+    if (extras.setWatchLimit) await extras.setWatchLimit(limit)
+    return c.json({ ok: true, watchLimit: limit, watch: extras.watchCoverage?.() ?? { watched: 0, total: 0 } })
+  })
+
   // 设置定时后台 fetch 间隔（分钟，0=关）；持久化到 config.autoFetchMinutes
   app.post("/api/auto-fetch", async (c) => {
-    let body: { minutes?: unknown }
-    try {
-      body = await c.req.json()
-    } catch {
-      return c.json({ error: "invalid JSON body" }, 400)
-    }
-    if (typeof body.minutes !== "number" || !Number.isFinite(body.minutes) || body.minutes < 0)
-      return c.json({ error: "minutes must be a non-negative number" }, 400)
-    const minutes = Math.floor(body.minutes)
+    const body = await readBodyObject(c)
+    if (body === null) return c.json({ error: "body must be a JSON object" }, 400)
+    if (body.minutes === undefined) return c.json({ error: "minutes must be a non-negative number" }, 400)
+    const problem = checkMinutes({ autoFetchMinutes: body.minutes }, "autoFetchMinutes", "minutes")
+    if (problem !== null) return c.json({ error: problem }, 400)
+    const minutes = body.minutes as number // checkMinutes 已保证是整数，无须 floor
     if (extras.setAutoFetch) await extras.setAutoFetch(minutes)
     return c.json({ ok: true, autoFetchMinutes: minutes })
   })
@@ -527,8 +578,21 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     }
     const problem = validateConfigPatch(body)
     if (problem !== null) return c.json({ error: problem }, 400)
-    const next = mergeConfig(loadConfig(configFile), body)
+    const prev = loadConfig(configFile)
+    const next = mergeConfig(prev, body)
     saveConfig(configFile, next)
+    // 自动化字段有运行期副作用（监听器、两个定时器），光落盘不算改完；applyConfig 内部
+    // 逐字段与 prev 比对，只重装真变了的——存标签/备注或原值 round-trip 都不会动监听器。
+    // 落盘成功后 applyWatch 才抛错（如 chokidar EMFILE）的情况不能整个 500：配置确实
+    // 存上了、定时器也已生效，回 500 会让客户端以为没存上而重试/回滚 UI。以磁盘为准
+    // 返回 200，监听器错误进日志（下轮扫描的 applyWatch 还会重试挂监听）
+    if (extras.applyConfig) {
+      try {
+        await extras.applyConfig(next, prev)
+      } catch (err) {
+        console.error(`[repo-radar] 配置已保存，但重装监听器失败：${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
     return c.json(next)
   })
 

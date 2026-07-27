@@ -166,7 +166,103 @@ describe("api", () => {
 
     expect((await post({ minutes: -1 })).status).toBe(400)
     expect((await post({ minutes: "5" })).status).toBe(400)
+    expect((await post({})).status).toBe(400) // 缺 minutes：旧版内联校验就是 400，不能回退
     expect(calls).toEqual([15]) // 校验失败不应调用 setAutoFetch
+    // 旧版接受任何有限非负值，「两周 fetch 一次」一直是合法的——上限只挡溢出，不挡它
+    expect((await post({ minutes: 20160 })).status).toBe(200)
+    expect(calls).toEqual([15, 20160])
+    t.cleanup()
+  })
+
+  it("POST /api/auto-scan sets the fallback rescan interval and validates the body", async () => {
+    const t = setup()
+    const calls: number[] = []
+    const app = createApi(t.store, t.configFile, { setAutoScan: async (m) => void calls.push(m) })
+    const post = (body: unknown) =>
+      app.request("/api/auto-scan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+
+    const ok = await post({ minutes: 30 })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ ok: true, autoScanMinutes: 30 })
+    expect(calls).toEqual([30])
+
+    expect((await post({ minutes: 0 })).status).toBe(200) // 0 = 关，是合法值
+    expect((await post({ minutes: -1 })).status).toBe(400)
+    expect((await post({ minutes: "30" })).status).toBe(400)
+    // minutes 在这个端点是必填的。checkMinutes 把 undefined 当「patch 没带字段」放行，
+    // 不先挡住的话 NaN 会一路走到落盘、写成 null，功能静默永久关闭
+    expect((await post({})).status).toBe(400)
+    expect((await post({ mins: 30 })).status).toBe(400) // 拼错字段名同样是缺 minutes
+    expect((await post({ minutes: 0.001 })).status).toBe(400) // 小数：会装表成 60ms 死循环
+    // `null` 是合法 JSON：c.req.json() 不抛，直接 body.minutes 就是对 null 取属性 → 500。
+    // 必须是 400 校验错，不是 TypeError
+    const rawBody = (body: string) =>
+      app.request("/api/auto-scan", { method: "POST", headers: { "content-type": "application/json" }, body })
+    expect((await rawBody("null")).status).toBe(400)
+    expect((await rawBody("[1,2]")).status).toBe(400) // 数组同理：不是对象就该 400
+    // 报错必须写 minutes（本端点的请求字段）：写配置字段名的话，照着报错重试的集成方
+    // 会带着 {"autoScanMinutes": 5} 死循环撞 400
+    expect(((await (await post({ minutes: -1 })).json()) as { error: string }).error).toContain("minutes")
+    expect(((await (await post({ minutes: -1 })).json()) as { error: string }).error).not.toContain("autoScanMinutes")
+    // 和 PUT /api/config 同口径：Infinity 和超上限都要挡住，否则 setInterval 溢出成 1ms。
+    // Infinity 必须用原始 JSON 文本喂进来——JSON.stringify(Infinity) 会先变成 null，
+    // 那样走的是「不是数字」那条分支，测不到真正的 Infinity 路径
+    const raw = (body: string) =>
+      app.request("/api/auto-scan", { method: "POST", headers: { "content-type": "application/json" }, body })
+    expect((await raw('{"minutes": 1e999}')).status).toBe(400)
+    expect((await post({ minutes: 43200 })).status).toBe(400)
+    expect(calls).toEqual([30, 0]) // 校验失败不应调用 setAutoScan
+    t.cleanup()
+  })
+
+  it("GET /api/scan reports the last full-scan time and watch coverage", async () => {
+    const t = setup()
+    // 未注入（还没扫完过一轮）：null + 全零覆盖，而不是报错或缺字段
+    expect(await (await t.app.request("/api/scan")).json()).toEqual({
+      lastScanAt: null,
+      watch: { watched: 0, total: 0 },
+    })
+
+    const at = "2026-07-27T03:14:00.000Z"
+    const app = createApi(t.store, t.configFile, {
+      lastScanAt: () => at,
+      watchCoverage: () => ({ watched: 200, total: 250 }),
+    })
+    expect(await (await app.request("/api/scan")).json()).toEqual({
+      lastScanAt: at,
+      watch: { watched: 200, total: 250 },
+    })
+    t.cleanup()
+  })
+
+  // 监听上限硬编码时，超出的仓库为什么不刷新是无法回答的问题——常驻托盘的应用里
+  // 那条 console.log 没人看得到。上限必须可设，且设完要把真实覆盖数报回界面
+  it("POST /api/watch-limit 设置上限并回报覆盖数，校验非负整数", async () => {
+    const t = setup()
+    const calls: number[] = []
+    const app = createApi(t.store, t.configFile, {
+      setWatchLimit: async (n) => void calls.push(n),
+      watchCoverage: () => ({ watched: 100, total: 250 }),
+    })
+    const post = (body: unknown) =>
+      app.request("/api/watch-limit", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+
+    const ok = await post({ limit: 100 })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ ok: true, watchLimit: 100, watch: { watched: 100, total: 250 } })
+    expect((await post({ limit: 0 })).status).toBe(200) // 0 = 无上限，是合法值
+
+    expect((await post({})).status).toBe(400) // 缺 limit：不挡住会落盘成 null → 静默无上限
+    expect((await post({ limit: -1 })).status).toBe(400)
+    expect((await post({ limit: 1.5 })).status).toBe(400)
+    expect((await post({ limit: "100" })).status).toBe(400)
+    // body 为 JSON `null` 不能 500（对 null 取属性的 TypeError）；报错写 limit（请求字段）而非配置字段名
+    const rawBody = (body: string) =>
+      app.request("/api/watch-limit", { method: "POST", headers: { "content-type": "application/json" }, body })
+    expect((await rawBody("null")).status).toBe(400)
+    expect(((await (await post({ limit: -1 })).json()) as { error: string }).error).toContain("limit")
+    expect(((await (await post({ limit: -1 })).json()) as { error: string }).error).not.toContain("watchLimit")
+    expect(calls).toEqual([100, 0]) // 校验失败不应调用 setWatchLimit
     t.cleanup()
   })
 
@@ -182,6 +278,60 @@ describe("api", () => {
     const res = await t.app.request("/api/scan", { method: "POST" })
     expect(res.status).toBe(200)
     expect(await res.json()).toHaveLength(1)
+    t.cleanup()
+  })
+
+  // autoWatch / autoScanMinutes / autoFetchMinutes 有运行期副作用（监听器 + 两个定时器）。
+  // 通用写入口只落盘的话，读回来的值和真正在跑的东西能一直不一致到进程退出——面板显示
+  // 「每 10 分钟」，实际还是启动时那个间隔，且毫无迹象。applyConfig 拿到 next+prev，
+  // 由它逐字段 diff、只重装真变了的——这里验证两份配置传得对
+  it("PUT /api/config 落盘后携带新旧配置调用 applyConfig", async () => {
+    const t = setup()
+    const calls: Array<{ next: number; prev: number }> = []
+    const app = createApi(t.store, t.configFile, {
+      applyConfig: async (next, prev) => void calls.push({ next: next.autoScanMinutes, prev: prev.autoScanMinutes }),
+    })
+    const put = (body: unknown) =>
+      app.request("/api/config", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+
+    expect((await put({ autoScanMinutes: 10 })).status).toBe(200)
+    expect(calls).toEqual([{ next: 10, prev: 30 }]) // 落盘之后拿着新旧两份配置重装
+    expect(loadConfig(t.configFile).autoScanMinutes).toBe(10)
+
+    await put({ notes: { x: "hi" } }) // 无关写入：next 与 prev 相同，diff 后什么都不会重装
+    expect(calls[1]).toEqual({ next: 10, prev: 10 })
+    t.cleanup()
+  })
+
+  // 落盘成功后 applyWatch 才抛错（chokidar EMFILE 等）不能整个 500：配置确实存上了，
+  // 500 会让客户端以为没存上而重试/回滚 UI。以磁盘为准返回 200，错误进日志
+  it("PUT /api/config 在 applyConfig 抛错时仍返回已保存的配置", async () => {
+    const t = setup()
+    const app = createApi(t.store, t.configFile, {
+      applyConfig: async () => {
+        throw new Error("EMFILE")
+      },
+    })
+    const res = await app.request("/api/config", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ autoScanMinutes: 10 }),
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { autoScanMinutes: number }).autoScanMinutes).toBe(10)
+    expect(loadConfig(t.configFile).autoScanMinutes).toBe(10) // 磁盘上确实是新值
+    t.cleanup()
+  })
+
+  it("PUT /api/config 拒绝会让 setInterval 溢出/落盘成 null 的间隔", async () => {
+    const t = setup()
+    const put = (body: string) =>
+      t.app.request("/api/config", { method: "PUT", headers: { "content-type": "application/json" }, body })
+
+    expect((await put('{"autoScanMinutes": 1e999}')).status).toBe(400) // JSON.parse → Infinity
+    expect((await put('{"autoScanMinutes": 43200}')).status).toBe(400) // 30 天，超 32 位毫秒
+    expect((await put('{"autoFetchMinutes": 1e999}')).status).toBe(400)
+    expect(loadConfig(t.configFile).autoScanMinutes).toBe(30) // 一个都没落盘
     t.cleanup()
   })
 

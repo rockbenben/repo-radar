@@ -36,6 +36,9 @@ export function deriveGroup(repoPath: string, roots: string[]): string {
 export class RepoStore {
   private repos = new Map<string, RepoStatus>()
   private inFlight: Promise<RepoStatus[]> | null = null
+  // 全量扫描进行中被 refreshOne 刷新过的仓库（id → 新状态）：收尾合并时以这些为准，
+  // 防止整份快照把更新的状态打回扫描时的旧值
+  private freshened = new Map<string, RepoStatus>()
   // 每个仓库的本地描述（getRepoStatus 得来，未被 GitHub 覆盖前）；GitHub 描述被清空时据此回退，
   // 避免 redecorate 复用已覆盖对象导致旧描述残留
   private baseDesc = new Map<string, string | null>()
@@ -57,6 +60,7 @@ export class RepoStore {
   }
 
   private async doRefreshAll(onProgress?: (scanned: number, total: number) => void): Promise<RepoStatus[]> {
+    this.freshened.clear() // 上一轮若中途抛错可能有残留，本轮只认本轮的
     const cfg = this.getConfig()
     const paths = [...new Set([...scan(cfg.roots, cfg.excludes), ...cfg.manualRepos])]
     let scanned = 0
@@ -73,7 +77,20 @@ export class RepoStore {
       onProgress?.(scanned, paths.length)
       return status
     })
-    this.repos = new Map(statuses.map((s) => [s.id, s]))
+    // 收尾前用「现在」的配置把所有状态重新装饰一遍：扫描期间用户可能改了收藏/标签/
+    // 备注/归档（redecorate 已广播新状态），而上面的 statuses 是用开跑时的 cfg 快照装饰的——
+    // 不重新装饰就整份装进去，会把用户刚打的 ⭐ 打回旧值，且要错到下一轮 redecorate 或
+    // 兜底重扫（默认 30 分钟）才恢复。decorate 只查配置和缓存、不碰 git，全量重跑很便宜
+    const cfgNow = this.getConfig()
+    const next = new Map(statuses.map((s) => [s.id, this.decorate(s, cfgNow)]))
+    // 全量扫描是逐仓库增量读的：仓库 X 扫完之后、整轮收尾之前，用户可能已经在 X 里
+    // commit/push，refreshOne（文件监听触发）拿到的才是新状态。这里若直接用本轮快照
+    // 整份覆盖，X 会被打回扫描时的旧状态，且 watcher 正处冷却期、没有补救事件——
+    // 看板凭空「回退」，错误状态能停到下一轮兜底重扫。凡是扫描期间被 refreshOne
+    // 刷过的仓库，一律以 refreshOne 的结果为准（仓库已被本轮移除的除外）
+    for (const [id, s] of this.freshened) if (next.has(id)) next.set(id, s)
+    this.freshened.clear()
+    this.repos = next
     // 剪掉本轮扫描已不存在的仓库，避免 baseDesc 随仓库增删/根目录变更无界增长
     for (const id of this.baseDesc.keys()) if (!this.repos.has(id)) this.baseDesc.delete(id)
     return this.list()
@@ -93,6 +110,7 @@ export class RepoStore {
     }
     if (!this.repos.has(id)) return undefined // 全量扫描已移除该仓库，勿复活
     this.repos.set(id, next)
+    if (this.inFlight) this.freshened.set(id, next) // 全量扫描进行中：记下来，收尾合并时以这份为准
     return next
   }
 

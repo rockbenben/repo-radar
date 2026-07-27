@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server"
 import { createNodeWebSocket } from "@hono/node-ws"
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { createAutomation } from "./automation"
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config"
 import { DescCache } from "./desc-cache"
 import { WsHub } from "./events"
@@ -11,6 +12,7 @@ import { InboxCache } from "./inbox-cache"
 import { PORT } from "./port"
 import { drainRepoLocks, pendingRepoOps, withRepoLock } from "./queue"
 import { type ApiExtras, createApi, originAllowed } from "./routes"
+import { createSerialQueue } from "./serial"
 import { createShutdown } from "./shutdown"
 import { diskStatic } from "./static"
 import { evictRepoStats } from "./stats"
@@ -92,7 +94,6 @@ export function createInboxEmitter(): InboxEmitter {
 
 const INBOX_REFRESH_MS = 12 * 60 * 1000
 const DRAIN_TIMEOUT_MS = 10_000
-
 export function createBackend(options: BackendOptions): Backend {
   const { configFile, staticRoot, version } = options
   const port = options.port ?? PORT
@@ -133,13 +134,10 @@ export function createBackend(options: BackendOptions): Backend {
   // promise 链 + 共乘：调用时若已有「排队未开跑」的一轮就共乘它（force 标记在开跑时才读，先到的设置都算数），
   // 否则在链尾排新一轮——↻ 手动刷新即便赶上上一轮正在收尾也一定跑到强制轮、等到它真结束
   // （单飞 + pending 标记有收尾关窗期会假成功；不共乘的话 gh 未登录时每个触发都排完整一轮，积压无上界）。
-  let inboxChain: Promise<void> = Promise.resolve()
-  let inboxQueued: Promise<void> | null = null // 已排队、尚未开跑的那一轮；开跑即清
+  const inboxQueue = createSerialQueue<void>()
   let inboxForce = false // 手动刷新：下一轮忽略 TTL，强制重拉全部 GitHub 仓库
   function enrichGithubInbox(): Promise<void> {
-    if (inboxQueued) return inboxQueued
-    const run = inboxChain.then(async () => {
-      inboxQueued = null // 本轮开跑：之后的触发需另排一轮（本轮的目标集已定）
+    return inboxQueue.share(async () => {
       const force = inboxForce
       inboxForce = false
       const targets = githubTargets((id, url) => force || inboxCache.isStale(id, url))
@@ -169,18 +167,12 @@ export function createBackend(options: BackendOptions): Backend {
       })
       inboxEmitter.emit(changes)
     })
-    inboxQueued = run
-    inboxChain = run.catch(() => {}) // 链自身吞错，避免一轮异常把后续所有轮永久卡死
-    return run
   }
 
-  // 后台补全 GitHub 描述：同上走 promise 链 + 共乘；缓存 TTL 7 天，通常一轮即 no-op
-  let descChain: Promise<void> = Promise.resolve()
-  let descQueued: Promise<void> | null = null
+  // 后台补全 GitHub 描述：同上走串行队列 + 共乘；缓存 TTL 7 天，通常一轮即 no-op
+  const descQueue = createSerialQueue<void>()
   function enrichDescriptions(): Promise<void> {
-    if (descQueued) return descQueued
-    const run = descChain.then(async () => {
-      descQueued = null
+    return descQueue.share(async () => {
       const targets = githubTargets((id, url) => descCache.isStale(id, url))
       if (targets.length === 0) return // 全部命中缓存：连 gh --version 都不必 spawn
       if (!(await ghAvailable())) return
@@ -196,11 +188,9 @@ export function createBackend(options: BackendOptions): Backend {
         }
       })
     })
-    descQueued = run
-    descChain = run.catch(() => {})
-    return run
   }
 
+  let lastScanAt: string | null = null // 最近一次全量扫描完成时刻（ISO）；启动扫描跑完才有值
   const watcher = new RepoWatcher((id) => {
     evictRepoStats(id) // 仓库有变化，作废其热力图缓存，避免统计落后于实时状态
     void store
@@ -213,26 +203,38 @@ export function createBackend(options: BackendOptions): Backend {
       })
   })
 
-  // 按当前 config.autoWatch 决定是否开启文件监听（默认关闭；扫描本身始终执行以填充看板）
-  async function applyWatch(enabled: boolean, repos?: RepoStatus[]): Promise<void> {
-    if (enabled) {
-      // 不监听「已排除」的仓库——它们从看板/统计/后台处理里都收起
-      const list = (repos ?? store.list()).filter((r) => !r.archived).map((r) => ({ id: r.id, path: r.path }))
-      await watcher.watch(list)
-    } else {
-      await watcher.close()
-    }
-  }
+  // 后台自动化（监听 + 两个定时器）统一由 automation 装表；rescan/fetchAll 以回调传入，
+  // 让它不必知道扫描链和 hub 的存在
+  const automation = createAutomation({
+    configFile,
+    watcher,
+    listRepos: () => store.list(),
+    rescan: () => rescanAndWatch(),
+    fetchAll: () => autoFetchAll(),
+  })
 
   async function doRescanAndWatch(): Promise<RepoStatus[]> {
     const repos = await store.refreshAll((scanned, total) => hub.broadcast("scan:progress", { scanned, total }))
-    await applyWatch(loadConfig(configFile).autoWatch, repos)
+    await automation.applyWatch(loadConfig(configFile).autoWatch, repos)
     const ids = new Set(repos.map((r) => r.id)) // 剪掉已不存在仓库的缓存条目，避免落盘缓存无界增长
     descCache.prune(ids)
     inboxCache.prune(ids)
+    // 扫描完成时刻：界面据此显示「上次扫描 …」。只在全量扫描后更新——文件监听的单仓库
+    // refreshOne 不算「扫描」，把它算进来会让这个时间永远显示「刚刚」，等于没有信息量。
+    // 放在 applyWatch 之后：那一步抛错时整轮扫描算失败（POST /api/scan 返回 500，界面弹
+    // 红条），此时绝不能已经广播过「扫描完成」，让顶栏同时显示「上次扫描 刚刚」
+    lastScanAt = new Date().toISOString()
+    // 带上完整仓库列表：定时兜底重扫没有任何人在等 HTTP 响应，只发时刻的话服务端 store
+    // 更新了、界面却还停在旧数据——新增/删除的仓库根本不会出现或消失，而顶栏偏偏在说
+    // 「刚扫过」。repo:updated 只能表达「某个仓库变了」，表达不了「这个仓库没了」。
+    // 列表必须现取而不是用上面 refreshAll 返回的那份：applyWatch 重建几百个监听要花
+    // 好几秒，这窗口里 refreshOne 广播过的新状态若被扫描前的旧快照整份盖回去，看板会
+    // 凭空回退且没有补救事件（watcher 正处冷却期）
+    const current = store.list()
+    hub.broadcast("scan:done", { at: lastScanAt, repos: current })
     void enrichDescriptions() // 后台补全 GitHub 描述，不阻塞扫描返回
     void enrichGithubInbox() // 后台补全 GitHub「等我的」（PR/issue/CI）
-    return repos
+    return current
   }
 
   // 重扫链 + 按需共乘：进行中的一轮在开跑时就定死了扫描目标（roots/excludes/manualRepos 快照）——
@@ -247,16 +249,14 @@ export function createBackend(options: BackendOptions): Backend {
       return "config-unreadable" // 配置损坏：快照恒等 → 触发都共乘；真正的报错由扫描链的 catch 记日志
     }
   }
-  let rescanChain: Promise<unknown> = Promise.resolve()
-  let rescanQueued: Promise<RepoStatus[]> | null = null
+  const rescanQueue = createSerialQueue<RepoStatus[]>()
   let rescanRunning: { promise: Promise<RepoStatus[]>; targets: string } | null = null
   // force：磁盘刚被服务端自己改过（clone/新建项目）——进行中的一轮可能在写盘前就扫过了目标父目录，
   // 共乘它会漏掉新仓库，必须排新一轮；已排队未开跑的一轮仍可共乘（它开跑时读到的磁盘状态是新的）
   function rescanAndWatch(force = false): Promise<RepoStatus[]> {
-    if (rescanQueued) return rescanQueued
+    if (rescanQueue.queued) return rescanQueue.queued
     if (!force && rescanRunning && scanTargets() === rescanRunning.targets) return rescanRunning.promise
-    const run = rescanChain.then(async () => {
-      rescanQueued = null
+    return rescanQueue.share(async () => {
       const round = { promise: doRescanAndWatch(), targets: scanTargets() }
       rescanRunning = round
       try {
@@ -265,16 +265,6 @@ export function createBackend(options: BackendOptions): Backend {
         if (rescanRunning === round) rescanRunning = null
       }
     })
-    rescanQueued = run
-    rescanChain = run.catch(() => {}) // 链自身吞错，避免一轮失败把后续所有轮永久卡死
-    return run
-  }
-
-  async function setWatch(enabled: boolean): Promise<void> {
-    const cfg = loadConfig(configFile)
-    cfg.autoWatch = enabled
-    saveConfig(configFile, cfg)
-    await applyWatch(enabled)
   }
 
   // 定时后台 fetch：安静地为有远程的仓库 fetch，只广播 repo:updated（不占用批量进度条）
@@ -300,21 +290,6 @@ export function createBackend(options: BackendOptions): Backend {
     }
   }
 
-  let fetchTimer: ReturnType<typeof setInterval> | null = null
-  function applyAutoFetch(minutes: number): void {
-    if (fetchTimer) {
-      clearInterval(fetchTimer)
-      fetchTimer = null
-    }
-    if (minutes > 0) fetchTimer = setInterval(() => void autoFetchAll(), minutes * 60_000)
-  }
-  async function setAutoFetch(minutes: number): Promise<void> {
-    const cfg = loadConfig(configFile)
-    cfg.autoFetchMinutes = minutes
-    saveConfig(configFile, cfg)
-    applyAutoFetch(minutes)
-  }
-
   // 手动刷新 GitHub「等我的」：强制标记后跑一轮（跳过 TTL），跑完再返回
   const refreshInbox = async (): Promise<void> => {
     inboxForce = true
@@ -325,8 +300,13 @@ export function createBackend(options: BackendOptions): Backend {
     hub,
     rescan: () => rescanAndWatch(),
     rescanFresh: () => rescanAndWatch(true),
-    setWatch,
-    setAutoFetch,
+    setWatch: automation.setWatch,
+    setAutoScan: automation.setAutoScan,
+    setAutoFetch: automation.setAutoFetch,
+    setWatchLimit: automation.setWatchLimit,
+    applyConfig: automation.applyConfig,
+    lastScanAt: () => lastScanAt,
+    watchCoverage: () => automation.coverage(),
     refreshInbox,
     version,
     ...(options.extras ?? {}),
@@ -400,7 +380,7 @@ export function createBackend(options: BackendOptions): Backend {
       } catch (err) {
         console.error(`[repo-radar] 配置读取失败，本次按默认设置运行: ${err instanceof Error ? err.message : String(err)}`)
       }
-      applyAutoFetch(cfg.autoFetchMinutes)
+      automation.start(cfg)
 
       // 不做遗留 clone 临时目录的启动清扫——见 scaffold.ts 顶部 CLONE_TMP_PREFIX 注释：
       // 这类残骸点号开头、scanner 本就忽略、界面上看不见，出现条件也苛刻，不值得为它
@@ -414,7 +394,7 @@ export function createBackend(options: BackendOptions): Backend {
       // 幂等：托盘退出、窗口关闭、系统关机可能同时到达
       return (stopped ??= (async () => {
         if (intervalTimer) clearInterval(intervalTimer)
-        applyAutoFetch(0)
+        automation.stop()
         inboxEmitter.clear() // 之前只增不减：同一进程反复 start/stop 会让订阅者无界增长，退出后也不该再收晚到的回调
         await shutdown("backend.stop")
       })())
