@@ -128,7 +128,9 @@ export function createAutomation(deps: AutomationDeps): Automation {
             : `。兜底重扫当前是关的：其余仓库不会自动刷新，请开启兜底重扫或调高监听上限 / watching ${chosen.length} of ${all.length} repos; periodic rescan is OFF, the rest will NOT refresh automatically`),
       )
     }
-    await watcher.watch(chosen.map((r) => ({ id: r.id, path: r.path })))
+    // roots 暂时传空：这一步只负责「监听哪些仓库」，把 scan root 交给监听器（每个 root 一个
+    // 递归句柄）与「重扫只更新映射表」是下一步的事，两件事分开改才好一步步验
+    await watcher.setRoots([], chosen.map((r) => ({ id: r.id, path: r.path })))
   }
 
   return {

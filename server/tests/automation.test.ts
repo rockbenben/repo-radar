@@ -31,12 +31,12 @@ const repo = (id: string, opts: { favorite?: boolean; date?: string; archived?: 
     lastCommit: opts.date ? { date: opts.date } : null,
   }) as unknown as RepoStatus
 
-/** 记录 watch/close 调用的假 watcher */
+/** 记录 setRoots/close 调用的假 watcher */
 function fakeWatcher() {
   const watched: string[][] = []
   let closes = 0
   const w = {
-    watch: async (list: { id: string; path: string }[]) => void watched.push(list.map((r) => r.id)),
+    setRoots: async (_roots: string[], list: { id: string; path: string }[]) => void watched.push(list.map((r) => r.id)),
     close: async () => void closes++,
   }
   return { watcher: w as unknown as RepoWatcher, watched, closes: () => closes }
@@ -165,7 +165,7 @@ describe("setX 落盘并立即生效", () => {
     const file = configFile()
     const logs: string[] = []
     const failing = {
-      watch: async () => {
+      setRoots: async () => {
         throw new Error("EMFILE")
       },
       close: async () => {

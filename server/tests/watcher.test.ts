@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { afterAll, describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it, vi } from "vitest"
+import { PerRepoStrategy, type StrategyHandlers, type WatchStrategy } from "../src/watch-strategy"
 import { RepoWatcher, shouldIgnorePath, watcherErrorIsNoise } from "../src/watcher"
 import { cleanupFixtures, git, makeRepo } from "./fixtures"
 
@@ -21,8 +22,8 @@ describe("RepoWatcher", () => {
     const repoA = makeRepo()
     const repoB = makeRepo()
     const fired: string[] = []
-    const watcher = new RepoWatcher((id) => fired.push(id), 200, 2000)
-    await watcher.watch([
+    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 200, 2000, new PerRepoStrategy())
+    await watcher.setRoots([], [
       { id: "A", path: repoA },
       { id: "B", path: repoB },
     ])
@@ -37,8 +38,8 @@ describe("RepoWatcher", () => {
   it("fires for git ref changes (commit)", async () => {
     const repo = makeRepo()
     const fired: string[] = []
-    const watcher = new RepoWatcher((id) => fired.push(id), 200, 2000)
-    await watcher.watch([{ id: "R", path: repo }])
+    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 200, 2000, new PerRepoStrategy())
+    await watcher.setRoots([], [{ id: "R", path: repo }])
     await new Promise((r) => setTimeout(r, 300))
     writeFileSync(join(repo, "c.txt"), "x")
     git(repo, "add", "-A")
@@ -51,8 +52,8 @@ describe("RepoWatcher", () => {
     const repo = makeRepo()
     const fired: string[] = []
     // 防抖 100ms，冷却 1200ms —— 快速可测
-    const watcher = new RepoWatcher((id) => fired.push(id), 100, 1200)
-    await watcher.watch([{ id: "R", path: repo }])
+    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 100, 1200, new PerRepoStrategy())
+    await watcher.setRoots([], [{ id: "R", path: repo }])
     await new Promise((r) => setTimeout(r, 300))
     writeFileSync(join(repo, "first.txt"), "1")
     await waitFor(() => fired.length === 1) // 第一次正常触发
@@ -65,15 +66,15 @@ describe("RepoWatcher", () => {
     await watcher.close()
   })
 
-  // 兜底重扫每 30 分钟就会 applyWatch 一次，而 applyWatch 走的就是 watch()。若 watch() 像
-  // 以前那样先整轮 close()，那些「已经收下、还没触发」的变更会连同定时器一起没掉——
-  // 等于按重扫的节奏周期性吞事件，直接违背本类「任何真实变更都不会被丢弃」的承诺
+  // setRoots 会先停掉旧监听再建新的。若它像以前那样连定时器一起整轮 close()，那些
+  // 「已经收下、还没触发」的变更会连同定时器一起没掉——配置一改就吞一批事件，
+  // 直接违背本类「任何真实变更都不会被丢弃」的承诺
   it("重建监听（同一批仓库）不丢弃已经收下、还没触发的变更", async () => {
     const repo = makeRepo()
     const fired: string[] = []
-    const watcher = new RepoWatcher((id) => fired.push(id), 100, 1500)
+    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 100, 1500, new PerRepoStrategy())
     const list = [{ id: "R", path: repo }]
-    await watcher.watch(list)
+    await watcher.setRoots([], list)
     await new Promise((r) => setTimeout(r, 300))
     writeFileSync(join(repo, "first.txt"), "1")
     await waitFor(() => fired.length === 1) // 触发一次，进入冷却
@@ -81,7 +82,7 @@ describe("RepoWatcher", () => {
     await new Promise((r) => setTimeout(r, 200))
     expect(fired.length).toBe(1) // 还没补触发
 
-    await watcher.watch(list) // 兜底重扫在这一刻重建监听
+    await watcher.setRoots([], list) // 兜底重扫在这一刻重建监听
     await waitFor(() => fired.length === 2, 4000) // 补票定时器活下来了，变更没丢
     await watcher.close()
   })
@@ -90,8 +91,8 @@ describe("RepoWatcher", () => {
     const repoA = makeRepo()
     const repoB = makeRepo()
     const fired: string[] = []
-    const watcher = new RepoWatcher((id) => fired.push(id), 100, 1500)
-    await watcher.watch([
+    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 100, 1500, new PerRepoStrategy())
+    await watcher.setRoots([], [
       { id: "A", path: repoA },
       { id: "B", path: repoB },
     ])
@@ -101,22 +102,22 @@ describe("RepoWatcher", () => {
     writeFileSync(join(repoA, "second.txt"), "2") // A 挂上补票定时器
     await new Promise((r) => setTimeout(r, 200))
 
-    await watcher.watch([{ id: "B", path: repoB }]) // A 被删除/排除，不再监听
+    await watcher.setRoots([], [{ id: "B", path: repoB }]) // A 被删除/排除，不再监听
     await new Promise((r) => setTimeout(r, 2200)) // 超过冷却窗口
     expect(fired).toEqual(["A"]) // A 的补票没有触发——它已经不在监听范围内了
     await watcher.close()
   })
 
-  // watch()/close() 内部有 await 点：不串行化的话，定时重扫的 watch() 与 PUT /api/config
-  // 触发的重装交错时，后者会把前者刚创建的 chokidar 实例引用置 null 而不关闭——孤儿实例
-  // 永远在发事件（关了自动扫描看板还在刷新），句柄攒到 EMFILE
-  it("并发的 watch() 与 close() 串行执行，不留下孤儿监听实例", async () => {
+  // setRoots()/close() 内部有 await 点：不串行化的话，两次重装交错时后者会把前者刚创建的
+  // 监听实例引用置 null 而不关闭——孤儿实例永远在发事件（关了自动扫描看板还在刷新），
+  // 句柄攒到 EMFILE
+  it("并发的 setRoots() 与 close() 串行执行，不留下孤儿监听实例", async () => {
     const repo = makeRepo()
     const fired: string[] = []
-    const watcher = new RepoWatcher((id) => fired.push(id), 100, 2000)
-    // 同时发起两个 watch 和一个 close，全都不 await —— close 排在最后，赢家必须是它
-    const p1 = watcher.watch([{ id: "R", path: repo }])
-    const p2 = watcher.watch([{ id: "R", path: repo }])
+    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 100, 2000, new PerRepoStrategy())
+    // 同时发起两次 setRoots 和一个 close，全都不 await —— close 排在最后，赢家必须是它
+    const p1 = watcher.setRoots([], [{ id: "R", path: repo }])
+    const p2 = watcher.setRoots([], [{ id: "R", path: repo }])
     const p3 = watcher.close()
     await Promise.all([p1, p2, p3])
     await new Promise((r) => setTimeout(r, 300))
@@ -128,8 +129,8 @@ describe("RepoWatcher", () => {
   it("close() 是彻底停止：待触发的变更一并丢弃（用户关掉自动扫描 / 进程退出）", async () => {
     const repo = makeRepo()
     const fired: string[] = []
-    const watcher = new RepoWatcher((id) => fired.push(id), 100, 1500)
-    await watcher.watch([{ id: "R", path: repo }])
+    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 100, 1500, new PerRepoStrategy())
+    await watcher.setRoots([], [{ id: "R", path: repo }])
     await new Promise((r) => setTimeout(r, 300))
     writeFileSync(join(repo, "first.txt"), "1")
     await waitFor(() => fired.length === 1)
@@ -144,8 +145,8 @@ describe("RepoWatcher", () => {
   it("defers a change arriving immediately after a fire, never dropping it", async () => {
     const repo = makeRepo()
     const fired: string[] = []
-    const watcher = new RepoWatcher((id) => fired.push(id), 100, 800)
-    await watcher.watch([{ id: "E", path: repo }])
+    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 100, 800, new PerRepoStrategy())
+    await watcher.setRoots([], [{ id: "E", path: repo }])
     await new Promise((r) => setTimeout(r, 300))
     writeFileSync(join(repo, "a.txt"), "1")
     await waitFor(() => fired.length === 1)
@@ -239,5 +240,176 @@ describe("watcherErrorIsNoise — 监听期错误分级", () => {
 
   it.runIf(process.platform === "win32")("Windows 上按大小写不敏感比对监听目标", () => {
     expect(watcherErrorIsNoise(err("EPERM", join("d:", "REPO")), targets)).toBe(false)
+  })
+})
+
+/** 临时改写 process.platform 探测平台分叉；finally 还原，不污染其它用例 */
+function withPlatform<T>(platform: string, fn: () => T): T {
+  const desc = Object.getOwnPropertyDescriptor(process, "platform")!
+  Object.defineProperty(process, "platform", { ...desc, value: platform })
+  try {
+    return fn()
+  } finally {
+    Object.defineProperty(process, "platform", desc)
+  }
+}
+
+/** 记下 RepoWatcher 交给策略的那组回调，用来直接投喂溢出/错误信号 */
+function captureStrategy(): { strategy: WatchStrategy; handlers: () => StrategyHandlers } {
+  let captured: StrategyHandlers | undefined
+  return {
+    strategy: {
+      async start(_roots, _repos, h) {
+        captured = h
+        return []
+      },
+      async stop() {},
+    },
+    handlers: () => captured!,
+  }
+}
+
+describe("RepoWatcher — 归属映射", () => {
+  it("setRepos 不重建监听（零 syscall）", async () => {
+    const repo = makeRepo()
+    let starts = 0
+    const fake = {
+      async start() { starts++; return [] },
+      async stop() {},
+    }
+    const w = new RepoWatcher(() => {}, () => {}, 50, 100, fake)
+    await w.setRoots([], [{ id: "A", path: repo }])
+    expect(starts).toBe(1)
+    w.setRepos([{ id: "A", path: repo }, { id: "B", path: repo + "-x" }])
+    w.setRepos([])
+    expect(starts).toBe(1) // 仓库列表变了三次，监听一次都没重建
+    await w.close()
+  })
+
+  it("嵌套仓库按最深路径归属", async () => {
+    const outer = join("D:", "work", "outer")
+    const inner = join(outer, "vendor", "inner")
+    const fired: string[] = []
+    const fake = { async start() { return [] }, async stop() {} }
+    const w = new RepoWatcher((id) => fired.push(id), () => {}, 10, 0, fake)
+    await w.setRoots([], [{ id: "OUTER", path: outer }, { id: "INNER", path: inner }])
+    w.handleEventForTest(join(inner, "src", "a.ts"))
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual(["INNER"])
+    await w.close()
+  })
+
+  // 裸 startsWith 会让 D:\repo 认领 D:\repo-other 的事件，那个仓库的刷新会记到别人头上
+  it("前缀必须停在分隔符上", async () => {
+    const repo = join("D:", "work", "repo")
+    const fired: string[] = []
+    const fake = { async start() { return [] }, async stop() {} }
+    const w = new RepoWatcher((id) => fired.push(id), () => {}, 10, 0, fake)
+    await w.setRoots([], [{ id: "R", path: repo }])
+    w.handleEventForTest(join("D:", "work", "repo-other", "a.ts"))
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual([])
+    await w.close()
+  })
+
+  it("落在已知仓库之外的事件 → 报告结构变化", async () => {
+    const repo = join("D:", "work", "repo")
+    const structural: number[] = []
+    const fake = { async start() { return [] }, async stop() {} }
+    const w = new RepoWatcher(() => {}, () => structural.push(1), 10, 0, fake)
+    await w.setRoots([join("D:", "work")], [{ id: "R", path: repo }])
+    w.handleEventForTest(join("D:", "work", "brand-new-project", ".git"))
+    expect(structural.length).toBe(1)
+    await w.close()
+  })
+
+  it("被忽略目录里的事件既不刷新也不报结构变化", async () => {
+    const repo = join("D:", "work", "repo")
+    const fired: string[] = []
+    const structural: number[] = []
+    const fake = { async start() { return [] }, async stop() {} }
+    const w = new RepoWatcher((id) => fired.push(id), () => structural.push(1), 10, 0, fake)
+    await w.setRoots([join("D:", "work")], [{ id: "R", path: repo }])
+    w.handleEventForTest(join(repo, "node_modules", "x", "index.js"))
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual([])
+    expect(structural).toEqual([])
+    await w.close()
+  })
+
+  // 递归监听下同一目录以不同大小写回报是常态（事件名来自内核，仓库路径来自 readdir）。
+  // 两个平台上都真跑：改写 process.platform 后 setRepos + handleEventForTest 全是同步的，
+  // 探针不会在 await 点之后才失效
+  it("Windows 上大小写不同的事件路径仍归属到同一仓库", async () => {
+    const fired: string[] = []
+    const fake = { async start() { return [] }, async stop() {} }
+    const w = new RepoWatcher((id) => fired.push(id), () => {}, 10, 0, fake)
+    withPlatform("win32", () => {
+      w.setRepos([{ id: "R", path: join("D:", "Work", "Repo") }])
+      w.handleEventForTest(join("d:", "work", "repo", "a.ts"))
+    })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual(["R"])
+    await w.close()
+  })
+
+  // 非 Windows 上大小写有意义：/home/Repo 与 /home/repo 是两个真实目录，
+  // 归一化到一起会把一个仓库的刷新记到另一个头上
+  it("非 Windows 上保留大小写", async () => {
+    const fired: string[] = []
+    const fake = { async start() { return [] }, async stop() {} }
+    const w = new RepoWatcher((id) => fired.push(id), () => {}, 10, 0, fake)
+    withPlatform("linux", () => {
+      w.setRepos([{ id: "R", path: join("/home", "Repo") }])
+      w.handleEventForTest(join("/home", "repo", "a.ts"))
+    })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual([])
+    await w.close()
+  })
+
+  // coverage 虚高 = 界面在说「这个仓库有人看着」而其实没有，用户无从判断为什么它不刷新
+  it("coverage 只数真正落在成功 root 之下的仓库", async () => {
+    const root = join("D:", "work")
+    const fake = { async start() { return [root] }, async stop() {} }
+    const w = new RepoWatcher(() => {}, () => {}, 10, 0, fake)
+    await w.setRoots([root], [
+      { id: "IN", path: join(root, "repo") },
+      { id: "OUT", path: join("D:", "work-other", "repo") }, // 裸 startsWith 会把它算进来
+    ])
+    expect(w.watchedRoots()).toEqual([root])
+    expect(w.coveredRepoCount()).toBe(1)
+    await w.close()
+    expect(w.coveredRepoCount()).toBe(0) // 关掉之后没有任何仓库被监听
+  })
+
+  // 缓冲区溢出意味着这一批事件已经永久丢了。不接到重扫上的话，那些仓库会静默停在过期状态
+  it("监听溢出 → 报告结构变化（丢掉的事件只能靠重扫补票）", async () => {
+    const reasons: string[] = []
+    const cap = captureStrategy()
+    const w = new RepoWatcher(() => {}, (reason) => reasons.push(reason), 10, 0, cap.strategy)
+    await w.setRoots([join("D:", "work")], [])
+    cap.handlers().onOverflow("recursive watch overflow at D:\work")
+    expect(reasons).toEqual(["recursive watch overflow at D:\work"])
+    await w.close()
+  })
+
+  // 打包后日志是唯一诊断面：监听目标本身出错 = 那棵树从此不再有事件
+  it("监听目标本身的错误必须进日志，目标底下的单文件噪音不进", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const cap = captureStrategy()
+      const w = new RepoWatcher(() => {}, () => {}, 10, 0, cap.strategy)
+      const root = join("D:", "work")
+      await w.setRoots([root], [])
+      const err = (code: string, path: string) => Object.assign(new Error(code), { code, path })
+      cap.handlers().onError(err("EPERM", join(root, "obj", "x.tmp")), [root])
+      expect(spy).not.toHaveBeenCalled()
+      cap.handlers().onError(err("EPERM", root), [root])
+      expect(spy).toHaveBeenCalledTimes(1)
+      await w.close()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
