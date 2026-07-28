@@ -5,7 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 import { createBackend, createStructureRescan, type Backend } from "../src/backend"
-import { loadConfig } from "../src/config"
+import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config"
+import { RepoWatcher } from "../src/watcher"
 
 // 端口不能写死：除了「撞上本机正在跑的实例」，Windows 上还有更隐蔽的一种——Hyper-V/WSL2 的
 // WinNAT 会成段预留高位端口，落在区间里的端口 bind 直接 EACCES（本仓库这次的启动故障就是
@@ -299,5 +300,58 @@ describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
     expect(calls).toBe(2)
     release()
     h.stop()
+  })
+})
+
+// 上一个任务交接过来的约束 A：普通重扫（周期定时器/手动点击）只能走 applyRepos（纯 JS 改
+// 映射表），结构变化/溢出触发的重扫必须走 applyWatch（重建句柄）——否则「这棵树已经死了」
+// 这一类信号会被收下又扔掉，那个 root 下的仓库会在进程余下的生命周期里静默冻结。
+//
+// 不直接模拟一次真实的 fs 结构变化事件来触发这条路径：createStructureRescan 本身的防抖/
+// 去重/错误处理已经在上面的 describe 里钉住了；而"新仓库出现"在 Linux 的 PerRepoStrategy 下
+// 根本不会产生结构信号（chokidar 只认已知的仓库路径，不认 scan root 本身，见 watch-strategy.ts
+// 的 PerRepoStrategy 注释），照真实 fs 事件写的测试在这条腿上会一直等不到信号、只能超时，
+// 不是"平台上表现不同"而是"平台上压根测不到"。
+// 换一个断言点：backend.ts 里 rescanFresh()（POST /api/new-project、POST /api/clone 用）
+// 与结构变化触发的重扫共享同一个 rescanAndWatch(true) 收尾路径（同一个 force=true），
+// 用它验证"force 决定收尾走 applyWatch 还是 applyRepos"这条线路真的接对了，且跨平台一致
+describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）", () => {
+  it("普通重扫只调 watcher.setRepos；force 重扫（新建项目触发）会调 watcher.setRoots 重建监听", async () => {
+    const o = opts()
+    const root = mkdtempSync(join(tmpdir(), "rr-backend-root-"))
+    dirs.push(root)
+    saveConfig(o.configFile, { ...DEFAULT_CONFIG, roots: [root] })
+    const b = track(createBackend(o))
+    await b.start()
+
+    // 等启动扫描（force=true 的第一轮）落定，再装间谍——否则启动那一次的 setRoots 会被误数进来
+    let last: string | null = null
+    for (let i = 0; i < 60 && last === null; i++) {
+      await new Promise((r) => setTimeout(r, 50))
+      const s = (await (await fetch(`http://127.0.0.1:${b.port}/api/scan`)).json()) as { lastScanAt: string | null }
+      last = s.lastScanAt
+    }
+    expect(last).not.toBeNull()
+
+    const setRootsSpy = vi.spyOn(RepoWatcher.prototype, "setRoots")
+    const setReposSpy = vi.spyOn(RepoWatcher.prototype, "setRepos")
+
+    // 手动点「重扫」：force=false，本任务的性能收益所在——只该改映射表，不该碰句柄
+    await fetch(`http://127.0.0.1:${b.port}/api/scan`, { method: "POST" })
+    expect(setReposSpy).toHaveBeenCalled()
+    expect(setRootsSpy).not.toHaveBeenCalled()
+
+    // 新建项目：服务端自己刚往磁盘上添了一个仓库，走 rescanFresh（force=true），
+    // 与结构变化触发的重扫收尾走的是同一段代码
+    const res = await fetch(`http://127.0.0.1:${b.port}/api/new-project`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parent: root, name: "new-repo" }),
+    })
+    expect(res.status).toBe(200) // 前提：创建必须成功，否则不会走到 rescanFresh，下面的断言就没有意义
+    expect(setRootsSpy).toHaveBeenCalled()
+
+    setRootsSpy.mockRestore()
+    setReposSpy.mockRestore()
   })
 })

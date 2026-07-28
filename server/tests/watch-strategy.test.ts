@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
 import { watchTargetLost } from "../src/watch-filter"
-import { PerRepoStrategy, RecursiveRootStrategy, defaultStrategy } from "../src/watch-strategy"
+import { PerRepoStrategy, RecursiveRootStrategy, defaultStrategy, usesPerRepoWatching } from "../src/watch-strategy"
 import { cleanupFixtures, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
@@ -170,6 +170,16 @@ describe("defaultStrategy", () => {
     withPlatform("win32", () => expect(defaultStrategy()).toBeInstanceOf(RecursiveRootStrategy))
     withPlatform("darwin", () => expect(defaultStrategy()).toBeInstanceOf(RecursiveRootStrategy))
     withPlatform("linux", () => expect(defaultStrategy()).toBeInstanceOf(PerRepoStrategy))
+  })
+})
+
+// automation.ts 的 watchLimit 截断靠这个函数判断要不要生效：递归策略下一个 scan root 一个
+// 句柄，仓库数再多也不会多开句柄，对着它截断没有任何东西可省
+describe("usesPerRepoWatching", () => {
+  it("win32/darwin 为假，其余为真——与 defaultStrategy 的平台分叉同一条线", () => {
+    withPlatform("win32", () => expect(usesPerRepoWatching()).toBe(false))
+    withPlatform("darwin", () => expect(usesPerRepoWatching()).toBe(false))
+    withPlatform("linux", () => expect(usesPerRepoWatching()).toBe(true))
   })
 })
 

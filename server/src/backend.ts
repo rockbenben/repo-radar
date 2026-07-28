@@ -248,7 +248,11 @@ export function createBackend(options: BackendOptions): Backend {
   }
 
   let lastScanAt: string | null = null // 最近一次全量扫描完成时刻（ISO）；启动扫描跑完才有值
-  // force：磁盘刚变过，进行中的那一轮可能在变化写盘前就扫过了目标父目录
+  // force=true：磁盘刚变过，进行中的那一轮可能在变化写盘前就扫过了目标父目录；同时它也让
+  // doRescanAndWatch 收尾走 applyWatch 而不是 applyRepos——报上来的原因里包含「这棵树已经死了」
+  // 这一类（EMFILE/EIO/FSEvents 失败，见 watch-strategy.ts 的 watchTargetLost），重建监听是
+  // 唯一能救回它的动作。若这里改成 applyRepos，等于把这个信号收下又扔掉：那个 root 下的
+  // 仓库会在进程余下的生命周期里静默冻结，且不受兜底重扫开关保护（用户可能就是关着它）
   const structure = createStructureRescan({ rescan: () => rescanAndWatch(true) })
   const watcher = new RepoWatcher((id) => {
     evictRepoStats(id) // 仓库有变化，作废其热力图缓存，避免统计落后于实时状态
@@ -272,9 +276,23 @@ export function createBackend(options: BackendOptions): Backend {
     fetchAll: () => autoFetchAll(),
   })
 
-  async function doRescanAndWatch(): Promise<RepoStatus[]> {
+  // rebuildWatch：true 时收尾走 applyWatch（拆了重建句柄），false 时只走 applyRepos（纯 JS 改映射表）。
+  // 传的就是 rescanAndWatch 的 force——两者背后是同一个判断：磁盘状态是否可能已经变化到
+  // 「监听目标本身」需要用新眼光看待，而不是仅仅「有几个仓库的字段变了」：
+  //   - 结构变化/溢出信号（树可能已经死了，见 watch-strategy.ts 的 watchTargetLost）、
+  //     clone/新建项目（服务端自己刚在磁盘上添了一个新仓库）、启动时的第一轮 —— 都是 force=true，
+  //     监听目标集合本身可能变了，必须重建才能把新目标纳入/把死掉的树救回来；
+  //   - 周期定时器、手动点「重扫」—— force=false，大概率什么都没变，applyRepos 足够，
+  //     这正是本任务要消灭的「每 30 分钟无条件重建几千个句柄」那笔开销
+  // 误把这两条路合并成一条的后果：要么结构变化时收不到重建（死掉的树永久冻结，见 automation.ts
+  // 的 applyWatch 文档），要么每轮重扫都重建（本任务白改）
+  async function doRescanAndWatch(rebuildWatch: boolean): Promise<RepoStatus[]> {
     const repos = await store.refreshAll((scanned, total) => hub.broadcast("scan:progress", { scanned, total }))
-    await automation.applyWatch(loadConfig(configFile).autoWatch, repos)
+    if (rebuildWatch) {
+      await automation.applyWatch(loadConfig(configFile).autoWatch, repos)
+    } else {
+      automation.applyRepos(repos)
+    }
     const ids = new Set(repos.map((r) => r.id)) // 剪掉已不存在仓库的缓存条目，避免落盘缓存无界增长
     descCache.prune(ids)
     inboxCache.prune(ids)
@@ -284,13 +302,13 @@ export function createBackend(options: BackendOptions): Backend {
     identity.prune(ids)
     // 扫描完成时刻：界面据此显示「上次扫描 …」。只在全量扫描后更新——文件监听的单仓库
     // refreshOne 不算「扫描」，把它算进来会让这个时间永远显示「刚刚」，等于没有信息量。
-    // 放在 applyWatch 之后：那一步抛错时整轮扫描算失败（POST /api/scan 返回 500，界面弹
-    // 红条），此时绝不能已经广播过「扫描完成」，让顶栏同时显示「上次扫描 刚刚」
+    // 放在 applyWatch/applyRepos 之后：前者抛错时整轮扫描算失败（POST /api/scan 返回 500，
+    // 界面弹红条），此时绝不能已经广播过「扫描完成」，让顶栏同时显示「上次扫描 刚刚」
     lastScanAt = new Date().toISOString()
     // 带上完整仓库列表：定时兜底重扫没有任何人在等 HTTP 响应，只发时刻的话服务端 store
     // 更新了、界面却还停在旧数据——新增/删除的仓库根本不会出现或消失，而顶栏偏偏在说
     // 「刚扫过」。repo:updated 只能表达「某个仓库变了」，表达不了「这个仓库没了」。
-    // 列表必须现取而不是用上面 refreshAll 返回的那份：applyWatch 重建几百个监听要花
+    // 列表必须现取而不是用上面 refreshAll 返回的那份：rebuildWatch 时重建几百个监听要花
     // 好几秒，这窗口里 refreshOne 广播过的新状态若被扫描前的旧快照整份盖回去，看板会
     // 凭空回退且没有补救事件（watcher 正处冷却期）
     const current = store.list()
@@ -315,12 +333,16 @@ export function createBackend(options: BackendOptions): Backend {
   const rescanQueue = createSerialQueue<RepoStatus[]>()
   let rescanRunning: { promise: Promise<RepoStatus[]>; targets: string } | null = null
   // force：磁盘刚被服务端自己改过（clone/新建项目）——进行中的一轮可能在写盘前就扫过了目标父目录，
-  // 共乘它会漏掉新仓库，必须排新一轮；已排队未开跑的一轮仍可共乘（它开跑时读到的磁盘状态是新的）
+  // 共乘它会漏掉新仓库，必须排新一轮；已排队未开跑的一轮仍可共乘（它开跑时读到的磁盘状态是新的）。
+  // 同一个 force 也决定 doRescanAndWatch 收尾是否重建监听句柄（见其上方注释）——force=true 的
+  // 三种情况（结构变化/溢出、clone/新建项目、启动首轮）恰好都是「监听目标集合本身可能变了」，
+  // 而 force=false 的周期定时器/手动重扫恰好是「大概率没变」，两个判断背后是同一件事，
+  // 不必也不该为「要不要重建监听」再引入第二个独立参数
   function rescanAndWatch(force = false): Promise<RepoStatus[]> {
     if (rescanQueue.queued) return rescanQueue.queued
     if (!force && rescanRunning && scanTargets() === rescanRunning.targets) return rescanRunning.promise
     return rescanQueue.share(async () => {
-      const round = { promise: doRescanAndWatch(), targets: scanTargets() }
+      const round = { promise: doRescanAndWatch(force), targets: scanTargets() }
       rescanRunning = round
       try {
         return await round.promise
@@ -505,7 +527,10 @@ export function createBackend(options: BackendOptions): Backend {
       // 这类残骸点号开头、scanner 本就忽略、界面上看不见，出现条件也苛刻，不值得为它
       // 维护一整套跨进程账本机制
 
-      rescanAndWatch()
+      // force=true：进程刚起、watcher 里还没有任何句柄，必须让这一轮走 applyWatch 才能真正
+      // 建立监听——若按 force=false 的默认值走，收尾会是 applyRepos（只改映射表，不建句柄），
+      // 而此后所有周期重扫也是 applyRepos，等于这个进程自始至终一个监听句柄都不会建立
+      rescanAndWatch(true)
         .then((repos) => console.log(`[repo-radar] 启动扫描完成：${repos.length} 个仓库 / startup scan done: ${repos.length} repos`))
         .catch((err) => console.error(`[repo-radar] 启动扫描失败: ${err instanceof Error ? err.message : String(err)}`))
     },

@@ -166,8 +166,13 @@ function toOriginal(pairs: readonly { orig: string; real: string }[], file: stri
   return rel === "" ? hit.orig : join(hit.orig, rel)
 }
 
+/** Linux 是否走逐仓库策略（chokidar，每仓库几个 inotify watch）。
+ *  automation.ts 的 watchLimit 截断只在这条腿上有意义——递归策略下一个 scan root 一个句柄，
+ *  仓库数再多也不会多开一个句柄，对着它做「监听数量上限」截断没有任何东西可省 */
+export function usesPerRepoWatching(): boolean {
+  return !(process.platform === "win32" || process.platform === "darwin")
+}
+
 export function defaultStrategy(): WatchStrategy {
-  return process.platform === "win32" || process.platform === "darwin"
-    ? new RecursiveRootStrategy()
-    : new PerRepoStrategy()
+  return usesPerRepoWatching() ? new PerRepoStrategy() : new RecursiveRootStrategy()
 }
