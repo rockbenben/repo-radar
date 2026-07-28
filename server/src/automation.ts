@@ -1,7 +1,7 @@
 import { type Config, loadConfig, MAX_INTERVAL_MINUTES, saveConfig } from "./config"
 import type { RepoStatus } from "./types"
 import { usesPerRepoWatching } from "./watch-strategy"
-import type { RepoWatcher } from "./watcher"
+import type { RepoWatcher, WatchedRepo } from "./watcher"
 
 /** 监听覆盖情况：total 是本该监听的仓库数（非归档），watched 取自 watcher 的真实覆盖数——
  *  不是配置算出来的应然值。某个 root 挂不上时，coverage 必须如实变低，不能装作全覆盖 */
@@ -33,8 +33,10 @@ export interface Automation {
    *  代价是拆了重建一遍，改造前每轮兜底重扫都无条件走这里，是实测里最贵的一笔周期性开销——
    *  普通重扫已经改走 applyRepos，不要在新代码里对着「仅仅是重扫」的场景调它 */
   applyWatch(enabled: boolean, repos?: RepoStatus[]): Promise<void>
-  /** 重扫后调用：只更新监听器的「路径 → id」映射，不碰任何句柄。这是本任务的性能收益所在——
-   *  普通重扫（周期定时器 / 手动点重扫）大概率什么都没变，拆几千个句柄再建一遍纯属浪费 */
+  /** 重扫后调用：更新监听器的「路径 → id」映射。这是本任务的性能收益所在——普通重扫
+   *  （周期定时器 / 手动点重扫）大概率什么都没变，拆几千个句柄再建一遍纯属浪费。
+   *  唯一会碰句柄的情况是「有仓库本该被覆盖却没被覆盖」（新克隆的仓库、挂不上的 root），
+   *  那时补一次 applyWatch——没有它，那些仓库到进程结束都拿不到监听句柄，见实现里的注释 */
   applyRepos(repos: RepoStatus[]): void
   setWatch(enabled: boolean): Promise<void>
   setAutoScan(minutes: number): Promise<void>
@@ -69,6 +71,27 @@ const commitTs = (r: RepoStatus): number => {
  *  只按提交时间排的话，一个 CI 机器人的提交就能把用户天天开的仓库挤出监听名额 */
 const byWatchPriority = (a: RepoStatus, b: RepoStatus): number =>
   a.favorite !== b.favorite ? (a.favorite ? -1 : 1) : commitTs(b) - commitTs(a)
+
+/**
+ * 本轮**真正要建立监听句柄**的仓库（入参已排除归档）。
+ *
+ * watchLimit 只对逐仓库策略（Linux）有意义：那里每个仓库要挂几个 inotify watch，需要一个
+ * 用量阀门。递归策略下一个 scan root 一个句柄，仓库数再多也不会多开句柄，对着它截断没有
+ * 任何东西可省，也就不做——见 watch-strategy.ts 的 usesPerRepoWatching。
+ *
+ * 抽出来是因为 applyRepos 判断「覆盖够不够」时必须用**同一个分母**：拿未截断的仓库总数当
+ * 分母的话，Linux 上任何一个设了 watchLimit 的用户都会每轮重扫重挂一次监听——截断是预期内
+ * 的短缺，不是需要补救的降级，那正好把本轮重构省下来的开销原样还回去
+ */
+function pickWatched(active: RepoStatus[], cfg: Config): RepoStatus[] {
+  return usesPerRepoWatching() && cfg.watchLimit > 0 && active.length > cfg.watchLimit
+    ? [...active].sort(byWatchPriority).slice(0, cfg.watchLimit)
+    : active
+}
+
+/** 交给监听器的清单。归档仓库带着标记一起交出去——不建目标、但要认得，见 WatchedRepo.archived */
+const toWatched = (repos: readonly RepoStatus[]): WatchedRepo[] =>
+  repos.map((r) => ({ id: r.id, path: r.path, archived: r.archived }))
 
 /** 周期定时器：装、拆、按新间隔重装都走这里。两个定时器逐行相同，只有要跑的动作不一样 */
 function createTimer(run: () => void): { apply: (minutes: number) => void } {
@@ -122,8 +145,10 @@ export function createAutomation(deps: AutomationDeps): Automation {
   const fetchTimer = createTimer(() => void fetchAll())
 
   async function applyWatch(enabled: boolean, repos?: RepoStatus[]): Promise<void> {
-    // 不监听「已排除」的仓库——它们从看板/统计/后台处理里都收起
-    const all = (repos ?? listRepos()).filter((r) => !r.archived)
+    const list = repos ?? listRepos()
+    // 不为「已归档」的仓库建立监听目标——它们从看板/统计/后台处理里都收起。
+    // 但它们仍要出现在交给 watcher 的清单里（带 archived 标记），见下面 setRoots 那一行
+    const all = list.filter((r) => !r.archived)
     if (!enabled) {
       // total 仍如实反映非归档仓库数：关掉监听不等于仓库消失，界面该说「0 个中的 N 个」
       // 而不是「0 个中的 0 个」——后者会让人以为压根没有仓库，无从判断是「关了」还是「没有」
@@ -133,13 +158,7 @@ export function createAutomation(deps: AutomationDeps): Automation {
       return
     }
     const cfg = loadConfig(configFile)
-    // watchLimit 只对逐仓库策略（Linux）有意义：那里每个仓库要挂几个 inotify watch，
-    // 需要一个用量阀门。递归策略下一个 scan root 一个句柄，仓库数再多也不会多开句柄，
-    // 对着它截断没有任何东西可省，也就不做——见 watch-strategy.ts 的 usesPerRepoWatching
-    const chosen =
-      usesPerRepoWatching() && cfg.watchLimit > 0 && all.length > cfg.watchLimit
-        ? [...all].sort(byWatchPriority).slice(0, cfg.watchLimit)
-        : all
+    const chosen = pickWatched(all, cfg)
     lastTotal = all.length
     // 截断必须说出来。这条日志之外，界面的设置面板也会显示 coverage——只靠日志的话，
     // 常驻托盘的应用等于什么都没说，「为什么这个仓库不自动刷新」将无从回答
@@ -152,28 +171,44 @@ export function createAutomation(deps: AutomationDeps): Automation {
             : `。兜底重扫当前是关的：其余仓库不会自动刷新，请开启兜底重扫或调高监听上限 / watching ${chosen.length} of ${all.length} repos; periodic rescan is OFF, the rest will NOT refresh automatically`),
       )
     }
-    await watcher.setRoots(cfg.roots, chosen.map((r) => ({ id: r.id, path: r.path })))
+    // 归档仓库跟在 chosen 后面一起交出去：不建目标，但要进归属映射，否则它们的写入会被
+    // 当成「目录结构变化」而触发一轮又一轮 force=true 的全量重扫（见 WatchedRepo.archived）
+    await watcher.setRoots(cfg.roots, toWatched([...chosen, ...list.filter((r) => r.archived)]))
     // 比对的是 chosen（截断之后的名单），不是 all——watchLimit 造成的截断是预期内的短缺，
     // 不该被当成「降级」反复触发重挂；真正的降级信号只能是「连本该建成的这些都没建全」
     watchDegraded = watcher.coveredRepoCount() < chosen.length
   }
 
-  /** 重扫后调用：只更新映射表，不建立/重建任何句柄。传入的是本次扫描到的全量仓库（含超出
-   *  watchLimit 名额、当前实际没有被句柄覆盖的那些）——即便如此也不会虚报覆盖：coverage()
-   *  改问 watcher 的真实计数，watcher 只按上一次真正建立的 okRoots 计，多传的那些不在里面 */
+  /** 重扫后调用：只更新映射表，不建立/重建任何句柄。传入的是本次扫描到的全量仓库（含归档的、
+   *  以及超出 watchLimit 名额、当前实际没有被句柄覆盖的那些）——即便如此也不会虚报覆盖：
+   *  coverage() 改问 watcher 的真实计数，watcher 只按上一次真正建立的 okRoots 计 */
   function applyRepos(repos: RepoStatus[]): void {
     const all = repos.filter((r) => !r.archived)
     lastTotal = all.length
-    watcher.setRepos(all.map((r) => ({ id: r.id, path: r.path })))
-    // 便宜的自愈：只有「上一次 applyWatch 真的有目标没建成」时才补一次重挂，且尊重用户当下的
-    // 开关状态（可能这期间已经手动关掉了监听）。绝大多数周期重扫这个分支根本不会进——
-    // 本任务省下来的那笔「每轮都重建」的开销不会因为这个兜底又搭进去，只有真正需要救的那一轮
-    // 才会付这笔重建的代价，且失败了也只是记日志、留到下一轮再试，不会抛出去打断这轮重扫
-    if (watchDegraded && loadConfig(configFile).autoWatch) {
-      void applyWatch(true, repos).catch((err) => {
-        log(`[repo-radar] 兜底重挂监听失败（上一次有监听目标没建成）：${err instanceof Error ? err.message : String(err)}`)
-      })
-    }
+    watcher.setRepos(toWatched(repos))
+    // 快路径：没降级、且每个仓库都已被句柄覆盖。绝大多数周期重扫走这里，连配置文件都不必读——
+    // 本任务省下来的那笔「每轮都重建几千个句柄」的开销不会因为下面的自愈又搭进去
+    if (!watchDegraded && watcher.coveredRepoCount() >= all.length) return
+    const cfg = loadConfig(configFile)
+    // 尊重用户当下的开关：这期间可能已经手动关掉了监听，不擅自把它重新打开
+    if (!cfg.autoWatch) return
+    // 分母取 pickWatched 而不是 all：watchLimit 截断是预期内的短缺（只发生在逐仓库策略上），
+    // 拿 all 当分母的话，Linux 上任何设了上限的用户都会每轮重扫重挂一次，等于本轮重构白改
+    if (!watchDegraded && watcher.coveredRepoCount() >= pickWatched(all, cfg).length) return
+    // 到这里只剩两种情况，都必须重挂——setRepos 只改映射表、从不触达 strategy，**没有任何
+    // 其它代码路径**会为「上一次 applyWatch 之后才出现的仓库」建立句柄：
+    //   ① 上一次 applyWatch 有目标没建成（EMFILE 一类瞬时故障；RecursiveRootStrategy 对单个
+    //      root 的失败是内部吞掉的，只是不把它放进返回的 ok 列表）；
+    //   ② 有仓库本该被覆盖却没被覆盖——用户 git clone 进扫描根、30 分钟后周期重扫发现了它，
+    //      逐仓库策略下它不在 chokidar 的目标列表里（start 时一次性建好，此后没人调 add()），
+    //      于是这个进程余生它都没有 inotify 监听：提交/切分支要等最长 30 分钟才显示，而其它
+    //      卡片 1 秒内更新，autoScanMinutes=0 时永远不更新。网络盘 root 掉线时挂不上、盘回来
+    //      之后重扫列出其下仓库，也落在这一条（那一刻 root 下还没有仓库，watchDegraded 恰好
+    //      是 false，救不了）。递归策略下新仓库落在 root 句柄之下、本来就计入覆盖，不会进这里
+    // 失败了只记日志、留到下一轮再试，不抛出去打断这轮重扫
+    void applyWatch(true, repos).catch((err) => {
+      log(`[repo-radar] 兜底重挂监听失败（有监听目标没建成或还没建）：${err instanceof Error ? err.message : String(err)}`)
+    })
   }
 
   return {
@@ -208,19 +243,22 @@ export function createAutomation(deps: AutomationDeps): Automation {
     // 逐字段比对，只重装真变了的：整份 GET→改一处→PUT 回来是最常见的客户端写法，
     // 无脑全量重装会让每次保存都重置兜底重扫的倒计时（周期性保存 = 兜底重扫永不触发），
     // 还白白拆建几百个监听目标、丢掉重建窗口里的事件。
-    // roots/manualRepos 变了 → 监听目标本身变了，只有重建能让新目标生效；watchLimit
-    // 单独变化不再在这里触发重装——它已有专属的 setWatchLimit 端点保证立即生效，这里只剩
-    // 「整份配置一次性 round-trip 回来、其中恰好带着与旧值不同的 watchLimit」这种少见路径，
-    // 该字段的即时生效不靠这条通道也不影响正确性（coverage 仍如实反映，见 watcher.coveredRepoCount）
+    // roots/manualRepos 变了 → 监听目标本身变了，只有重建能让新目标生效。
+    // autoWatch 与 watchLimit 同样保留在触发条件里（未采用「只看 roots/manualRepos」的更窄
+    // 写法）：这两个字段若经由整份 PUT /api/config 变化却不落实，得到的都是「配置说的和实际
+    // 跑的不一样」，正是本任务最该防的那类「装作还在监听」——
+    //   - autoWatch：配置说开着、实际监听没启动；
+    //   - watchLimit：值落了盘、面板也显示了新上限，但 applyWatch 从不被调用，Linux 上超出
+    //     旧上限的仓库直到进程结束都不被监听。它虽有专属的 setWatchLimit 端点，但那只覆盖
+    //     web UI 恰好走的那条路；GET → 改一处 → PUT 整份回来是最常见的客户端写法，走的是这里
+    // 代价只是一次少见路径上的重装，比「界面声称覆盖全部、实际没有」小得多
     async applyConfig(next, prev) {
       if (next.autoScanMinutes !== prev.autoScanMinutes) scanTimer.apply(next.autoScanMinutes)
       if (next.autoFetchMinutes !== prev.autoFetchMinutes) fetchTimer.apply(next.autoFetchMinutes)
       const rootsChanged = JSON.stringify(next.roots) !== JSON.stringify(prev.roots)
       const manualReposChanged = JSON.stringify(next.manualRepos) !== JSON.stringify(prev.manualRepos)
-      // autoWatch 保留在这里（未采用「只看 roots/manualRepos」的更窄写法）：这个开关若经由整份
-      // PUT /api/config 变化却不落实，会出现「配置说开着、实际监听没启动」——正是本任务最该防的
-      // 那类「装作还在监听」，风险比少一次重装大得多，即便专属的 /api/watch 端点是常见入口
-      if (next.autoWatch !== prev.autoWatch || rootsChanged || manualReposChanged) await applyWatch(next.autoWatch)
+      const watchChanged = next.autoWatch !== prev.autoWatch || next.watchLimit !== prev.watchLimit
+      if (watchChanged || rootsChanged || manualReposChanged) await applyWatch(next.autoWatch)
     },
 
     start(cfg) {

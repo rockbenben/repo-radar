@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAutomation, intervalMs } from "../src/automation"
 import { DEFAULT_CONFIG, loadConfig, MAX_INTERVAL_MINUTES, saveConfig, type Config } from "../src/config"
 import type { RepoStatus } from "../src/types"
-import type { RepoWatcher } from "../src/watcher"
+import type { RepoWatcher, WatchedRepo } from "../src/watcher"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -59,30 +59,70 @@ async function withPlatform<T>(platform: string, fn: () => Promise<T>): Promise<
  *  实际收到的 roots 内容，不能只数它被调用的次数 */
 function fakeWatcher() {
   const watched: string[][] = []
+  const entries: WatchedRepo[][] = []
   const rootsCalls: string[][] = []
   let closes = 0
   let started = false
-  let currentIds: string[] = []
+  let current: WatchedRepo[] = []
   const w = {
-    setRoots: async (roots: string[], list: { id: string; path: string }[]) => {
+    setRoots: async (roots: string[], list: WatchedRepo[]) => {
       rootsCalls.push([...roots])
-      currentIds = list.map((r) => r.id)
-      watched.push(currentIds)
+      current = list
+      entries.push(list)
+      watched.push(list.map((r) => r.id))
       started = true
     },
-    setRepos: (_list: { id: string; path: string }[]) => {
+    setRepos: (_list: WatchedRepo[]) => {
       // 只更新映射表：真实 watcher 里 coveredRepoCount 仍按上一次 setRoots 的 okRoots 计，
       // 这里不需要跟着变——这正是 applyRepos 不该被当成能扩大覆盖范围的动作的体现
     },
     close: async () => {
       closes++
       started = false
-      currentIds = []
+      current = []
     },
-    coveredRepoCount: () => (started ? currentIds.length : 0),
+    // 归档仓库不计入，与真实 watcher 一致：它们进这份名单只是为了让事件有归属可认，
+    // 本来就不建目标（见 WatchedRepo.archived），算进覆盖数会让 coverage 虚高
+    coveredRepoCount: () => (started ? current.filter((r) => !r.archived).length : 0),
     watchedRoots: () => (started ? ["/fake-root"] : []),
   }
-  return { watcher: w as unknown as RepoWatcher, watched, rootsCalls, closes: () => closes }
+  return { watcher: w as unknown as RepoWatcher, watched, entries, rootsCalls, closes: () => closes }
+}
+
+/**
+ * 更接近真实 RepoWatcher 的假 watcher：`coveredRepoCount` 按「**当前映射表**里的仓库有多少
+ * 落在**上一次 setRoots 真正建成的目标**之下」算，而不是简单返回名单长度。G1 的整条推理都活在
+ * 这个差别里——`setRepos` 只改映射表、从不触达策略，于是「上一次 applyWatch 之后才出现的仓库」
+ * 在递归策略下已被 root 句柄覆盖（不必重挂），在逐仓库策略下一个句柄都没有（必须重挂）。
+ *
+ * `mode` 决定覆盖语义，与 `process.platform` 无关：两条腿在两个 CI 平台上都要真跑。
+ * `failFirst` 模拟「第一次挂 root 时网络盘离线」。
+ */
+function coverageWatcher(mode: "recursive" | "per-repo", opts: { failFirst?: boolean } = {}) {
+  let ok: string[] = []
+  let mapped: WatchedRepo[] = []
+  let started = false
+  let attempts = 0
+  const rootCalls: WatchedRepo[][] = []
+  const covered = (p: string): boolean => ok.some((o) => p === o || p.startsWith(`${o}/`))
+  const w = {
+    setRoots: async (roots: string[], list: WatchedRepo[]) => {
+      attempts++
+      rootCalls.push(list)
+      mapped = list
+      const offline = opts.failFirst === true && attempts === 1
+      ok = offline ? [] : mode === "recursive" ? [...roots] : list.filter((r) => !r.archived).map((r) => r.path)
+      started = true
+    },
+    setRepos: (list: WatchedRepo[]) => void (mapped = list),
+    close: async () => {
+      ok = []
+      started = false
+    },
+    coveredRepoCount: () => (started ? mapped.filter((r) => !r.archived && covered(r.path)).length : 0),
+    watchedRoots: () => [...ok],
+  }
+  return { watcher: w as unknown as RepoWatcher, rootCalls, calls: () => attempts }
 }
 
 function make(file: string, repos: RepoStatus[], extra: { rescan?: () => Promise<unknown>; fetchAll?: () => Promise<void> } = {}) {
@@ -117,12 +157,19 @@ describe("applyWatch 的上限与取舍", () => {
     expect(automation.coverage()).toEqual({ watched: 2, total: 2 })
   })
 
-  it("已归档的仓库不监听，也不计入总数", async () => {
+  // 归档仓库不建监听目标，但**必须**带着标记留在交给 watcher 的名单里：递归 root 句柄照样
+  // 看得见它们的写入，而未归属的事件会被当成「目录结构变化」，触发一轮 force=true 的全量重扫
+  //（refreshAll + 全部句柄拆建）并按 60 秒冷却持续重复——归档一个正在用的仓库反而让应用
+  // 比不归档时忙得多。删出名单的写法在这里看起来「更干净」，代价是这条持续的重扫风暴
+  it("已归档的仓库带标记进归属映射（不建目标），且不计入总数", async () => {
     const file = configFile()
-    const { automation, watched } = make(file, [repo("a"), repo("skip", { archived: true })])
+    const { automation, entries } = make(file, [repo("a"), repo("skip", { archived: true })])
     await automation.applyWatch(true)
-    expect(watched[0]).toEqual(["a"])
-    expect(automation.coverage()).toEqual({ watched: 1, total: 1 })
+    expect(entries[0]).toEqual([
+      { id: "a", path: "/r/a", archived: false },
+      { id: "skip", path: "/r/skip", archived: true },
+    ])
+    expect(automation.coverage()).toEqual({ watched: 1, total: 1 }) // 归档的不计入分子也不计入分母
   })
 
   // watchLimit 截断只在逐仓库策略（Linux）下生效——递归策略一个 scan root 一个句柄，
@@ -296,18 +343,18 @@ describe("applyConfig 只重装真变了的", () => {
     expect(scans).toBe(1)
   })
 
-  // watchLimit 单独变化不再在这里触发重装：它已有专属的 setWatchLimit 端点保证立即生效
-  // （见上面「setX 落盘并立即生效」），这里只处理「整份配置一次性 round-trip 回来」的少见路径。
-  // 与旧行为的差异是本任务 Step 3 明确要求的收窄——旧版本这里连 watchLimit 单独变化都会
-  // 触发一次 applyWatch，与「重扫不再重建监听」这条主线并不矛盾（这里管的是 config PUT，
-  // 不是重扫），但既然只保留「roots/manualRepos 变了」+「autoWatch 变了」两条，就不再是其一
-  it("watchLimit 单独变化（roots/manualRepos 都没变）不触发重装", async () => {
+  // watchLimit 有专属的 setWatchLimit 端点，但那只覆盖 web UI 恰好走的那条路。GET → 改一处 →
+  // PUT 整份配置回来是最常见的客户端写法，走的正是这里：不重装的话，值落了盘、面板也显示了
+  // 新上限，而 applyWatch 从不被调用——Linux 上超出旧上限的仓库直到进程结束都不被监听，
+  // 界面却声称新上限已覆盖全部。钉平台的理由同上：截断只在逐仓库策略下发生
+  it("watchLimit 变了也要重挂监听（整份 PUT /api/config 回来时）", async () => {
     const file = configFile({ watchLimit: 0 })
     const { automation, watched } = make(file, [repo("a"), repo("b"), repo("c")])
     const prev = loadConfig(file)
     saveConfig(file, { ...prev, watchLimit: 1 }) // 模拟 PUT /api/config 已落盘
-    await automation.applyConfig({ ...prev, watchLimit: 1 }, prev)
-    expect(watched).toHaveLength(0) // 一次 setRoots 都没调用
+    await withPlatform("linux", () => automation.applyConfig({ ...prev, watchLimit: 1 }, prev))
+    expect(watched).toHaveLength(1) // 重挂了一次
+    expect(watched[0]).toEqual(["a"]) // 而且是按**新**上限截断的名单，不是旧的
   })
 
   // roots 变了 → 监听目标本身变了，只有重建能让新 root 生效——递归策略下这是唯一入口，
@@ -409,6 +456,33 @@ describe("重扫不重建监听", () => {
     expect(setReposCalls).toBe(2)
   })
 
+  // applyRepos 同样要把归档仓库带标记交出去：只在 applyWatch 那条路上做的话，两次 applyWatch
+  // 之间新归档的仓库会从映射表里消失，它的每一次保存都会被当成目录结构变化去触发全量重扫
+  it("applyRepos 把归档仓库带标记交给 watcher，不是把它从映射表里删掉", () => {
+    const lists: WatchedRepo[][] = []
+    const watcher = {
+      setRoots: async () => {},
+      setRepos: (list: WatchedRepo[]) => void lists.push(list),
+      close: async () => {},
+      coveredRepoCount: () => 1,
+      watchedRoots: () => ["/r"],
+    } as unknown as RepoWatcher
+    const auto = createAutomation({
+      configFile: configFile({ autoWatch: true, roots: ["/r"] }),
+      watcher,
+      listRepos: () => [],
+      rescan: async () => [],
+      fetchAll: async () => {},
+      log: () => {},
+    })
+    auto.applyRepos([repo("live"), repo("gone", { archived: true })])
+    expect(lists[0]).toEqual([
+      { id: "live", path: "/r/live", archived: false },
+      { id: "gone", path: "/r/gone", archived: true },
+    ])
+    expect(auto.coverage()).toEqual({ watched: 1, total: 1 }) // 归档的不进分母
+  })
+
   it("coverage 取自 watcher 的真实覆盖数，root 挂不上时如实变低", async () => {
     const watcher = {
       setRoots: async () => {},
@@ -428,6 +502,91 @@ describe("重扫不重建监听", () => {
     })
     await auto.applyWatch(true)
     expect(auto.coverage()).toEqual({ watched: 20, total: 73 })
+  })
+})
+
+/**
+ * G1：`setRepos` 只改映射表、从不触达策略，于是「上一次 applyWatch 之后才出现的仓库」原本
+ * **没有任何代码路径**会给它建立句柄——用户 git clone 进扫描根，30 分钟后周期重扫发现它、
+ * 卡片出现，但这个进程余生它都没有监听：提交、切分支要等最长 30 分钟才显示，而其它卡片
+ * 1 秒内更新；`autoScanMinutes = 0` 时永远不更新。
+ *
+ * 补挂的判据是「覆盖数够不够」，而不是「有没有新仓库」——它恰好只在策略真的需要时才重建：
+ * 递归策略下新仓库已在 root 句柄之下、计入覆盖，不触发；逐仓库策略下新仓库不在 okRoots 里，
+ * 触发。这一对正反面是同等重要的两条：修 G1 最容易的错误做法就是退回「每轮都重建」，
+ * 那等于把整轮重构的性能收益（每 30 分钟 2311 个句柄的拆建）原样还回去
+ */
+describe("新出现的仓库必须拿到监听句柄（G1）", () => {
+  const auto = (file: string, cw: ReturnType<typeof coverageWatcher>, repos: RepoStatus[]) =>
+    createAutomation({
+      configFile: file,
+      watcher: cw.watcher,
+      listRepos: () => repos,
+      rescan: async () => [],
+      fetchAll: async () => {},
+      log: () => {},
+    })
+
+  it("递归策略：普通重扫（哪怕多出了新仓库）一次句柄都不重建——本轮重构的性能收益全在这里", async () => {
+    const cw = coverageWatcher("recursive")
+    const a = auto(configFile({ autoWatch: true, roots: ["/r"] }), cw, [repo("a"), repo("b")])
+    await a.applyWatch(true)
+    expect(cw.calls()).toBe(1)
+
+    a.applyRepos([repo("a"), repo("b")]) // 什么都没变的那 99% 轮次
+    a.applyRepos([repo("a"), repo("b"), repo("c")]) // 新克隆的仓库，已落在 root 的递归句柄之下
+    await new Promise((r) => setTimeout(r, 50)) // 给可能存在的（不该有的）重挂时间冒出来
+    expect(cw.calls()).toBe(1)
+    expect(a.coverage()).toEqual({ watched: 3, total: 3 }) // 新仓库确实已被覆盖，不是漏算
+  })
+
+  it("逐仓库策略：重扫发现的新仓库一个句柄都没有 → 必须补一次重挂", async () => {
+    const cw = coverageWatcher("per-repo")
+    const a = auto(configFile({ autoWatch: true, roots: ["/r"] }), cw, [repo("a"), repo("b")])
+    await a.applyWatch(true)
+    expect(cw.calls()).toBe(1)
+    expect(a.coverage()).toEqual({ watched: 2, total: 2 })
+
+    a.applyRepos([repo("a"), repo("b"), repo("c")]) // chokidar 的目标列表是 start 时一次性建好的，
+    await vi.waitFor(() => expect(cw.calls()).toBe(2)) // 此后没有任何东西会调 add()——只能整体重挂
+    expect(cw.rootCalls.at(-1)?.map((r) => r.id)).toEqual(["a", "b", "c"])
+    expect(a.coverage()).toEqual({ watched: 3, total: 3 })
+  })
+
+  // watchDegraded 救不了这一条：它只在 applyWatch 内部按 chosen 重算，而 root 挂不上的那一刻
+  // 其下还没有发现任何仓库（网络盘离线时 scan 也扫不到），chosen 与 covered 同为 0 → 不算降级
+  it("离线的 root 回来之后，其下的仓库必须被重新挂上（那一刻 watchDegraded 恰好是 false）", async () => {
+    const cw = coverageWatcher("recursive", { failFirst: true })
+    const a = auto(configFile({ autoWatch: true, roots: ["/r"] }), cw, [])
+    await a.applyWatch(true) // 网络盘离线：root 没建成，且此刻其下一个仓库都没有
+    expect(cw.calls()).toBe(1)
+    expect(a.coverage()).toEqual({ watched: 0, total: 0 })
+
+    a.applyRepos([]) // 盘还没回来的那些轮次：没有降级标志，也没有仓库，不该白白重挂
+    await new Promise((r) => setTimeout(r, 50))
+    expect(cw.calls()).toBe(1)
+
+    a.applyRepos([repo("a"), repo("b")]) // 盘回来了，重扫列出了那个 root 下的仓库
+    await vi.waitFor(() => expect(cw.calls()).toBe(2))
+    expect(a.coverage()).toEqual({ watched: 2, total: 2 }) // 不重挂的话它们到重启为止都没有监听
+  })
+
+  // 分母必须是「本该建成的那些」（截断之后），不是仓库总数。拿总数当分母的话，Linux 上任何
+  // 设了 watchLimit 的用户都会每轮重扫重挂一次——把本轮重构省下的开销原样还回去
+  it("逐仓库策略 + watchLimit 截断：覆盖数天然低于仓库总数，但不得因此每轮重挂", async () => {
+    const cw = coverageWatcher("per-repo")
+    const repos = [repo("a"), repo("b"), repo("c")]
+    const a = auto(configFile({ autoWatch: true, roots: ["/r"], watchLimit: 2 }), cw, repos)
+    await withPlatform("linux", () => a.applyWatch(true))
+    expect(cw.calls()).toBe(1)
+    expect(a.coverage()).toEqual({ watched: 2, total: 3 }) // 截断是预期内的短缺，不是降级
+
+    await withPlatform("linux", async () => {
+      a.applyRepos(repos)
+      a.applyRepos(repos)
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(cw.calls()).toBe(1)
   })
 })
 
