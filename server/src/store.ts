@@ -13,6 +13,24 @@ import type { GithubInbox, RepoStatus } from "./types"
 
 const CONCURRENCY = 8
 
+/** refreshOne 的可选行为 */
+export interface RefreshOptions {
+  /**
+   * 跳过 heavy 的指纹缓存，无条件重算。
+   *
+   * **应用自己刚往磁盘上写过东西的路径必须传它**（commit / branch -d / stash / switch /
+   * discard / fetch / 批量动作 / 自定义命令）。指纹是一组 `.git` 下路径的 stat 快照，
+   * 而这个集合永远不可能证明完备——`git branch -d` 曾经就整整一类操作都不在里面：用户点
+   * 「清理已合并分支」→ git 真的删了 → 指纹没变 → 命中缓存 → 返回并广播的仍是那些已经不
+   * 存在的分支，界面上像是什么都没发生，而且要一直错到某次无关的 commit/fetch 为止。
+   * 补探针只能修掉已知的那几个洞，这个开关把「自己写完立刻读到旧数据」整类问题关掉。
+   *
+   * 只对文件监听触发的刷新和全量重扫留缓存——那两条路径的前提正是「绝大多数仓库没动过」，
+   * 也是这套缓存唯一要省的开销。
+   */
+  skipCache?: boolean
+}
+
 export function deriveGroup(repoPath: string, roots: string[]): string {
   for (const root of roots) {
     const rel = relative(root, repoPath)
@@ -62,7 +80,7 @@ export class RepoStore {
    * 顺序很关键：先跑 core 拿到 oid，再算指纹。oid 是 status 顺带给的（不额外 spawn），
    * 而它能识别出「mtime 因触碰而变、内容其实没变」以及反过来的情况。
    */
-  private async refreshRepo(path: string, id: string): Promise<RepoStatus> {
+  private async refreshRepo(path: string, id: string, skipCache = false): Promise<RepoStatus> {
     // 路径整个不在了：多半是 manualRepos 里的仓库被改名或移动了。scan() 不覆盖根目录之外的
     // 路径，认领也就没有「新出现的路径」可配对——救不回来，但绝不能让卡片静默消失，
     // 用户会以为自己删过它。existsSync 是同步 stat，比起接下来必然要 spawn 的 git 进程
@@ -75,7 +93,8 @@ export class RepoStore {
     }
     const core = await getRepoCore(path)
     const fp = gitFingerprint(path, core.oid)
-    const cached = this.cache?.get(id, fp) ?? null
+    // skipCache 只跳过**读**，仍然照常写回：刚算出来的这份是最新的，下一轮重扫理应命中它
+    const cached = skipCache ? null : (this.cache?.get(id, fp) ?? null)
     if (cached) return composeStatus(path, id, core, cached)
     const heavy = await getRepoHeavy(path, core.branch)
     if (fp !== null) this.cache?.set(id, fp, heavy)
@@ -128,13 +147,13 @@ export class RepoStore {
     return this.list()
   }
 
-  async refreshOne(id: string): Promise<RepoStatus | undefined> {
+  async refreshOne(id: string, opts: RefreshOptions = {}): Promise<RepoStatus | undefined> {
     const existing = this.repos.get(id)
     if (!existing) return undefined
     const cfg = this.getConfig()
     let next: RepoStatus
     try {
-      const fresh = await this.refreshRepo(existing.path, id)
+      const fresh = await this.refreshRepo(existing.path, id, opts.skipCache ?? false)
       this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
       next = this.decorate(fresh, cfg)
     } catch (err) {
@@ -186,9 +205,11 @@ export class RepoStore {
     return status
   }
 
-  // id 默认按路径算，但全量扫描要传账本认领后的那个——否则一个刚改完名又恰好 git 读失败的
-  // 仓库会以「新 id」进 store，用户的标签/归档在它恢复之前全部对不上
-  private errorStatus(path: string, cfg: Config, err: unknown, id: string = repoId(path)): RepoStatus {
+  // id 必填，**刻意不给按路径算的默认值**：一个刚改完名又恰好 git 读失败的仓库，按路径重算
+  // 会得出另一个 id，于是这条状态的 id 与它在 repos 里的键对不上，装饰时也读不到用户的
+  // 标签/归档。两个调用点都已显式传账本认领后的那个 id；留着默认值只会让未来的第三个调用点
+  // 静默把这个 bug 重新引进来，而它不报错、只表现为「改过名的仓库一出错就丢标签」
+  private errorStatus(path: string, cfg: Config, err: unknown, id: string): RepoStatus {
     return this.decorate(
       {
         id,

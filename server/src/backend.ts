@@ -401,7 +401,7 @@ export function createBackend(options: BackendOptions): Backend {
           // 走仓库锁：一是别和用户正在做的 commit/push 在同一个 .git 上撞车，
           // 二是退出时的排空只认锁里的操作——不包进来，定时 fetch 就会被硬切在写 refs 的中途
           await withRepoLock(r.id, () => runRepoAction(r.path, "fetch"))
-          const updated = await store.refreshOne(r.id)
+          const updated = await store.refreshOne(r.id, { skipCache: true }) // 刚 fetch 过，见 RefreshOptions
           if (updated) hub.broadcast("repo:updated", { repo: updated })
         } catch {
           /* 单仓库 fetch 失败不影响其它 */

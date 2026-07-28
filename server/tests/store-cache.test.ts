@@ -6,7 +6,9 @@ import { RepoCache } from "../src/repo-cache"
 import { RepoStore } from "../src/store"
 import { DEFAULT_CONFIG } from "../src/config"
 import * as git from "../src/git"
-import { cleanupFixtures, makeRepo } from "./fixtures"
+import { gitFingerprint } from "../src/fingerprint"
+// git as gitCmd：本文件已经用 `import * as git` 拿了被测模块的命名空间，同名会盖掉它
+import { cleanupFixtures, git as gitCmd, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
 
@@ -79,6 +81,46 @@ describe("RepoStore 指纹缓存", () => {
     const second = (await store.refreshAll())[0]
     expect({ ...second, scannedAt: "" }).toEqual({ ...first, scannedAt: "" })
     cache.flush() // 同上
+  })
+
+  // 「应用自己写完之后立刻读到旧数据」——C1 里最严重的那个后果，端到端钉住。
+  // 探针少了 refs/heads 时这条会红：git 真的删了分支，refreshOne 却命中缓存、
+  // 把那几个已经不存在的分支原样返回并广播出去
+  it("git branch -d 之后 refreshOne 立刻反映出分支已删（C1 回归）", async () => {
+    const repo = makeRepo()
+    gitCmd(repo, "branch", "feature-done")
+    const cfg = { ...DEFAULT_CONFIG, manualRepos: [repo] }
+    const cache = new RepoCache(cacheFile())
+    const store = new RepoStore(() => cfg, undefined, undefined, cache)
+    const first = (await store.refreshAll())[0] // 预热缓存
+    expect(first.mergedBranches).toEqual(["feature-done"])
+
+    gitCmd(repo, "branch", "-d", "feature-done")
+    const after = await store.refreshOne(first.id)
+    expect(after?.mergedBranches).toEqual([])
+    cache.flush()
+  })
+
+  // 探针集合永远不可能证明完备，skipCache 是关掉整类问题的那道闸。
+  // 这里直接把缓存投毒成「指纹不变但内容过期」——精确模拟「探针漏判」这个条件本身，
+  // 而不是依赖某一个具体的漏判操作（那些一旦补上探针就不再是漏判了，测试也就失去意义）
+  it("skipCache 绕开缓存：指纹没变也重算（探针漏判时的兜底）", async () => {
+    const repo = makeRepo()
+    const cfg = { ...DEFAULT_CONFIG, manualRepos: [repo] }
+    const cache = new RepoCache(cacheFile())
+    const store = new RepoStore(() => cfg, undefined, undefined, cache)
+    const first = (await store.refreshAll())[0]
+    expect(first.stashCount).toBe(0)
+
+    const core = await git.getRepoCore(repo)
+    const fp = gitFingerprint(repo, core.oid)
+    expect(fp).not.toBeNull()
+    const real = await git.getRepoHeavy(repo, core.branch)
+    cache.set(first.id, fp!, { ...real, stashCount: 99 }) // 指纹保持当前值，内容故意作废
+
+    expect((await store.refreshOne(first.id))?.stashCount).toBe(99) // 命中投毒：证明缓存确实生效
+    expect((await store.refreshOne(first.id, { skipCache: true }))?.stashCount).toBe(0) // 绕开它
+    cache.flush()
   })
 
   // 不传 cache 时必须完全退化成改造前的行为（每轮都全价刷新）

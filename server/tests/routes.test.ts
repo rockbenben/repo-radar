@@ -380,6 +380,45 @@ describe("api", () => {
     t.cleanup()
   })
 
+  // C1：应用自己刚往磁盘上写过东西的端点必须绕开指纹缓存（见 store.ts 的 RefreshOptions）。
+  // 断言「刷新时传了 skipCache」而不是断言数据本身：本文件的 store 不带 RepoCache，
+  // 数据层面两条路完全一样，要钉住的恰恰是这条线路有没有接上。少了它，用户点「清理已合并
+  // 分支」→ git 真的删了 → 指纹当年不变 → 命中缓存 → 响应和广播里仍是那些已删掉的分支
+  it("prune-branches / mutateRepo / commit / 批量动作 一律以 skipCache 刷新", async () => {
+    const t = setup()
+    git(t.repo, "branch", "feature-done")
+    await t.store.refreshAll()
+    const id = t.store.list()[0].id
+    expect(t.store.get(id)!.mergedBranches).toEqual(["feature-done"]) // 前提：确有可删分支，否则端点会提前返回
+
+    const spy = vi.spyOn(RepoStore.prototype, "refreshOne")
+    try {
+      const pruned = await t.app.request(`/api/repos/${id}/prune-branches`, { method: "POST" })
+      expect(pruned.status).toBe(200)
+      expect(((await pruned.json()) as { repo: { mergedBranches: string[] } }).repo.mergedBranches).toEqual([])
+
+      const stashed = await t.app.request(`/api/repos/${id}/stash/create`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "m" }),
+      })
+      expect(stashed.status).toBe(200)
+
+      const committed = await t.app.request(`/api/repos/${id}/commit`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "m" }),
+      })
+      expect(committed.status).toBe(200)
+
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(3)
+      for (const call of spy.mock.calls) expect(call[1]).toEqual({ skipCache: true })
+    } finally {
+      spy.mockRestore()
+      t.cleanup()
+    }
+  })
+
   it("POST /api/repos/:id/fetch returns a taskId; 404 for unknown id", async () => {
     const t = setup()
     await t.store.refreshAll()

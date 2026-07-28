@@ -74,7 +74,8 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   const rescanFresh = extras.rescanFresh ?? rescan
   const batchDeps: BatchDeps = {
     getRepo: (id) => store.get(id),
-    refreshOne: (id) => store.refreshOne(id),
+    // skipCache：批量动作与自定义命令刚在这个仓库里跑过 git/shell，必须实算（见 RefreshOptions）
+    refreshOne: (id) => store.refreshOne(id, { skipCache: true }),
     broadcast: (type, payload) => hub.broadcast(type, payload),
   }
 
@@ -85,7 +86,9 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     if (!repo) return c.json({ error: "repo not found" }, 404)
     const out = await run(repo)
     if (out instanceof Response) return out // 校验失败等，直接透传
-    const updated = await store.refreshOne(repo.id)
+    // skipCache：run 里刚执行过写盘的 git 动作（switch / stash / branch / discard），
+    // 指纹探针集合不可能证明完备，这里读缓存就是在把用户刚触发的变更从响应里抹掉
+    const updated = await store.refreshOne(repo.id, { skipCache: true })
     if (updated) hub.broadcast("repo:updated", { repo: updated })
     return c.json({ result: out.result, repo: updated ?? repo })
   }
@@ -179,7 +182,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       return c.json({ error: "message must be a non-empty string" }, 400)
     const push = body.push === true
     const r = await withRepoLock(repo.id, () => commitRepo(repo.path, body.message as string, push))
-    const updated = await store.refreshOne(repo.id)
+    const updated = await store.refreshOne(repo.id, { skipCache: true }) // 刚 commit/push 过，见 RefreshOptions
     if (updated) hub.broadcast("repo:updated", { repo: updated })
     return c.json(r)
   })
@@ -202,7 +205,10 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     const names = requested.filter((n) => repo.mergedBranches.includes(n))
     if (names.length === 0) return c.json({ results: [], repo })
     const results = await withRepoLock(repo.id, () => deleteBranches(repo.path, names))
-    const updated = await store.refreshOne(repo.id)
+    // skipCache 在这条路径上是硬性的：`git branch -d` 曾经完全不改指纹（松散引用只动
+    // refs/heads 目录的 mtime，而那个目录当初不在探针里），于是删完分支返回和广播的
+    // 仍是那几个已经不存在的分支——用户点了按钮、git 成功了、界面说什么都没发生
+    const updated = await store.refreshOne(repo.id, { skipCache: true })
     if (updated) hub.broadcast("repo:updated", { repo: updated })
     return c.json({ results, repo: updated ?? repo })
   })
@@ -281,7 +287,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       const res = await withRepoLock(repo.id, () => dropStashes(repo.path, shas))
       const label = repo.displayName ?? repo.name
       for (const r of res) results.push({ repoId, name: label, ...r })
-      const updated = await store.refreshOne(repo.id)
+      const updated = await store.refreshOne(repo.id, { skipCache: true }) // 刚 drop 过 stash，见 RefreshOptions
       if (updated) hub.broadcast("repo:updated", { repo: updated })
     }
     return c.json({ results })
