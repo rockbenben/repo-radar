@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
@@ -482,6 +482,28 @@ describe("已知路径的唯一例外：仓库其实搬走了", () => {
     const ids = await led.resolve([A, B, other], noRootCommit, (p) => st(1, p === B ? 42 : p === A ? 99 : 7))
     expect(ids.get(A)).toBe(oldId) // 隔了一代，不动
     expect(ids.get(B)).not.toBe(oldId)
+  })
+
+  // 「坏 gen 当 0 = 很老的一代、永远不可认领」这条安全性论证在**所有**条目的 gen 都非法时
+  // 恰好反转：maxGen=0 ⇒ currentGen=1 ⇒ genOf(e)===0===currentGen-1，于是每一条陈旧条目
+  // 都在同一轮里变成可认领，把同轮次窗口本来要关掉的跨 clone 认错身份的口子重新打开。
+  // 而「所有 gen 都非法」正是从加 gen 之前的版本升上来的账本的样子
+  it("账本里所有 gen 都非法时，陈旧条目不得在同一轮里全部变成可认领", async () => {
+    const file = tmpFile()
+    const now = new Date().toISOString()
+    // 手写一份「加 gen 之前的版本」写下的账本：两条都没有 gen 字段
+    writeFileSync(
+      file,
+      JSON.stringify({
+        oldA: { path: A, dev: "1", ino: "42", rootCommit: null, seenAt: now },
+        oldB: { path: "D:\p\other", dev: "1", ino: "77", rootCommit: null, seenAt: now },
+      }),
+    )
+    const led = makeLedger(file)
+    // A 与 other 这一轮都不在了，而新路径 B 恰好带着 A 的老 (dev,ino)。
+    // 若陈旧条目在第一轮就可认领，B 会当场继承 oldA 的身份（连同标签/归档）
+    const ids = await led.resolve([B], noRootCommit, () => st(1, 42))
+    expect(ids.get(B)).not.toBe("oldA")
   })
 
   it("普通改名（老路径整个消失、原路径没有新仓库）→ 行为与改造前完全一致", async () => {

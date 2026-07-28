@@ -397,9 +397,11 @@ describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）",
     const b = track(createBackend(o))
     await b.start()
 
-    // 等启动扫描（force=true 的第一轮）落定，再装间谍——否则启动那一次的 setRoots 会被误数进来
+    // 等启动扫描（force=true 的第一轮）落定，再装间谍——否则启动那一次的 setRoots 会被误数进来。
+    // 轮询预算按 vitest 的 testTimeout（30s）走而不是写死 3 秒：CI 负载高时启动扫描要跑真 git，
+    // 3 秒会变成一条偶发红线，而超时本来就有兜底、把预算调大不会让真正的失败变慢多少
     let last: string | null = null
-    for (let i = 0; i < 60 && last === null; i++) {
+    for (let i = 0; i < 500 && last === null; i++) {
       await new Promise((r) => setTimeout(r, 50))
       const s = (await (await fetch(`http://127.0.0.1:${b.port}/api/scan`)).json()) as { lastScanAt: string | null }
       last = s.lastScanAt
@@ -408,24 +410,27 @@ describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）",
 
     const setRootsSpy = vi.spyOn(RepoWatcher.prototype, "setRoots")
     const setReposSpy = vi.spyOn(RepoWatcher.prototype, "setRepos")
+    // try/finally：下面任何一条断言抛出都会跳过 mockRestore，把 RepoWatcher.prototype 上的
+    // 间谍泄漏给同文件后续用例——一条失败会连带诬告一批无关用例，排查起来比原始失败还难
+    try {
+      // 手动点「重扫」：force=false，本任务的性能收益所在——只该改映射表，不该碰句柄
+      await fetch(`http://127.0.0.1:${b.port}/api/scan`, { method: "POST" })
+      expect(setReposSpy).toHaveBeenCalled()
+      expect(setRootsSpy).not.toHaveBeenCalled()
 
-    // 手动点「重扫」：force=false，本任务的性能收益所在——只该改映射表，不该碰句柄
-    await fetch(`http://127.0.0.1:${b.port}/api/scan`, { method: "POST" })
-    expect(setReposSpy).toHaveBeenCalled()
-    expect(setRootsSpy).not.toHaveBeenCalled()
-
-    // 新建项目：服务端自己刚往磁盘上添了一个仓库，走 rescanFresh（force=true），
-    // 与结构变化触发的重扫收尾走的是同一段代码
-    const res = await fetch(`http://127.0.0.1:${b.port}/api/new-project`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ parent: root, name: "new-repo" }),
-    })
-    expect(res.status).toBe(200) // 前提：创建必须成功，否则不会走到 rescanFresh，下面的断言就没有意义
-    expect(setRootsSpy).toHaveBeenCalled()
-
-    setRootsSpy.mockRestore()
-    setReposSpy.mockRestore()
+      // 新建项目：服务端自己刚往磁盘上添了一个仓库，走 rescanFresh（force=true），
+      // 与结构变化触发的重扫收尾走的是同一段代码
+      const res = await fetch(`http://127.0.0.1:${b.port}/api/new-project`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parent: root, name: "new-repo" }),
+      })
+      expect(res.status).toBe(200) // 前提：创建必须成功，否则不会走到 rescanFresh，下面的断言就没有意义
+      expect(setRootsSpy).toHaveBeenCalled()
+    } finally {
+      setRootsSpy.mockRestore()
+      setReposSpy.mockRestore()
+    }
   })
 })
 

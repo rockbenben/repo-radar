@@ -59,6 +59,16 @@ const isIdentityEntry = (v: unknown): v is IdentityEntry =>
  *  正是本模块要消灭的后果 */
 const genOf = (e: IdentityEntry): number => (Number.isInteger(e.gen) ? e.gen : 0)
 
+/**
+ * 「这条账本条目属于**上一轮**」——认领与搬家判定共用的同轮次窗口。
+ *
+ * `currentGen > 1` 不是多余的：坏值当 0 的安全性论证在「**所有**条目的 gen 都非法」时恰好
+ * 反转。那时 maxGen = 0 ⇒ currentGen = 1 ⇒ genOf(e) === 0 === currentGen - 1，于是每一条
+ * 陈旧条目都在同一轮里变成可认领，把这个窗口本来要关掉的跨 clone 认错身份的口子重新打开。
+ * 而「所有 gen 都非法」不是假想：从加 gen 之前的版本升上来的账本正好长这样。
+ */
+const isPrevGen = (e: IdentityEntry, currentGen: number): boolean => currentGen > 1 && genOf(e) === currentGen - 1
+
 /** 路径键的归一化。Windows 路径大小写不敏感，且同一目录可能以不同大小写出现，
  *  不归一化会让「D:\Repo」和「d:\repo」在账本里变成两个仓库。
  *  非 Windows 上大小写是有意义的（同名不同壳是两个真实目录），只折分隔符 */
@@ -249,7 +259,7 @@ export class IdentityLedger {
         liveKey(p) !== null && // 现在 stat 不出来 / ino 不可用：无从判断，别动
         liveKey(p) !== oldKey && // 记的与现在对不上
         // 与认领同一个窗口：ino 会被文件系统回收，隔了轮次的「相等」不可信（见 IdentityEntry.gen）
-        genOf(e) === currentGen - 1
+        isPrevGen(e, currentGen)
       if (moved) {
         out.set(target!, id) // 身份跟着 (dev,ino) 走
         movedAway.push(p)
@@ -267,7 +277,7 @@ export class IdentityLedger {
     // 为什么必须收到一轮，见 IdentityEntry.gen
     const lostIds: string[] = []
     for (const [id, e] of before) {
-      if (genOf(e) === currentGen - 1 && !livePaths.has(normalizePath(e.path))) lostIds.push(id)
+      if (isPrevGen(e, currentGen) && !livePaths.has(normalizePath(e.path))) lostIds.push(id)
     }
 
     const computedRoot = new Map<string, string | null>() // 本轮为认领算出的根提交，回写账本时复用
@@ -369,12 +379,6 @@ export class IdentityLedger {
   /** 某个 id 的账本条目（只读查看：上次见到的路径、判据值、代） */
   get(id: string): IdentityEntry | undefined {
     return this.store.get(id)
-  }
-
-  /** 记下某个仓库的根提交（算过一次就存着，之后不必重算） */
-  setRootCommit(id: string, rootCommit: string | null): void {
-    const e = this.store.get(id)
-    if (e) this.store.set(id, { ...e, rootCommit })
   }
 
   /** 年龄护栏及其理由在 JsonStore.pruneStale 里。对账本而言它尤其要命：条目一剪，
