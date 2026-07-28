@@ -600,48 +600,105 @@ export async function getRepoCore(path: string): Promise<RepoCore> {
   return { branch: parsed.branch, dirty: parsed.dirty, ahead: parsed.ahead, behind: parsed.behind, oid: parsed.oid }
 }
 
-/** 至多 6 个 git 进程，全部并发。branch 由 core 传入，用于剔除 mergedBranches 里的当前分支 */
-export async function getRepoHeavy(path: string, branch: string | null): Promise<RepoHeavy> {
+/**
+ * getRepoHeavy 的返回值。**heavy 与 degraded 必须一起走**，不能只返回 heavy。
+ *
+ * 六个子命令各自 catch 并填一个默认值（`[]` / `null` / `0`），于是「这个仓库真的没有远程」
+ * 与「`git remote -v` 这一次 spawn 失败/被杀软锁住/在网络盘上超时了」在返回值里长得一模一样。
+ * 调用方分不清，就会把降级结果连同当前指纹写进 `repo-cache.json`——而指纹是 `.git` 的 stat
+ * 快照，仓库没动它就不变，于是此后**每一轮**都命中这条坏缓存：卡片红着「没有远程仓库」、
+ * GitHub 描述与 PR/CI 收件箱被清空、`githubTargets` 把这个仓库整个过滤掉再也不去拉、
+ * 从远程推导的 displayName 也没了。点重扫不管用，重启也不管用（坏条目在磁盘上，还有 30 天
+ * 年龄护栏）。改造前 `getRepoStatus` 每轮重算，同样的临时失败一个周期内自愈。
+ */
+export interface RepoHeavyResult {
+  heavy: RepoHeavy
+  /** 本次结果里至少有一个字段是失败后填的默认值，不是仓库的真实状态。
+   *  照常返回给本轮使用（有总比没有强），但**绝不能固化进指纹缓存** */
+  degraded: boolean
+}
+
+/**
+ * 至多 6 个 git 进程，全部并发。
+ *
+ * 需要 core 而不只是 branch：branch 用于剔除 mergedBranches 里的当前分支，**oid 用于区分
+ * 「正当的空结果」与「真降级」**。这条边界做错会引入新 bug，两个方向都错得很实在：
+ *  · 把正当空结果判成降级 → 每个空仓库/无 tag 仓库**永远无法缓存**，每轮付全价；
+ *  · 把真降级判成正当结果 → 就是上面 RepoHeavyResult 描述的那条坏缓存。
+ *
+ * 判据取 `core.oid === null`（即 `status --porcelain=v2 --branch` 报的 `# branch.oid (initial)`）
+ * 而不是匹配 stderr 文案：本机 git 2.48 实测，无提交的仓库里 `log -1` 报
+ * 「does not have any commits yet」、`branch --merged` 报「malformed object name HEAD」——
+ * 两句都会随 git 版本和 locale 变，而 branch.oid 是机器可读的稳定契约。
+ *
+ * 其余三个子命令没有「正当失败」：无 stash / 无 tag / 无远程时 git 都是 0 退出 + 空输出
+ * （已实测），因此它们只要抛就是真降级。
+ */
+export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" | "oid">): Promise<RepoHeavyResult> {
+  const { branch } = core
+  const hasCommits = core.oid !== null
+  let degraded = false
+  /** 「这个值是失败后填的默认值」——原样返回给本轮用，但打上标记，别让调用方拿去固化 */
+  const degrade = <T>(fallback: T): T => {
+    degraded = true
+    return fallback
+  }
   const [stashInfo, release, remotes, lastCommit, mergedRaw] = await Promise.all([
-    // stash 条数 + 最老一条的时间（list 新→旧，最老在末行）——「搁了多久」提醒用
+    // stash 条数 + 最老一条的时间（list 新→旧，最老在末行）——「搁了多久」提醒用。
+    // 无 stash 时 0 退出 + 空输出，所以抛出一律是真失败
     runGit(path, ["stash", "list", "--format=%cI"])
       .then((r) => {
         const lines = splitLines(r)
         return { count: lines.length, oldest: lines.length > 0 ? lines[lines.length - 1] : null }
       })
-      .catch(() => ({ count: 0, oldest: null as string | null })),
+      .catch(() => degrade({ count: 0, oldest: null as string | null })),
     // 发版雷达：按「创建时间」取全库最新 tag（annotated 记打 tag 的时间、lightweight 记提交时间）。
     // 不用 describe——它只找 HEAD 可达的最近 tag，会漏掉未合并分支上刚发的版、日期也会错拿提交时间。
     // 计数用 HEAD --not --tags（HEAD 上不被任何 tag 覆盖的提交）：即便最新 tag 不是 HEAD 的祖先
     // （比如在老维护分支上补发 v1.0.1），也不会把 merge-base 以来的所有提交都算成「未发版」。
     (async () => {
+      let r: GitResult
       try {
-        const r = await runGit(path, ["for-each-ref", "refs/tags", "--sort=-creatordate", "--count=1", "--format=%(refname:short)%00%(creatordate:iso-strict)"])
-        const [tag, tagDate] = r.stdout.trim().split("\0")
-        if (!tag) return null
+        r = await runGit(path, ["for-each-ref", "refs/tags", "--sort=-creatordate", "--count=1", "--format=%(refname:short)%00%(creatordate:iso-strict)"])
+      } catch {
+        return degrade(null) // for-each-ref 连列都列不出来 = 真失败
+      }
+      const [tag, tagDate] = r.stdout.trim().split("\0")
+      // 从未打过 tag：for-each-ref 0 退出 + 空输出，这是**正确答案**而不是失败。
+      // 判成降级的话，所有还没发过版的仓库（新项目的常态）永远缓存不上，每轮全价
+      if (!tag) return null
+      try {
         const aheadR = await runGit(path, ["rev-list", "--count", "HEAD", "--not", "--tags"])
         return { tag, ahead: Number(aheadR.stdout.trim()) || 0, tagDate: tagDate ?? "" }
       } catch {
-        return null
+        // 有 tag 却数不出「未发版提交数」：唯一正当的情形是 HEAD 还没有提交（孤儿分支上打过 tag），
+        // 其余都是真失败。宁可整条 release 返 null，也不要编一个 ahead=0 显示到发版雷达上
+        return hasCommits ? degrade(null) : null
       }
     })(),
-    runGit(path, ["remote", "-v"]).then((r) => parseRemotes(r.stdout)).catch(() => []),
+    // 无远程时 0 退出 + 空输出，所以抛出一律是真失败——这正是 H2 里那条坏缓存的入口
+    runGit(path, ["remote", "-v"]).then((r) => parseRemotes(r.stdout)).catch(() => degrade([] as RemoteInfo[])),
     runGit(path, ["log", "-1", "--format=%H%x00%s%x00%an%x00%aI"])
       .then((r) => parseLastCommit(r.stdout))
-      .catch(() => null), // 空仓库无 HEAD 时 git log 非零退出
+      // 空仓库无 HEAD 时 git log 非零退出，那是「还没有提交」这个正确答案；有提交却读不出来才是降级
+      .catch(() => (hasCommits ? degrade(null) : null)),
     // --format 必须在 --merged 之前：否则 git 会把 --format=… 当成 --merged 的 commit 参数而报错
     runGit(path, ["branch", "--format=%(refname:short)", "--merged"])
       .then((r) => r.stdout.split("\n").map((s) => s.trim()).filter(Boolean))
-      .catch(() => []),
+      // 同上：无 HEAD 时 --merged 无从解析（实测 fatal: malformed object name HEAD），是正当空结果
+      .catch(() => (hasCommits ? degrade([] as string[]) : [])),
   ])
   return {
-    stashCount: stashInfo.count,
-    stashOldest: stashInfo.oldest,
-    release,
-    remotes,
-    lastCommit,
-    // 可安全清理的已合并分支：排除当前分支与主干（main/master）
-    mergedBranches: mergedRaw.filter((b) => b !== branch && b !== "main" && b !== "master"),
+    heavy: {
+      stashCount: stashInfo.count,
+      stashOldest: stashInfo.oldest,
+      release,
+      remotes,
+      lastCommit,
+      // 可安全清理的已合并分支：排除当前分支与主干（main/master）
+      mergedBranches: mergedRaw.filter((b) => b !== branch && b !== "main" && b !== "master"),
+    },
+    degraded,
   }
 }
 
@@ -690,6 +747,7 @@ export function composeStatus(path: string, id: string, core: RepoCore, heavy: R
 /** 完整刷新（core + heavy）。id 可由调用方指定——身份账本认领后，仓库沿用老 id 而不是按新路径重算 */
 export async function getRepoStatus(path: string, id: string = repoId(path)): Promise<RepoStatus> {
   const core = await getRepoCore(path)
-  const heavy = await getRepoHeavy(path, core.branch)
+  // 这条路径不落盘任何东西，降级与否只影响「要不要写缓存」，这里丢掉它即可（旧行为不变）
+  const { heavy } = await getRepoHeavy(path, core)
   return composeStatus(path, id, core, heavy)
 }

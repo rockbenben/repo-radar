@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import type { Config } from "../src/config"
 import { DEFAULT_CONFIG } from "../src/config"
-import type { RepoCore, RepoHeavy } from "../src/git"
+import type { RepoCore, RepoHeavy, RepoHeavyResult } from "../src/git"
 
 // 全量扫描是逐仓库增量读的：仓库扫完之后、整轮收尾之前，用户可能已经 commit，
 // refreshOne（文件监听触发）拿到的才是新状态。收尾若用本轮快照整份覆盖，看板会凭空
@@ -11,7 +11,7 @@ import type { RepoCore, RepoHeavy } from "../src/git"
 // mock core 就足以控制 dirty 计数、且能复现「core 挂起」的交错时机；heavy 给个恒定值即可。
 const gitMock = vi.hoisted(() => ({
   getRepoCore: vi.fn<(path: string) => Promise<RepoCore>>(),
-  getRepoHeavy: vi.fn<(path: string, branch: string | null) => Promise<RepoHeavy>>(),
+  getRepoHeavy: vi.fn<(path: string, core: Pick<RepoCore, "branch" | "oid">) => Promise<RepoHeavyResult>>(),
 }))
 vi.mock("../src/git", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/git")>()),
@@ -47,7 +47,7 @@ const HEAVY: RepoHeavy = {
   lastCommit: null,
   mergedBranches: [],
 }
-gitMock.getRepoHeavy.mockResolvedValue(HEAVY) // 全文件恒定；这组测试只关心 core 带来的 dirty 计数
+gitMock.getRepoHeavy.mockResolvedValue({ heavy: HEAVY, degraded: false }) // 全文件恒定；这组测试只关心 core 带来的 dirty 计数
 
 const cfg = (): Config => ({ ...structuredClone(DEFAULT_CONFIG), manualRepos: [REPO] })
 

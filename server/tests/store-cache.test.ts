@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it, vi } from "vitest"
@@ -115,11 +115,81 @@ describe("RepoStore 指纹缓存", () => {
     const core = await git.getRepoCore(repo)
     const fp = gitFingerprint(repo, core.oid)
     expect(fp).not.toBeNull()
-    const real = await git.getRepoHeavy(repo, core.branch)
+    const { heavy: real } = await git.getRepoHeavy(repo, core)
     cache.set(first.id, fp!, { ...real, stashCount: 99 }) // 指纹保持当前值，内容故意作废
 
     expect((await store.refreshOne(first.id))?.stashCount).toBe(99) // 命中投毒：证明缓存确实生效
     expect((await store.refreshOne(first.id, { skipCache: true }))?.stashCount).toBe(0) // 绕开它
+    cache.flush()
+  })
+
+  /**
+   * 降级结果绝不能固化。改造前 `refreshRepo` 拿到什么就写什么，而 `getRepoHeavy` 对每个
+   * 子命令**单独** catch 并塞默认值——于是「这个仓库真的没有 stash / 没有远程」与
+   * 「那条子命令这一次失败了」在返回值里长得一模一样。写进缓存之后指纹还匹配（`.git` 里
+   * 什么都没变），此后每一轮都命中这条坏条目：点重扫不管用，重启也不管用。
+   */
+  it("git 子命令真失败时不写缓存，修好之后照常写（H2 回归）", async () => {
+    const repo = makeRepo()
+    // refs/stash 指向不存在的对象：`git stash list` 真的非零退出，而 core 的 status 照常成功
+    const stashRef = join(repo, ".git", "refs", "stash")
+    mkdirSync(join(repo, ".git", "refs"), { recursive: true })
+    writeFileSync(stashRef, `${"de".repeat(20)}\n`)
+
+    const cfg = { ...DEFAULT_CONFIG, manualRepos: [repo] }
+    const cache = new RepoCache(cacheFile())
+    const store = new RepoStore(() => cfg, undefined, undefined, cache)
+    const first = (await store.refreshAll())[0]
+    expect(first.error).toBeNull() // 本轮照常出卡片，只是结果是降级的
+
+    const core = await git.getRepoCore(repo)
+    const fp = gitFingerprint(repo, core.oid)
+    expect(fp).not.toBeNull()
+    expect(cache.get(first.id, fp!)).toBeNull() // 降级结果没有被固化
+
+    // 故障消失后必须恢复正常缓存，否则这个仓库就永远全价了
+    rmSync(stashRef)
+    await store.refreshAll()
+    const fp2 = gitFingerprint(repo, (await git.getRepoCore(repo)).oid)
+    expect(cache.get(first.id, fp2!)).not.toBeNull()
+    cache.flush()
+  })
+
+  /**
+   * 反方向同样是 bug：空仓库上 `git log -1` / `git branch --merged` 非零退出是
+   * 「还没有提交」这个**正确答案**，不是失败。把它判成降级的话，每个空仓库都永远缓存不上，
+   * 每轮付全价——正是这套缓存要省掉的那笔开销。
+   */
+  it("空仓库（无 HEAD）的正当空结果照常写缓存，不退化成每轮全价（H2 反向）", async () => {
+    const repo = makeRepo({ commits: 0 })
+    const cfg = { ...DEFAULT_CONFIG, manualRepos: [repo] }
+    const cache = new RepoCache(cacheFile())
+    const store = new RepoStore(() => cfg, undefined, undefined, cache)
+    const first = (await store.refreshAll())[0]
+
+    const core = await git.getRepoCore(repo)
+    expect(core.oid).toBeNull() // 确实是空仓库
+    const fp = gitFingerprint(repo, core.oid)
+    expect(cache.get(first.id, fp!)).not.toBeNull() // 缓存写下去了
+
+    // 行为面上的钉子：第二轮必须命中，一个 heavy 都不再跑
+    const spy = vi.spyOn(git, "getRepoHeavy")
+    await store.refreshAll()
+    expect(spy.mock.calls.length).toBe(0)
+    spy.mockRestore()
+    cache.flush()
+  })
+
+  // 无 tag 是新项目的常态，同样不能因此每轮全价（for-each-ref 是 0 退出 + 空输出）
+  it("从未打过 tag 的仓库照常写缓存（H2 反向）", async () => {
+    const repo = makeRepo()
+    const cfg = { ...DEFAULT_CONFIG, manualRepos: [repo] }
+    const cache = new RepoCache(cacheFile())
+    const store = new RepoStore(() => cfg, undefined, undefined, cache)
+    const first = (await store.refreshAll())[0]
+    expect(first.release).toBeNull()
+    const fp = gitFingerprint(repo, (await git.getRepoCore(repo)).oid)
+    expect(cache.get(first.id, fp!)).not.toBeNull()
     cache.flush()
   })
 

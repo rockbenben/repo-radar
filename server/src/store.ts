@@ -113,8 +113,12 @@ export class RepoStore {
     // skipCache 只跳过**读**，仍然照常写回：刚算出来的这份是最新的，下一轮重扫理应命中它
     const cached = skipCache ? null : (this.cache?.get(id, fp) ?? null)
     if (cached) return composeStatus(path, id, core, cached)
-    const heavy = await getRepoHeavy(path, core.branch)
-    if (fp !== null) this.cache?.set(id, fp, heavy)
+    const { heavy, degraded } = await getRepoHeavy(path, core)
+    // 降级结果本轮照常用，但**绝不落盘**。写进去就等于把一次瞬时失败（spawn 失败、杀软锁、
+    // 网络盘上 30 秒超时）永久固化：指纹是 `.git` 的 stat 快照，仓库不动它就不变，
+    // 此后每一轮都命中这条坏条目，点重扫、重启都不管用（坏条目在磁盘上，还有 30 天年龄护栏）。
+    // 详见 RepoHeavyResult 的注释
+    if (fp !== null && !degraded) this.cache?.set(id, fp, heavy)
     return composeStatus(path, id, core, heavy)
   }
 
