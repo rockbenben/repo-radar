@@ -15,6 +15,7 @@ describe("parseStatus", () => {
       ahead: 2,
       behind: 1,
       dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
+      oid: "1234567890abcdef",
     })
   })
 
@@ -77,5 +78,24 @@ describe("parseLastCommit", () => {
 
   it("returns null for empty output", () => {
     expect(parseLastCommit("")).toBeNull()
+  })
+})
+
+describe("parseStatus — branch.oid", () => {
+  it("解析出 HEAD 的 oid", () => {
+    const out = [
+      "# branch.oid 1234567890abcdef1234567890abcdef12345678",
+      "# branch.head main",
+      "# branch.ab +0 -0",
+    ].join("\n")
+    expect(parseStatus(out).oid).toBe("1234567890abcdef1234567890abcdef12345678")
+  })
+
+  it("空仓库的 (initial) 按缺失处理", () => {
+    expect(parseStatus("# branch.oid (initial)\n# branch.head main").oid).toBeNull()
+  })
+
+  it("没有 branch.oid 行时为 null", () => {
+    expect(parseStatus("# branch.head main").oid).toBeNull()
   })
 })

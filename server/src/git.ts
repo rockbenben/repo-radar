@@ -96,15 +96,23 @@ export interface ParsedStatus {
   ahead: number
   behind: number
   dirty: DirtyCounts
+  // HEAD 的 commit oid。git 一直在 `--branch` 的输出里给这一行，以前没解析。
+  // 指纹要用它判断「这个仓库自上轮以来有没有新提交」——白拿，不增加任何 git 调用。
+  // 空仓库输出 `# branch.oid (initial)`，按 null 处理
+  oid: string | null
 }
 
 export function parseStatus(out: string): ParsedStatus {
   let branch: string | null = null
   let ahead = -1
   let behind = -1
+  let oid: string | null = null
   const dirty: DirtyCounts = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 }
   for (const line of out.split("\n")) {
-    if (line.startsWith("# branch.head ")) {
+    if (line.startsWith("# branch.oid ")) {
+      const v = line.slice("# branch.oid ".length).trim()
+      oid = v === "(initial)" ? null : v
+    } else if (line.startsWith("# branch.head ")) {
       const head = line.slice("# branch.head ".length)
       branch = head === "(detached)" ? null : head
     } else if (line.startsWith("# branch.ab ")) {
@@ -123,7 +131,7 @@ export function parseStatus(out: string): ParsedStatus {
       dirty.untracked++
     }
   }
-  return { branch, ahead, behind, dirty }
+  return { branch, ahead, behind, dirty, oid }
 }
 
 export function parseRemotes(out: string): RemoteInfo[] {
