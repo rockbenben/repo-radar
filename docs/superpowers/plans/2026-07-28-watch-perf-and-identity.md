@@ -31,6 +31,7 @@
 | `server/src/fingerprint.ts` | `.git` 指纹计算，纯函数 + `statSync` | 新建 |
 | `server/src/repo-cache.ts` | 指纹 → heavy 结果的落盘缓存 | 新建 |
 | `server/src/repo-identity.ts` | 身份账本 + 认领算法（`matchClaims` 为纯函数） | 新建 |
+| `server/src/watch-filter.ts` | `IGNORED_DIRS` / `shouldIgnorePath` / `watcherErrorIsNoise` / `samePath`，从 `watcher.ts` 原样搬出，拆掉 watcher ↔ strategy 的循环依赖 | 新建 |
 | `server/src/watch-strategy.ts` | `RecursiveRootStrategy` / `PerRepoStrategy` 两个监听策略 | 新建 |
 | `server/src/watcher.ts` | 归属映射 + 防抖/冷却/串行链，监听机制委托给策略 | 重写 |
 | `server/src/git.ts` | 拆出 `getRepoCore` / `getRepoHeavy`；`parseStatus` 增解析 `branch.oid` | 修改 |
@@ -50,7 +51,9 @@
 - Modify: `server/src/inbox-cache.ts`（整体重写为基于底座）
 
 **Interfaces:**
-- Produces: `class JsonStore<T>`，构造参数 `{ file: string; isValid: (v: unknown) => v is T; debounceMs?: number }`；方法 `get(key): T | undefined`、`set(key, value): void`、`delete(key): boolean`、`entries(): [string, T][]`、`flush(): void`。Task 4、5 直接复用。
+- Produces: `class JsonStore<T>`，构造参数 `{ file: string; isValid: (v: unknown) => v is T; debounceMs?: number }`；方法 `get(key): T | undefined`、`set(key, value): void`、`delete(key): boolean`、`entries(): [string, T][]`、`pruneStale(keepIds: Set<string>, timestampOf: (v: T) => string, maxAgeMs?: number): void`、`flush(): void`。Task 4、5 直接复用。
+
+**`pruneStale` 必须在底座里，不能让四个使用者各写一遍。** 四份逐字相同的剪枝循环（含那条 30 天年龄护栏和解释它为什么存在的注释）正是本任务要消灭的东西；各写各的迟早走样，而走样的那一份会静默地把某个缓存剪成空的。四个使用者的差别只有「时间戳字段叫什么」（`fetchedAt` / `seenAt`），用一个取值函数就够了。
 - Consumes: 无。
 
 **为什么先做这个**：本轮要新增 `repo-cache.json` 与 `repo-identity.json`，加上已有的 `github-desc.json`、`github-inbox.json` 就是四个逐行雷同的文件（`desc-cache.ts` 86 行、`inbox-cache.ts` 99 行）。先抽底座再往上盖，能立刻用两个现成的使用者验证底座 API 够不够用——如果 `DescCache` 的「每次 set 立即落盘」和 `InboxCache` 的「防抖 1 秒 + flush」不能用同一套表达，现在就会暴露。
@@ -66,7 +69,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { JsonStore } from "../src/json-store"
 
-interface Entry { v: number }
+interface Entry { v: number; at?: string }
 const isEntry = (x: unknown): x is Entry =>
   typeof x === "object" && x !== null && typeof (x as Entry).v === "number"
 
@@ -134,6 +137,33 @@ describe("JsonStore", () => {
     expect(s.delete("k")).toBe(true)
     expect(s.delete("k")).toBe(false)
     expect(new JsonStore<Entry>({ file, isValid: isEntry }).entries()).toEqual([])
+  })
+
+  it("pruneStale：不在保留集合、且已过年龄护栏的条目被剪掉", () => {
+    const s = new JsonStore<Entry>({ file: tmpFile(), isValid: isEntry })
+    const old = new Date(Date.now() - 40 * 86_400_000).toISOString()
+    s.set("keep-in-set", { v: 1, at: old })
+    s.set("keep-young", { v: 2, at: new Date().toISOString() })
+    s.set("drop", { v: 3, at: old })
+    s.pruneStale(new Set(["keep-in-set"]), (e) => e.at ?? "")
+    expect(s.entries().map(([k]) => k).sort()).toEqual(["keep-in-set", "keep-young"])
+  })
+
+  // 年龄护栏：网络盘根目录瞬时掉线会让一整批仓库在某轮扫描里消失，
+  // 立即剪会把它们的落盘数据永久抹掉
+  it("pruneStale：刚写入的条目即使不在保留集合里也不剪", () => {
+    const s = new JsonStore<Entry>({ file: tmpFile(), isValid: isEntry })
+    s.set("gone", { v: 1, at: new Date().toISOString() })
+    s.pruneStale(new Set(), (e) => e.at ?? "")
+    expect(s.entries().length).toBe(1)
+  })
+
+  // 时间戳损坏不能让条目永久赖着不走：NaN 一律视为已过期
+  it("pruneStale：时间戳非法的条目按已过期处理", () => {
+    const s = new JsonStore<Entry>({ file: tmpFile(), isValid: isEntry })
+    s.set("bad", { v: 1, at: "not-a-date" })
+    s.pruneStale(new Set(), (e) => e.at ?? "")
+    expect(s.entries()).toEqual([])
   })
 
   it("没有待写内容时 flush 不写盘（不产生文件）", () => {
@@ -245,6 +275,26 @@ export class JsonStore<T> {
     return [...this.map]
   }
 
+  /**
+   * 扫描后剪枝：剪掉「不在 keepIds 里、且已超过 maxAgeMs 没被刷新」的条目，防无界增长。
+   *
+   * 年龄护栏不是可选的。网络盘根目录瞬时掉线会让一整批仓库在某轮扫描里消失，
+   * 立即剪会把它们的落盘数据永久抹掉——对身份账本尤其致命：条目一剪，那批仓库回来时
+   * 会被当成全新仓库，标签/收藏/归档全丢，正是本轮要消灭的行为。真删掉的仓库不再刷新，
+   * 30 天后自然过筛。
+   *
+   * timestampOf 让各使用者指定自己的时间戳字段（fetchedAt / seenAt）。非法时间戳按已过期
+   * 处理——否则 NaN 比较恒为 false，坏条目会永久赖着不走。
+   */
+  pruneStale(keepIds: Set<string>, timestampOf: (v: T) => string, maxAgeMs = 30 * 86_400_000): void {
+    const now = Date.now()
+    for (const [key, v] of this.map) {
+      if (keepIds.has(key)) continue
+      const at = new Date(timestampOf(v)).getTime()
+      if (Number.isNaN(at) || now - at > maxAgeMs) this.delete(key)
+    }
+  }
+
   /** 立刻把待写内容落盘。退出路径专用——防抖窗口内硬退会丢掉最后一批写入 */
   flush(): void {
     if (this.timer) {
@@ -314,18 +364,10 @@ export class DescCache {
     this.store.set(id, { description, url, fetchedAt: new Date().toISOString() })
   }
 
-  /**
-   * 扫描后调用：剪掉「不在本轮扫描里、且已 30 天没刷新」的条目，防缓存无界增长。
-   * 必须带年龄护栏——网络盘根目录瞬时掉线会让一整批仓库在某轮扫描里消失，
-   * 立即剪会把它们的落盘缓存永久抹掉；真删掉的仓库不再刷新，30 天后自然过筛。
-   */
+  /** 扫描后调用。剪枝逻辑连同那条 30 天年龄护栏及其理由都在 JsonStore.pruneStale 里，
+   *  这里只负责指出本缓存的时间戳字段——四个缓存各写一遍迟早走样 */
   prune(keepIds: Set<string>, maxAgeMs = 30 * 86_400_000): void {
-    const now = Date.now()
-    for (const [id, e] of this.store.entries()) {
-      if (keepIds.has(id)) continue
-      const at = new Date(e.fetchedAt).getTime()
-      if (Number.isNaN(at) || now - at > maxAgeMs) this.store.delete(id)
-    }
+    this.store.pruneStale(keepIds, (e) => e.fetchedAt, maxAgeMs)
   }
 }
 ```
@@ -384,18 +426,10 @@ export class InboxCache {
     this.store.set(id, { inbox, url, fetchedAt: new Date().toISOString() })
   }
 
-  /**
-   * 扫描后调用：剪掉「不在本轮扫描里、且已 30 天没刷新」的条目，防缓存无界增长。
-   * 必须带年龄护栏——网络盘根目录瞬时掉线会让一整批仓库在某轮扫描里消失，
-   * 立即剪会把它们的落盘缓存永久抹掉；真删掉的仓库不再刷新，30 天后自然过筛。
-   */
+  /** 扫描后调用。剪枝逻辑连同那条 30 天年龄护栏及其理由都在 JsonStore.pruneStale 里，
+   *  这里只负责指出本缓存的时间戳字段——四个缓存各写一遍迟早走样 */
   prune(keepIds: Set<string>, maxAgeMs = 30 * 86_400_000): void {
-    const now = Date.now()
-    for (const [id, e] of this.store.entries()) {
-      if (keepIds.has(id)) continue
-      const at = new Date(e.fetchedAt).getTime()
-      if (Number.isNaN(at) || now - at > maxAgeMs) this.store.delete(id)
-    }
+    this.store.pruneStale(keepIds, (e) => e.fetchedAt, maxAgeMs)
   }
 }
 ```
@@ -1010,15 +1044,9 @@ export class RepoCache {
     this.store.set(id, { fingerprint, heavy, seenAt: new Date().toISOString() })
   }
 
-  /** 扫描后调用。年龄护栏的理由与 desc-cache 相同：网络盘瞬时掉线会让一整批仓库
-   *  在某轮扫描里消失，立即剪会把它们的缓存永久抹掉（下次回来又要付全价重算） */
+  /** 扫描后调用。年龄护栏及其理由在 JsonStore.pruneStale 里，这里只指定时间戳字段 */
   prune(keepIds: Set<string>, maxAgeMs = 30 * 86_400_000): void {
-    const now = Date.now()
-    for (const [id, e] of this.store.entries()) {
-      if (keepIds.has(id)) continue
-      const at = new Date(e.seenAt).getTime()
-      if (Number.isNaN(at) || now - at > maxAgeMs) this.store.delete(id)
-    }
+    this.store.pruneStale(keepIds, (e) => e.seenAt, maxAgeMs)
   }
 
   flush(): void {
@@ -1366,14 +1394,17 @@ describe("IdentityLedger", () => {
     expect(ids.get(b)).not.toBe(ids.get(a))
   })
 
-  it("删掉后新建同名目录 → ino 不同，铸造新 id，不继承旧身份", async () => {
+  // 路径命中即同一仓库，不再比对 ino。理由：「删掉重新 clone 同一个仓库到原路径」很常见
+  // （ino 会变），若因此作废身份，用户的标签/收藏/归档会莫名消失；而「删掉后在同一路径
+  // 新建一个无关仓库」罕见得多。路径命中就用老 id，也符合「这个文件夹就是我那个项目」的直觉
+  it("同一路径上 ino 变了（重新 clone / 从备份恢复）→ 仍是同一仓库，身份不变", async () => {
     const file = tmpFile()
     const p = join("D:", "p", "same-name")
     const led = new IdentityLedger(file)
     const before = (await led.resolve([p], noRootCommit, () => ({ dev: 1, ino: 1 }))).get(p)
-    // 路径没变但 ino 变了：这条路径在账本里已知，直接命中——不进认领流程
+    // 路径没变但 ino 变了：这条路径在账本里已知，直接命中——根本不进认领流程
     const after = (await led.resolve([p], noRootCommit, () => ({ dev: 1, ino: 2 }))).get(p)
-    expect(after).toBe(before) // 路径相同即同一仓库，这是正确且符合直觉的
+    expect(after).toBe(before)
   })
 
   it("stat 失败（仓库不可读）不影响其它仓库的解析", async () => {
@@ -1615,15 +1646,10 @@ export class IdentityLedger {
     if (e) this.store.set(id, { ...e, rootCommit })
   }
 
-  /** 年龄护栏同 desc-cache：网络盘瞬时掉线会让一整批仓库在某轮扫描里消失，
-   *  立即剪掉账本条目会让它们回来时被当成新仓库——那正是我们要避免的事 */
+  /** 年龄护栏及其理由在 JsonStore.pruneStale 里。对账本而言它尤其要命：条目一剪，
+   *  那批仓库回来时会被当成全新仓库，标签/收藏/归档全丢——正是本轮要消灭的行为 */
   prune(keepIds: Set<string>, maxAgeMs = 30 * 86_400_000): void {
-    const now = Date.now()
-    for (const [id, e] of this.store.entries()) {
-      if (keepIds.has(id)) continue
-      const at = new Date(e.seenAt).getTime()
-      if (Number.isNaN(at) || now - at > maxAgeMs) this.store.delete(id)
-    }
+    this.store.pruneStale(keepIds, (e) => e.seenAt, maxAgeMs)
     this.reindex()
   }
 
@@ -2020,7 +2046,7 @@ Expected: FAIL —— 模块不存在
 import { watch as chokidarWatch, type FSWatcher } from "chokidar"
 import { realpathSync, watch as fsWatch, type FSWatcher as NodeWatcher } from "node:fs"
 import { join, resolve } from "node:path"
-import { shouldIgnorePath } from "./watcher"
+import { shouldIgnorePath } from "./watch-filter"
 
 export interface WatchedRepo {
   id: string
@@ -2253,7 +2279,15 @@ Expected: FAIL —— `setRoots` / `setRepos` / `handleEventForTest` 不存在
 
 - [ ] **Step 7: 重写 `watcher.ts`**
 
-保留 `IGNORED_DIRS`、`shouldIgnorePath`、`watcherErrorIsNoise`、`samePath` 四段**逐字不动**（连注释一起），把 `RepoWatcher` 换成：
+**先拆过滤函数，再改 `RepoWatcher`。** 把 `IGNORED_DIRS`、`shouldIgnorePath`、`watcherErrorIsNoise`、`samePath` 四段**连注释逐字**移到新文件 `server/src/watch-filter.ts`——`watch-strategy.ts` 要用 `shouldIgnorePath`，而 `watcher.ts` 要用 `defaultStrategy`，不拆出来就是循环依赖。然后在 `watcher.ts` 顶部加一行再导出，保持现有测试的 import 路径不变：
+
+```ts
+export { shouldIgnorePath, watcherErrorIsNoise } from "./watch-filter"
+```
+
+`watch-strategy.ts` 里的 `import { shouldIgnorePath } from "./watcher"` 相应改成 `from "./watch-filter"`。
+
+然后把 `RepoWatcher` 换成：
 
 ```ts
 import { resolve } from "node:path"
@@ -2441,8 +2475,6 @@ export class RepoWatcher {
   }
 }
 ```
-
-**注意循环依赖**：`watch-strategy.ts` 从 `watcher.ts` import `shouldIgnorePath`，而 `watcher.ts` 从 `watch-strategy.ts` import 类型与 `defaultStrategy`。ESM 能处理这种循环，但为稳妥起见，把 `IGNORED_DIRS` / `shouldIgnorePath` / `watcherErrorIsNoise` / `samePath` 四段整体移到新文件 `server/src/watch-filter.ts`，两边都从它 import，并在 `watcher.ts` 里 `export { shouldIgnorePath, watcherErrorIsNoise } from "./watch-filter"` 以保持现有测试的 import 路径不变。
 
 - [ ] **Step 8: 运行 watcher 测试确认通过**
 
