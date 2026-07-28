@@ -4,9 +4,18 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
-import { createBackend, createStructureRescan, type Backend } from "../src/backend"
+import { createBackend, createRescanScheduler, createStructureRescan, type Backend } from "../src/backend"
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config"
 import { RepoWatcher } from "../src/watcher"
+
+/** 手动可控的 promise，精确摆出「上一轮还没结束/还没开跑」的时序——与 serial.test.ts 同一手法 */
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
 
 // 端口不能写死：除了「撞上本机正在跑的实例」，Windows 上还有更隐蔽的一种——Hyper-V/WSL2 的
 // WinNAT 会成段预留高位端口，落在区间里的端口 bind 直接 EACCES（本仓库这次的启动故障就是
@@ -353,5 +362,84 @@ describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）",
 
     setRootsSpy.mockRestore()
     setReposSpy.mockRestore()
+  })
+})
+
+// 评审 I1：force=true 的请求如果落在一个 force=false 轮次「已排队但还没开跑」的窗口里，
+// 旧写法会被那一轮悄悄吞掉——约束 A 从另一个口子漏回来（死句柄不再发任何事件，之后也不会
+// 再有信号来救它）。这里不需要真实的 backend/HTTP：SerialQueue.share 排的任务必然要等一个
+// 微任务才真正开跑（tail.then 的回调不会同步执行），所以两次同步的 trigger() 调用——不在
+// 中间 await 任何东西——就足以精确摆出「已排队未开跑」这个窗口，不需要 deferred/sleep
+describe("createRescanScheduler — force 与已排队轮次的交错（约束 A 的另一个漏洞）", () => {
+  it("force=true 落在一个 force=false 已排队未开跑的轮次上，那一轮仍按重建执行", async () => {
+    const calls: boolean[] = []
+    const scheduler = createRescanScheduler<string[]>({
+      run: async (rebuild) => {
+        calls.push(rebuild)
+        return []
+      },
+      scanTargets: () => "same",
+    })
+
+    const p1 = scheduler.trigger(false) // 排队但还没开跑：task 要等一个微任务才真正执行
+    const p2 = scheduler.trigger(true) // 同步紧跟着来一次 force=true
+    expect(p2).toBe(p1) // 确实共乘了同一轮——这是 bug 存在的前提，没被吞掉的话根本不会共乘
+
+    await p1
+    // 关键断言：共乘的这一轮必须按「重建」执行，而不是最初 force=false 排队时的样子
+    expect(calls).toEqual([true])
+  })
+
+  it("对照组：全程 force=false 时保持轻量，不会被误判成需要重建", async () => {
+    const calls: boolean[] = []
+    const scheduler = createRescanScheduler<string[]>({
+      run: async (rebuild) => {
+        calls.push(rebuild)
+        return []
+      },
+      scanTargets: () => "same",
+    })
+    const p1 = scheduler.trigger(false)
+    const p2 = scheduler.trigger(false)
+    expect(p2).toBe(p1)
+    await p1
+    expect(calls).toEqual([false])
+  })
+
+  it("force=true 已经排上队时，后来的 force=false 不能把它降级", async () => {
+    const calls: boolean[] = []
+    const scheduler = createRescanScheduler<string[]>({
+      run: async (rebuild) => {
+        calls.push(rebuild)
+        return []
+      },
+      scanTargets: () => "same",
+    })
+    const p1 = scheduler.trigger(true)
+    const p2 = scheduler.trigger(false) // 共乘同一轮，但不该冲掉前面已经置位的「必须重建」
+    expect(p2).toBe(p1)
+    await p1
+    expect(calls).toEqual([true])
+  })
+
+  it("进行中的一轮（非排队）：scanTargets 变化时另排新一轮，rebuild 仍按各自的 force 计算", async () => {
+    const calls: boolean[] = []
+    const gate = deferred<string[]>()
+    let target = "a"
+    const scheduler = createRescanScheduler<string[]>({
+      run: async (rebuild) => {
+        calls.push(rebuild)
+        return gate.promise
+      },
+      scanTargets: () => target,
+    })
+    const running = scheduler.trigger(false)
+    await new Promise((r) => setTimeout(r, 10)) // 让它真正开跑（进入 run，不再是「排队」状态）
+    target = "b" // 扫描目标变了：即便 force=false 也不该共乘进行中的这一轮
+    const p2 = scheduler.trigger(false)
+    expect(p2).not.toBe(running)
+    gate.resolve([])
+    await Promise.all([running, p2])
+    expect(calls).toEqual([false, false])
   })
 })

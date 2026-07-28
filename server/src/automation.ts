@@ -90,6 +90,13 @@ export function createAutomation(deps: AutomationDeps): Automation {
   // 本该监听的仓库数（非归档），与 watcher 是否真的挂上无关——即便监听整个关着，
   // 界面也该如实说「0 个中的 N 个」而不是「0 个中的 0 个」，后者会让人以为压根没有仓库
   let lastTotal = 0
+  // 上一次 applyWatch 是否有目标没建成（EMFILE 等瞬时故障——RecursiveRootStrategy.start
+  // 对单个 root/仓库的失败是内部吞掉的，不向上抛，只是不把它放进返回的 ok 列表；coveredRepoCount
+  // 比请求的名单短，是「有目标没建成」唯一测得到的信号）。applyWatchLogged 把这类错误咽掉时，
+  // 原先靠的是「下一轮扫描的 applyWatch 会重试」——本任务把周期路径收窄成 applyRepos 之后，
+  // 那句承诺不再自动成立，得由这个标志接手：periodic/手动重扫改走 applyRepos 了，但仍要有人
+  // 在「真的降级了」时补一次重挂，否则「配置说开着、监听其实没挂上」会一直装作正常
+  let watchDegraded = false
 
   /** 读-改-存单个配置字段。三个开关都是这个形状，抽出来免得落盘口径各写一遍 */
   function persist<K extends keyof Config>(key: K, value: Config[K]): void {
@@ -121,6 +128,7 @@ export function createAutomation(deps: AutomationDeps): Automation {
       // total 仍如实反映非归档仓库数：关掉监听不等于仓库消失，界面该说「0 个中的 N 个」
       // 而不是「0 个中的 0 个」——后者会让人以为压根没有仓库，无从判断是「关了」还是「没有」
       lastTotal = all.length
+      watchDegraded = false // 关掉是用户的意图，不是失败，没有什么需要补救
       await watcher.close()
       return
     }
@@ -145,6 +153,9 @@ export function createAutomation(deps: AutomationDeps): Automation {
       )
     }
     await watcher.setRoots(cfg.roots, chosen.map((r) => ({ id: r.id, path: r.path })))
+    // 比对的是 chosen（截断之后的名单），不是 all——watchLimit 造成的截断是预期内的短缺，
+    // 不该被当成「降级」反复触发重挂；真正的降级信号只能是「连本该建成的这些都没建全」
+    watchDegraded = watcher.coveredRepoCount() < chosen.length
   }
 
   /** 重扫后调用：只更新映射表，不建立/重建任何句柄。传入的是本次扫描到的全量仓库（含超出
@@ -154,6 +165,15 @@ export function createAutomation(deps: AutomationDeps): Automation {
     const all = repos.filter((r) => !r.archived)
     lastTotal = all.length
     watcher.setRepos(all.map((r) => ({ id: r.id, path: r.path })))
+    // 便宜的自愈：只有「上一次 applyWatch 真的有目标没建成」时才补一次重挂，且尊重用户当下的
+    // 开关状态（可能这期间已经手动关掉了监听）。绝大多数周期重扫这个分支根本不会进——
+    // 本任务省下来的那笔「每轮都重建」的开销不会因为这个兜底又搭进去，只有真正需要救的那一轮
+    // 才会付这笔重建的代价，且失败了也只是记日志、留到下一轮再试，不会抛出去打断这轮重扫
+    if (watchDegraded && loadConfig(configFile).autoWatch) {
+      void applyWatch(true, repos).catch((err) => {
+        log(`[repo-radar] 兜底重挂监听失败（上一次有监听目标没建成）：${err instanceof Error ? err.message : String(err)}`)
+      })
+    }
   }
 
   return {
@@ -163,8 +183,9 @@ export function createAutomation(deps: AutomationDeps): Automation {
 
     // 先落盘、再装监听：落盘成功后 applyWatch 才抛错（chokidar EMFILE 等）的情况不能
     // 让整个请求 500——磁盘上确实是新值，500 会让客户端回滚 UI，从此界面显示的和盘上
-    // 存的对不上，下轮重扫还会按盘上的值再试一次。与 PUT /api/config 同一取舍：
-    // 以磁盘为准，监听器错误记日志（下轮扫描的 applyWatch 自带重试）
+    // 存的对不上。与 PUT /api/config 同一取舍：以磁盘为准，监听器错误记日志——不会静默不了了之：
+    // applyWatch 内部会把「有目标没建成」记进 watchDegraded，下一轮重扫（周期定时器或手动点击，
+    // 走的是 applyRepos）会看到这个标志补一次便宜的重挂，不需要再等一轮完整的 applyWatch
     async setWatch(enabled) {
       persist("autoWatch", enabled)
       await applyWatchLogged(enabled)

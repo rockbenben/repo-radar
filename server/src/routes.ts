@@ -607,7 +607,9 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     // 逐字段与 prev 比对，只重装真变了的——存标签/备注或原值 round-trip 都不会动监听器。
     // 落盘成功后 applyWatch 才抛错（如 chokidar EMFILE）的情况不能整个 500：配置确实
     // 存上了、定时器也已生效，回 500 会让客户端以为没存上而重试/回滚 UI。以磁盘为准
-    // 返回 200，监听器错误进日志（下轮扫描的 applyWatch 还会重试挂监听）
+    // 返回 200，监听器错误进日志——不是就此不了了之：automation.ts 的 applyWatch 会把
+    // 「有目标没建成」记进 watchDegraded，下一轮重扫（走 applyRepos 的那条轻量路径）
+    // 会看到这个标志补一次便宜的重挂，不需要再等一轮完整的 applyWatch
     if (extras.applyConfig) {
       try {
         await extras.applyConfig(next, prev)

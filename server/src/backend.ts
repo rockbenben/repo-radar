@@ -137,6 +137,53 @@ export function createStructureRescan(deps: {
   }
 }
 
+/**
+ * 重扫链的排队 + force 语义，抽成独立工厂：塞在 createBackend 的闭包里既测不到下面这类
+ * 只在特定时序下才会现身的缺陷，也没法用 deferred promise 精确摆出「已排队但还没开跑」这个窗口。
+ *
+ * `trigger(force)` 语义：
+ * - 已有「排队未开跑」的一轮 → 共乘它（`SerialQueue.queued`）；
+ * - 没有排队但有「进行中」的一轮且 `!force` 且扫描目标没变 → 也共乘（避免重复全量扫描）；
+ * - 否则在链尾排新一轮，开跑时才读配置/目标（`run`/`scanTargets` 都是迟读）。
+ *
+ * **`force=true` 必须能让共乘到的那一轮「按重建执行」，即便它是被一次 `force=false` 的调用
+ * 排上队的**：`trigger` 检查 `queued` 是同步的，而 `SerialQueue.share` 排的任务要等一个微任务
+ * 才真正开跑——如果只把 force 存进闭包传给 `run`，一次 force=false 的触发把任务排上队之后、
+ * 在它真正开跑之前又来一次 force=true，后者会因为「已经排队」直接共乘前者的 promise，
+ * 而前者闭包里存的 force 早已经定成了 false。于是一次「树可能已经死了，必须重建」的信号会被
+ * 一轮「大概率没变」的普通重扫悄悄吞掉，且死句柄不再发任何事件，之后也不会再有信号来救它。
+ * 做法是仿照 backend.ts 里 `enrichGithubInbox` 的 `inboxForce`：force 请求先置位（`pendingRebuild`），
+ * 真正开跑那一刻才读并清空——不管这次触发最终共乘到谁头上，这个「必须重建」的意图都不会丢，
+ * 且多次 force 请求落在同一个窗口只会合并成一次重建（与结构变化本就有的防抖精神一致）。
+ */
+export function createRescanScheduler<T>(deps: {
+  /** 实际要跑的重扫动作；rebuild 由调度器按上面的规则算出，不是调用方传的原始 force */
+  run: (rebuild: boolean) => Promise<T>
+  /** 当前扫描目标的快照，用于判断「进行中的一轮」能不能被共乘 */
+  scanTargets: () => string
+}): { trigger: (force?: boolean) => Promise<T> } {
+  const queue = createSerialQueue<T>()
+  let runningRound: { promise: Promise<T>; targets: string } | null = null
+  let pendingRebuild = false
+  function trigger(force = false): Promise<T> {
+    if (force) pendingRebuild = true // 尽早置位：即便这次触发最终共乘到别人已排的一轮，也不会丢
+    if (queue.queued) return queue.queued
+    if (!force && runningRound && deps.scanTargets() === runningRound.targets) return runningRound.promise
+    return queue.share(async () => {
+      const rebuild = pendingRebuild // 迟读：开跑那一刻才决定，排队期间新增的 force 请求也算数
+      pendingRebuild = false
+      const round = { promise: deps.run(rebuild), targets: deps.scanTargets() }
+      runningRound = round
+      try {
+        return await round.promise
+      } finally {
+        if (runningRound === round) runningRound = null
+      }
+    })
+  }
+  return { trigger }
+}
+
 const INBOX_REFRESH_MS = 12 * 60 * 1000
 const DRAIN_TIMEOUT_MS = 10_000
 export function createBackend(options: BackendOptions): Backend {
@@ -277,8 +324,9 @@ export function createBackend(options: BackendOptions): Backend {
   })
 
   // rebuildWatch：true 时收尾走 applyWatch（拆了重建句柄），false 时只走 applyRepos（纯 JS 改映射表）。
-  // 传的就是 rescanAndWatch 的 force——两者背后是同一个判断：磁盘状态是否可能已经变化到
-  // 「监听目标本身」需要用新眼光看待，而不是仅仅「有几个仓库的字段变了」：
+  // 由下面的 rescanScheduler 按 force 算出（经 pendingRebuild 迟读合并，见 createRescanScheduler
+  // 顶部注释——不是简单地把某次调用的 force 原样传下来）。两者背后是同一个判断：磁盘状态是否
+  // 可能已经变化到「监听目标本身」需要用新眼光看待，而不是仅仅「有几个仓库的字段变了」：
   //   - 结构变化/溢出信号（树可能已经死了，见 watch-strategy.ts 的 watchTargetLost）、
   //     clone/新建项目（服务端自己刚在磁盘上添了一个新仓库）、启动时的第一轮 —— 都是 force=true，
   //     监听目标集合本身可能变了，必须重建才能把新目标纳入/把死掉的树救回来；
@@ -321,7 +369,8 @@ export function createBackend(options: BackendOptions): Backend {
   // 重扫链 + 按需共乘：进行中的一轮在开跑时就定死了扫描目标（roots/excludes/manualRepos 快照）——
   //   目标没变（重复点「重扫」）→ 共乘进行中的一轮：不排第二次全量扫描，等待不翻倍、进度条不倒退；
   //   目标变了（保存了新扫描目录）→ 链尾排新一轮：开跑时才读配置，新目录必然被扫到，不会被旧一轮静默吞掉；
-  //   已排队未开跑的一轮任何触发都可共乘（它开跑时读到的配置一定是最新的）
+  //   已排队未开跑的一轮任何触发都可共乘（它开跑时读到的配置一定是最新的，force 也一定是最新的
+  //   合并结果，见 createRescanScheduler 顶部的注释）
   const scanTargets = (): string => {
     try {
       const cfg = loadConfig(configFile)
@@ -330,27 +379,15 @@ export function createBackend(options: BackendOptions): Backend {
       return "config-unreadable" // 配置损坏：快照恒等 → 触发都共乘；真正的报错由扫描链的 catch 记日志
     }
   }
-  const rescanQueue = createSerialQueue<RepoStatus[]>()
-  let rescanRunning: { promise: Promise<RepoStatus[]>; targets: string } | null = null
   // force：磁盘刚被服务端自己改过（clone/新建项目）——进行中的一轮可能在写盘前就扫过了目标父目录，
   // 共乘它会漏掉新仓库，必须排新一轮；已排队未开跑的一轮仍可共乘（它开跑时读到的磁盘状态是新的）。
   // 同一个 force 也决定 doRescanAndWatch 收尾是否重建监听句柄（见其上方注释）——force=true 的
   // 三种情况（结构变化/溢出、clone/新建项目、启动首轮）恰好都是「监听目标集合本身可能变了」，
   // 而 force=false 的周期定时器/手动重扫恰好是「大概率没变」，两个判断背后是同一件事，
-  // 不必也不该为「要不要重建监听」再引入第二个独立参数
-  function rescanAndWatch(force = false): Promise<RepoStatus[]> {
-    if (rescanQueue.queued) return rescanQueue.queued
-    if (!force && rescanRunning && scanTargets() === rescanRunning.targets) return rescanRunning.promise
-    return rescanQueue.share(async () => {
-      const round = { promise: doRescanAndWatch(force), targets: scanTargets() }
-      rescanRunning = round
-      try {
-        return await round.promise
-      } finally {
-        if (rescanRunning === round) rescanRunning = null
-      }
-    })
-  }
+  // 不必也不该为「要不要重建监听」再引入第二个独立参数。排队/共乘/force 的合并语义都在
+  // createRescanScheduler 里，抽出来是因为它有个只在特定时序下才现身的缺陷类别（评审 I1）
+  const rescanScheduler = createRescanScheduler<RepoStatus[]>({ run: doRescanAndWatch, scanTargets })
+  const rescanAndWatch = (force = false): Promise<RepoStatus[]> => rescanScheduler.trigger(force)
 
   // 定时后台 fetch：安静地为有远程的仓库 fetch，只广播 repo:updated（不占用批量进度条）
   let autoFetchRunning = false

@@ -50,14 +50,22 @@ async function withPlatform<T>(platform: string, fn: () => Promise<T>): Promise<
 /** 记录 setRoots/setRepos/close 调用的假 watcher。coveredRepoCount 从「最近一次 setRoots
  *  建立的名单」派生（started 时按名单数，close 之后为 0）——与真实 RepoWatcher 同一形状：
  *  它只按上一次真正建立的 okRoots 计数，setRepos 更新的映射表不影响这个数。这样一来，
- *  已有的 watchLimit 截断类断言（coverage 应等于 chosen.length）不用改写 */
+ *  已有的 watchLimit 截断类断言（coverage 应等于 chosen.length）不用改写。
+ *
+ *  `roots` 参数也如实记下来（评审 I3）：只数 setRoots 被调用了几次，抓不住「roots 传的是不是
+ *  空数组」这类退化——把 automation.ts 里 `watcher.setRoots(cfg.roots, …)` 悄悄改回 Task 7
+ *  遗留的占位 `watcher.setRoots([], …)`，call 数不变、这里所有原本只查 watched/closes 的用例
+ *  仍然全绿，但 Windows/macOS 上会变成一个 scan root 都没被监听——必须有用例去查 setRoots
+ *  实际收到的 roots 内容，不能只数它被调用的次数 */
 function fakeWatcher() {
   const watched: string[][] = []
+  const rootsCalls: string[][] = []
   let closes = 0
   let started = false
   let currentIds: string[] = []
   const w = {
-    setRoots: async (_roots: string[], list: { id: string; path: string }[]) => {
+    setRoots: async (roots: string[], list: { id: string; path: string }[]) => {
+      rootsCalls.push([...roots])
       currentIds = list.map((r) => r.id)
       watched.push(currentIds)
       started = true
@@ -74,7 +82,7 @@ function fakeWatcher() {
     coveredRepoCount: () => (started ? currentIds.length : 0),
     watchedRoots: () => (started ? ["/fake-root"] : []),
   }
-  return { watcher: w as unknown as RepoWatcher, watched, closes: () => closes }
+  return { watcher: w as unknown as RepoWatcher, watched, rootsCalls, closes: () => closes }
 }
 
 function make(file: string, repos: RepoStatus[], extra: { rescan?: () => Promise<unknown>; fetchAll?: () => Promise<void> } = {}) {
@@ -304,13 +312,18 @@ describe("applyConfig 只重装真变了的", () => {
 
   // roots 变了 → 监听目标本身变了，只有重建能让新 root 生效——递归策略下这是唯一入口，
   // 不像 watchLimit 那样有专属端点兜底
-  it("roots 变了要重挂监听", async () => {
+  it("roots 变了要重挂监听，且 watcher.setRoots 收到的是真实的 roots（不是占位的空数组）", async () => {
     const file = configFile({ roots: ["/old"] })
-    const { automation, watched } = make(file, [repo("a")])
+    const { automation, watched, rootsCalls } = make(file, [repo("a")])
     const prev = loadConfig(file)
     saveConfig(file, { ...prev, roots: ["/new"] })
     await automation.applyConfig({ ...prev, roots: ["/new"] }, prev)
     expect(watched).toHaveLength(1)
+    // 只数调用次数抓不住「roots 传的是不是空数组」这类退化（评审 I3）：Task 7 遗留的占位
+    // watcher.setRoots([], …) 调用次数与这里完全一样，call 数断言不会变红，但 Windows/macOS 上
+    // 递归策略会因为 roots 是空数组而一个 scan root 都不建立监听，仓库只能靠各自的 manualRepo
+    // 句柄兜底（数量多时等于白做了「一个 root 一个句柄」这件事）
+    expect(rootsCalls.at(-1)).toEqual(["/new"])
   })
 
   it("manualRepos 变了也要重挂监听", async () => {
@@ -415,5 +428,107 @@ describe("重扫不重建监听", () => {
     })
     await auto.applyWatch(true)
     expect(auto.coverage()).toEqual({ watched: 20, total: 73 })
+  })
+})
+
+// 评审 I2：applyWatchLogged / PUT /api/config 把监听器的失败咽掉时，原先靠的是「下一轮扫描的
+// applyWatch 会重试」——本任务把周期路径收窄成 applyRepos 之后，那句承诺不再自动成立。
+// 「有目标没建成」（RecursiveRootStrategy 对单个 root 的失败是内部吞掉的，不向上抛异常，只是
+// 不把它放进返回的 ok 列表）记进 watchDegraded，由 applyRepos 在下一轮周期/手动重扫时补一次
+// 便宜的重挂——只有真的降级时才付这笔重建的代价，绝大多数重扫这个分支根本不会进
+describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）", () => {
+  it("applyWatch 有目标没建成时标记降级，下一次 applyRepos 会补一次重挂", async () => {
+    let setRootsCalls = 0
+    let covered = 1 // 第一次只建成 1 个，比请求的 2 个少——EMFILE 一类瞬时故障的典型样子
+    const watcher = {
+      setRoots: async (_roots: string[], list: { id: string; path: string }[]) => {
+        setRootsCalls++
+        if (setRootsCalls >= 2) covered = list.length // 重挂这一次假装全部建成
+      },
+      setRepos: () => {},
+      close: async () => {},
+      coveredRepoCount: () => covered,
+      watchedRoots: () => [],
+    } as unknown as RepoWatcher
+
+    const auto = createAutomation({
+      configFile: configFile({ autoWatch: true }),
+      watcher,
+      listRepos: () => [repo("a"), repo("b")],
+      rescan: async () => [],
+      fetchAll: async () => {},
+      log: () => {},
+    })
+
+    await auto.applyWatch(true)
+    expect(setRootsCalls).toBe(1)
+    expect(auto.coverage()).toEqual({ watched: 1, total: 2 }) // 如实反映：2 个里只建成 1 个
+
+    auto.applyRepos([repo("a"), repo("b")]) // 普通重扫：不直接重挂，但检测到降级后应该补一次
+    await vi.waitFor(() => expect(setRootsCalls).toBe(2))
+    expect(auto.coverage()).toEqual({ watched: 2, total: 2 }) // 补救成功，覆盖数恢复
+  })
+
+  it("完全建成时不触发重挂——绝大多数周期重扫应该走这条轻量路径", async () => {
+    let setRootsCalls = 0
+    const watcher = {
+      setRoots: async (_roots: string[], list: { id: string; path: string }[]) => {
+        setRootsCalls++
+      },
+      setRepos: () => {},
+      close: async () => {},
+      coveredRepoCount: () => 2, // 与请求的名单长度一致——完全建成
+      watchedRoots: () => [],
+    } as unknown as RepoWatcher
+
+    const auto = createAutomation({
+      configFile: configFile({ autoWatch: true }),
+      watcher,
+      listRepos: () => [repo("a"), repo("b")],
+      rescan: async () => [],
+      fetchAll: async () => {},
+      log: () => {},
+    })
+
+    await auto.applyWatch(true)
+    expect(setRootsCalls).toBe(1)
+    auto.applyRepos([repo("a"), repo("b")])
+    await new Promise((r) => setTimeout(r, 50)) // 给可能存在的（不该有的）重挂一点时间冒出来
+    expect(setRootsCalls).toBe(1) // 没有多余的重挂
+  })
+
+  it("降级仍在但用户这期间已经手动关闭监听：不会擅自把监听重新打开", async () => {
+    let setRootsCalls = 0
+    let closes = 0
+    const watcher = {
+      setRoots: async (_roots: string[], list: { id: string; path: string }[]) => {
+        setRootsCalls++
+      },
+      setRepos: () => {},
+      close: async () => {
+        closes++
+      },
+      coveredRepoCount: () => 1, // 只建成 1 个，制造降级
+      watchedRoots: () => [],
+    } as unknown as RepoWatcher
+
+    const file = configFile({ autoWatch: true })
+    const auto = createAutomation({
+      configFile: file,
+      watcher,
+      listRepos: () => [repo("a"), repo("b")],
+      rescan: async () => [],
+      fetchAll: async () => {},
+      log: () => {},
+    })
+
+    await auto.applyWatch(true) // 降级：covered(1) < chosen.length(2)
+    expect(setRootsCalls).toBe(1)
+
+    saveConfig(file, { ...loadConfig(file), autoWatch: false }) // 用户在这期间关掉了监听
+    auto.applyRepos([repo("a"), repo("b")])
+    await new Promise((r) => setTimeout(r, 50)) // 给可能存在的（不该有的）重挂一点时间冒出来
+    expect(setRootsCalls).toBe(1) // 没有因为残留的降级标志被擅自重新打开
+    expect(closes).toBe(0)
   })
 })
