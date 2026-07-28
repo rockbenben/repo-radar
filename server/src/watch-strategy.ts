@@ -1,7 +1,7 @@
 import { watch as chokidarWatch, type FSWatcher } from "chokidar"
 import { realpathSync, watch as fsWatch, type FSWatcher as NodeWatcher } from "node:fs"
 import { isAbsolute, join, relative } from "node:path"
-import { isUnderPath, shouldIgnorePath } from "./watch-filter"
+import { isUnderPath, shouldIgnorePath, watchTargetLost } from "./watch-filter"
 
 export interface WatchedRepo {
   id: string
@@ -63,9 +63,12 @@ export class RecursiveRootStrategy implements WatchStrategy {
         })
         w.on("error", (err) => {
           const e = err as NodeJS.ErrnoException
-          // 溢出在部分平台走 error 通道。这两个码也可能是「root 被删/改名/网络盘掉线」——
-          // 那意味着这棵树从此不再有事件，同样必须靠重扫补票，两种情况处理方式一致
-          if (e.code === "EPERM" || e.code === "ENOENT") h.onOverflow(`recursive watch lost at ${target}: ${e.code}`)
+          // 溢出在部分平台走 error 通道，root 被删/改名/网络盘掉线也走这里。不按错误码白名单
+          // 分流：Node 在 emit error 之前就把句柄关了，无论什么码，这棵树从此不再有任何事件，
+          // 必须靠重扫补票 + 重建（见 watchTargetLost）。目标底下单个文件的错误不算失守
+          if (watchTargetLost(e, [target, real])) {
+            h.onOverflow(`recursive watch lost at ${target}: ${e.code ?? e.message}`)
+          }
           h.onError(e, graded)
         })
         this.watchers.push(w)

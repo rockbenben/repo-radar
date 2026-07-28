@@ -69,6 +69,25 @@ function samePath(a: string, b: string): boolean {
 }
 
 /**
+ * 「这条错误意味着监听目标本身失守了」——调用方据此触发一轮重扫补票并重建监听。
+ *
+ * 与 watcherErrorIsNoise 是两件事：那个决定**要不要记日志**（只有 EBUSY/EPERM/ENOENT 才有
+ * 可能是噪音），这个决定**要不要补救**，而且刻意**不看错误码**。`fs.watch` 在 emit error
+ * 之前就把句柄关了，所以 EMFILE、EIO、FSEvents 失败之后那棵树同样是死的，只是码不同。
+ * 按码白名单分流的话，Windows 上一次重负载构建引发的瞬时 EMFILE，加上「用户关掉了周期
+ * 兜底重扫」（autoScanMinutes = 0 是合法配置），就等于这个 root 下的所有仓库在进程余下的
+ * 生命周期里全部冻结：界面上它们永远停在过期状态，其它 root 照常更新，用户无从判断。
+ *
+ * 路径不明时算失守：补救是幂等的（调用方还有防抖），宁可多重建一次，
+ * 也不要把一棵已经死掉的树当噪音咽下去。
+ */
+export function watchTargetLost(err: NodeJS.ErrnoException, targets: readonly string[]): boolean {
+  const failed = err.path
+  if (typeof failed !== "string") return true
+  return targets.some((t) => samePath(t, failed))
+}
+
+/**
  * 「p 就是 root 或落在 root 之下」。递归监听下这条判断在两个地方决定正确性：策略要靠它
  * 判断某个 manualRepo 是否已被某个 root 覆盖，coverage 要靠它数出真正被监听的仓库。
  *

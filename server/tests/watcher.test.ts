@@ -1,11 +1,25 @@
-import { writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it, vi } from "vitest"
-import { PerRepoStrategy, type StrategyHandlers, type WatchStrategy } from "../src/watch-strategy"
+import { PerRepoStrategy, RecursiveRootStrategy, type StrategyHandlers, type WatchStrategy } from "../src/watch-strategy"
 import { RepoWatcher, shouldIgnorePath, watcherErrorIsNoise } from "../src/watcher"
 import { cleanupFixtures, git, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
+
+// 扫描根必须是自己建的临时目录：拿 dirname(makeRepo()) 会得到 tmpdir() 本身，
+// 那底下有别的用例正在跑的仓库，事件互相串台
+const roots: string[] = []
+function tmpRoot(): string {
+  const d = mkdtempSync(join(tmpdir(), "rr-e2e-"))
+  roots.push(d)
+  return d
+}
+afterAll(() => {
+  // maxRetries：目录刚被监听过，Windows 上句柄释放晚于 close() 返回，头一次 rm 常撞 EBUSY
+  for (const d of roots.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 3 })
+})
 
 function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -368,6 +382,22 @@ describe("RepoWatcher — 归属映射", () => {
     await w.close()
   })
 
+  // 钉的是「拿查表匹配上的那段祖先路径当仓库根」，而不是仓库表里的原始字符串：后者只要
+  // 大小写差一点，shouldIgnorePath 就找不到根、退化成拿整条绝对路径匹配，于是放在
+  // D:\Vendor\ 下的仓库因为路径里有 vendor 段被整个静默忽略——界面上它永远停在过期状态
+  it("仓库位于 vendor/ 下且大小写与事件路径不一致时仍然刷新", async () => {
+    const fired: string[] = []
+    const fake = { async start() { return [] }, async stop() {} }
+    const w = new RepoWatcher((id) => fired.push(id), () => {}, 10, 0, fake)
+    withPlatform("win32", () => {
+      w.setRepos([{ id: "V", path: join("D:", "Vendor", "MyRepo") }])
+      w.handleEventForTest(join("d:", "vendor", "myrepo", "src", "a.ts"))
+    })
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual(["V"])
+    await w.close()
+  })
+
   // coverage 虚高 = 界面在说「这个仓库有人看着」而其实没有，用户无从判断为什么它不刷新
   it("coverage 只数真正落在成功 root 之下的仓库", async () => {
     const root = join("D:", "work")
@@ -411,5 +441,60 @@ describe("RepoWatcher — 归属映射", () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+// win/mac 的生产路径：内核事件 → reportedPath → resolve → findOwner → 防抖 → 触发。
+// 上面那批归属用例走的是假策略，策略用例又不带 RepoWatcher，中间这条缝一直没人跑过——
+// 而事件路径的坐标系（tmpdir 在本机与 CI 上都是 8.3 短名 C:\Users\ADMINI~1\...，
+// 监听却必须挂在 realpath 上）正是在这条缝里咬人的：一旦两边形式不一致，
+// 所有仓库都静默停止刷新，且每条事件都会被当成目录结构变化去触发重扫
+describe("RepoWatcher + RecursiveRootStrategy — 真实文件系统端到端", () => {
+  it("递归 root 下写文件 → 归属到正确的仓库，各刷新一次，不误报结构变化", async () => {
+    const root = tmpRoot()
+    const repoA = join(root, "alpha")
+    const repoB = join(root, "beta")
+    mkdirSync(join(repoA, "src"), { recursive: true })
+    mkdirSync(join(repoB, ".git"), { recursive: true })
+    const fired: string[] = []
+    const structural: string[] = []
+    const w = new RepoWatcher(
+      (id) => fired.push(id),
+      (reason) => structural.push(reason),
+      100,
+      2000,
+      new RecursiveRootStrategy(),
+    )
+    await w.setRoots([root], [
+      { id: "A", path: repoA },
+      { id: "B", path: repoB },
+    ])
+    expect(w.watchedRoots()).toEqual([root]) // 两个仓库一个句柄
+    expect(w.coveredRepoCount()).toBe(2)
+    await new Promise((r) => setTimeout(r, 300)) // 递归监听建立缓冲
+
+    writeFileSync(join(repoA, "src", "deep.txt"), "x") // 深层工作区文件
+    await waitFor(() => fired.length > 0)
+    expect(fired).toEqual(["A"])
+
+    writeFileSync(join(repoB, ".git", "index"), "x") // 另一个仓库的 .git 内部
+    await waitFor(() => fired.length > 1)
+    expect(fired).toEqual(["A", "B"])
+    expect(structural).toEqual([]) // 落在已知仓库里的事件不该被当成结构变化
+    await w.close()
+  })
+
+  it("递归 root 下新出现的目录 → 报结构变化（改造前要等最长 30 分钟的兜底重扫）", async () => {
+    const root = tmpRoot()
+    const repo = join(root, "known")
+    mkdirSync(repo, { recursive: true })
+    const structural: string[] = []
+    const w = new RepoWatcher(() => {}, (reason) => structural.push(reason), 100, 2000, new RecursiveRootStrategy())
+    await w.setRoots([root], [{ id: "K", path: repo }])
+    await new Promise((r) => setTimeout(r, 300))
+    mkdirSync(join(root, "brand-new-project", ".git"), { recursive: true })
+    await waitFor(() => structural.length > 0)
+    expect(structural.some((s) => s.includes("brand-new-project"))).toBe(true)
+    await w.close()
   })
 })

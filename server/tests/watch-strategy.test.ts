@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
+import { watchTargetLost } from "../src/watch-filter"
 import { PerRepoStrategy, RecursiveRootStrategy, defaultStrategy } from "../src/watch-strategy"
 import { cleanupFixtures, makeRepo } from "./fixtures"
 
@@ -169,5 +170,73 @@ describe("defaultStrategy", () => {
     withPlatform("win32", () => expect(defaultStrategy()).toBeInstanceOf(RecursiveRootStrategy))
     withPlatform("darwin", () => expect(defaultStrategy()).toBeInstanceOf(RecursiveRootStrategy))
     withPlatform("linux", () => expect(defaultStrategy()).toBeInstanceOf(PerRepoStrategy))
+  })
+})
+
+// Node 在 emit error **之前**就把句柄关了：一次 EMFILE / EIO / FSEvents 失败之后那棵树就是死的，
+// 和 EPERM/ENOENT 没有区别。按错误码白名单分流的话，Windows 上一次重负载构建的瞬时 EMFILE
+// 加上「用户关掉了周期兜底重扫」（autoScanMinutes = 0 是合法配置），就等于这个 root 下所有仓库
+// 在进程余下的生命周期里全部冻结——界面上永远停在过期状态，其它 root 照常更新
+describe("watchTargetLost — 监听目标失守判定", () => {
+  const targets = [join("D:", "work"), join("D:", "work", ".git", "index")]
+  const err = (code: string, path?: string) => ({ code, path }) as NodeJS.ErrnoException
+
+  it("任何错误码打在监听目标本身上都算失守，不只是 EPERM/ENOENT", () => {
+    for (const code of ["EPERM", "ENOENT", "EMFILE", "EIO", "ENOSPC", "UNKNOWN"]) {
+      expect(watchTargetLost(err(code, join("D:", "work")), targets)).toBe(true)
+    }
+  })
+
+  it("路径不明 → 算失守（宁可多重建一次，也不要把一棵死掉的树当噪音咽掉）", () => {
+    expect(watchTargetLost(err("EMFILE"), targets)).toBe(true)
+    expect(watchTargetLost(err("EPERM", undefined), targets)).toBe(true)
+  })
+
+  it("目标底下的单个文件出错 → 不算失守（那棵树还活着）", () => {
+    expect(watchTargetLost(err("EBUSY", join("D:", "work", "repo", "obj", "x.tmp")), targets)).toBe(false)
+    expect(watchTargetLost(err("EMFILE", join("D:", "work", "repo", "a.ts")), targets)).toBe(false)
+  })
+
+  // 同一目录以不同大小写回报在 Windows 上是常态；非 Windows 上 /work 与 /WORK 是两个真实目录
+  it("大小写比对随平台（两个平台都真跑）", () => {
+    withPlatform("win32", () => expect(watchTargetLost(err("EIO", join("d:", "WORK")), targets)).toBe(true))
+    withPlatform("linux", () => expect(watchTargetLost(err("EIO", join("d:", "WORK")), targets)).toBe(false))
+  })
+})
+
+describe("RecursiveRootStrategy — 失守的分流", () => {
+  /** 直接把一条 error 投进真实 watcher：验的是「策略拿到这条错误怎么分流」，
+   *  不是 libuv 怎么产生它（EMFILE 无法在测试里稳定复现） */
+  const emitOn = (s: RecursiveRootStrategy, i: number, e: NodeJS.ErrnoException): void => {
+    const watchers = (s as unknown as { watchers: { emit(ev: string, err: unknown): void }[] }).watchers
+    expect(watchers.length).toBeGreaterThan(i)
+    watchers[i].emit("error", e)
+  }
+
+  it("EMFILE 打在 root 上 → 触发重扫补票（而不是只记一条日志就让这棵树永久死掉）", async () => {
+    const root = tmpRoot()
+    const reasons: string[] = []
+    const codes: string[] = []
+    const s = new RecursiveRootStrategy()
+    await s.start([root], [], {
+      onEvent: () => {},
+      onOverflow: (r) => void reasons.push(r),
+      onError: (e) => void codes.push(e.code ?? ""),
+    })
+    emitOn(s, 0, Object.assign(new Error("too many open files"), { code: "EMFILE", path: realpathSync.native(root) }))
+    expect(reasons).toHaveLength(1)
+    expect(reasons[0]).toContain(root) // 报调用方的路径形式，日志里能对上配置
+    expect(codes).toEqual(["EMFILE"]) // 同时仍然记日志：打包后日志是唯一诊断面
+    await s.stop()
+  })
+
+  it("目标底下某个文件的错误不触发重扫（那棵树还活着，重扫是白跑）", async () => {
+    const root = tmpRoot()
+    const reasons: string[] = []
+    const s = new RecursiveRootStrategy()
+    await s.start([root], [], { onEvent: () => {}, onOverflow: (r) => void reasons.push(r), onError: () => {} })
+    emitOn(s, 0, Object.assign(new Error("busy"), { code: "EBUSY", path: join(realpathSync.native(root), "obj", "x.tmp") }))
+    expect(reasons).toEqual([])
+    await s.stop()
   })
 })

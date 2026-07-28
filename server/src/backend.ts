@@ -98,6 +98,45 @@ export function createInboxEmitter(): InboxEmitter {
   }
 }
 
+/**
+ * 「目录结构变了 / 监听丢了事件」→ 一轮兜底重扫。这是自愈链的最后一环：新仓库出现、老仓库
+ * 改名或消失、监听缓冲区溢出（那一批事件已经永久丢了）都汇到这里，接不上的话受影响的仓库
+ * 会静默停在过期状态——界面上只有它不动，进程里没有任何异常，用户无从判断。
+ *
+ * 前沿抑制、后沿触发：改一批目录名会连发一串信号，而一轮重扫经指纹缓存后约 1.3 秒，
+ * 没必要为每条各跑一轮。抽成独立工厂是为了能单测——它整条链上唯一的触发条件是「内核报了
+ * 一个我们无法在测试里稳定复现的失败」，塞在 createBackend 的闭包里就等于永远测不到。
+ */
+export function createStructureRescan(deps: {
+  rescan: () => Promise<unknown>
+  delayMs?: number
+  log?: (msg: string) => void
+  logError?: (msg: string) => void
+}): { onStructureChanged: (reason: string) => void; stop: () => void } {
+  const delayMs = deps.delayMs ?? 2000
+  const log = deps.log ?? ((m: string) => console.log(m))
+  const logError = deps.logError ?? ((m: string) => console.error(m))
+  let timer: ReturnType<typeof setTimeout> | null = null
+  return {
+    onStructureChanged(reason) {
+      if (timer) return // 窗口里已经排着一轮，这条信号并进去
+      timer = setTimeout(() => {
+        // 先置空再开跑。反过来的话，重扫期间到来的结构变化会被这个已经烧掉的定时器句柄
+        // 一直抑制住——「重扫本身要跑一会儿，这期间新克隆了一个仓库」正好是它该管的事
+        timer = null
+        log(`[repo-radar] 目录结构变化，触发重扫：${reason}`)
+        void deps.rescan().catch((err) => {
+          logError(`[repo-radar] 结构变化触发的重扫失败：${err instanceof Error ? err.message : String(err)}`)
+        })
+      }, delayMs)
+    },
+    stop() {
+      if (timer) clearTimeout(timer)
+      timer = null
+    },
+  }
+}
+
 const INBOX_REFRESH_MS = 12 * 60 * 1000
 const DRAIN_TIMEOUT_MS = 10_000
 export function createBackend(options: BackendOptions): Backend {
@@ -209,34 +248,19 @@ export function createBackend(options: BackendOptions): Backend {
   }
 
   let lastScanAt: string | null = null // 最近一次全量扫描完成时刻（ISO）；启动扫描跑完才有值
-  let structureTimer: ReturnType<typeof setTimeout> | null = null
-  const watcher = new RepoWatcher(
-    (id) => {
-      evictRepoStats(id) // 仓库有变化，作废其热力图缓存，避免统计落后于实时状态
-      void store
-        .refreshOne(id)
-        .then((repo) => {
-          if (repo) hub.broadcast("repo:updated", { repo })
-        })
-        .catch((err) => {
-          console.error(`[repo-radar] 监听刷新失败：${err instanceof Error ? err.message : String(err)}`)
-        })
-    },
-    (reason) => {
-      // 新仓库出现 / 老仓库改名或消失 / 监听缓冲区溢出（那一批事件已经永久丢了）。这类信号
-      // 不接到重扫上的话，受影响的仓库会静默停在过期状态——界面上只有它不动，用户无从判断。
-      // 防抖 2 秒：改一批目录名会连发一串事件，而重扫经指纹缓存后约 1.3 秒，没必要每条各跑一轮。
-      // force：磁盘刚变过，进行中的那一轮可能在变化写盘前就扫过了目标父目录
-      if (structureTimer) return
-      structureTimer = setTimeout(() => {
-        structureTimer = null
-        console.log(`[repo-radar] 目录结构变化，触发重扫：${reason}`)
-        void rescanAndWatch(true).catch((err) =>
-          console.error(`[repo-radar] 结构变化触发的重扫失败：${err instanceof Error ? err.message : String(err)}`),
-        )
-      }, 2000)
-    },
-  )
+  // force：磁盘刚变过，进行中的那一轮可能在变化写盘前就扫过了目标父目录
+  const structure = createStructureRescan({ rescan: () => rescanAndWatch(true) })
+  const watcher = new RepoWatcher((id) => {
+    evictRepoStats(id) // 仓库有变化，作废其热力图缓存，避免统计落后于实时状态
+    void store
+      .refreshOne(id)
+      .then((repo) => {
+        if (repo) hub.broadcast("repo:updated", { repo })
+      })
+      .catch((err) => {
+        console.error(`[repo-radar] 监听刷新失败：${err instanceof Error ? err.message : String(err)}`)
+      })
+  }, structure.onStructureChanged)
 
   // 后台自动化（监听 + 两个定时器）统一由 automation 装表；rescan/fetchAll 以回调传入，
   // 让它不必知道扫描链和 hub 的存在
@@ -489,7 +513,7 @@ export function createBackend(options: BackendOptions): Backend {
       // 幂等：托盘退出、窗口关闭、系统关机可能同时到达
       return (stopped ??= (async () => {
         if (intervalTimer) clearInterval(intervalTimer)
-        if (structureTimer) clearTimeout(structureTimer) // 退出后不该再排一轮重扫
+        structure.stop() // 退出后不该再排一轮重扫
         automation.stop()
         inboxEmitter.clear() // 之前只增不减：同一进程反复 start/stop 会让订阅者无界增长，退出后也不该再收晚到的回调
         await shutdown("backend.stop")

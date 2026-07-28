@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
-import { createBackend, type Backend } from "../src/backend"
+import { createBackend, createStructureRescan, type Backend } from "../src/backend"
 import { loadConfig } from "../src/config"
 
 // 端口不能写死：除了「撞上本机正在跑的实例」，Windows 上还有更隐蔽的一种——Hyper-V/WSL2 的
@@ -231,5 +231,73 @@ describe("createBackend", () => {
       headers: { origin: "http://localhost:5173" },
     })
     expect(allowed.status).toBe(200)
+  })
+})
+
+// 「监听丢了事件 / 目录结构变了」→ 重新刷新，这条自愈链的最后一环。坏掉的表现是某些仓库
+// 永远停在过期状态而进程里没有任何异常，所以每一条行为都得钉住：合并窗口、失败只记日志、
+// 退出后不再排队、以及「定时器先置空再重扫」的顺序
+describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  function harness(rescan: () => Promise<unknown>, delayMs = 30) {
+    const logs: string[] = []
+    const errors: string[] = []
+    const s = createStructureRescan({
+      rescan,
+      delayMs,
+      log: (m) => void logs.push(m),
+      logError: (m) => void errors.push(m),
+    })
+    return { ...s, logs, errors }
+  }
+
+  it("窗口内连发多条信号只跑一轮重扫（改一批目录名会连发一串）", async () => {
+    let calls = 0
+    const h = harness(async () => void calls++)
+    h.onStructureChanged("first reason")
+    h.onStructureChanged("second reason")
+    h.onStructureChanged("third reason")
+    expect(calls).toBe(0) // 后沿触发：不是收到就立刻跑
+    await sleep(120)
+    expect(calls).toBe(1)
+    expect(h.logs.join()).toContain("first reason") // 日志里留下触发原因，打包后这是唯一诊断面
+    h.stop()
+  })
+
+  it("重扫抛错只记日志，不产生未处理的 rejection", async () => {
+    const h = harness(async () => Promise.reject(new Error("rescan boom")))
+    h.onStructureChanged("boom")
+    await sleep(120)
+    expect(h.errors.join()).toContain("rescan boom")
+    h.stop()
+  })
+
+  it("stop 之后不再触发重扫（退出时排着的那一轮必须撤销）", async () => {
+    let calls = 0
+    const h = harness(async () => void calls++)
+    h.onStructureChanged("x")
+    h.stop()
+    await sleep(120)
+    expect(calls).toBe(0)
+  })
+
+  // 定时器要在开跑之前置空。反过来（重扫结束才置空）的话，重扫期间到来的结构变化会被
+  // 那个已经烧掉的定时器句柄一直抑制——正好是「重扫本身很慢、这期间新克隆的仓库」这种情况
+  it("重扫进行中到来的新信号仍能排下一轮", async () => {
+    let calls = 0
+    let release: () => void = () => {}
+    const h = harness(async () => {
+      calls++
+      await new Promise<void>((r) => (release = r))
+    })
+    h.onStructureChanged("first")
+    await sleep(120)
+    expect(calls).toBe(1) // 第一轮还没结束
+    h.onStructureChanged("second")
+    await sleep(120)
+    expect(calls).toBe(2)
+    release()
+    h.stop()
   })
 })
