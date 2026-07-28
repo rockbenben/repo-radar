@@ -80,6 +80,23 @@ export function repoId(path: string): string {
 }
 
 /**
+ * 仓库的根提交 hash（第一个没有父提交的 commit）。跨卷移动、从备份恢复、以及
+ * `stat().ino` 不可用的文件系统上，这是识别「同一个仓库换了路径」的唯一判据。
+ *
+ * 只在身份认领时按需调用，日常扫描不跑。空仓库、多根提交、或命令失败一律返回 null，
+ * 由认领逻辑当作「此判据不可用」处理（宁可不认，也不要认错）。
+ */
+export async function rootCommit(path: string): Promise<string | null> {
+  try {
+    const r = await runGit(path, ["rev-list", "--max-parents=0", "HEAD"])
+    const lines = splitLines(r)
+    return lines.length === 1 ? lines[0] : null // 多个根提交无法唯一标识，弃用
+  } catch {
+    return null
+  }
+}
+
+/**
  * 当前 git 身份（用于工作记录默认「只看我」，按邮箱匹配）。
  * 优先全局身份——最能代表「我」，不受某个仓库本地 user.email 覆盖的影响（否则默认筛选可能把你的提交全藏了）；
  * 全局没设才退回该目录的有效配置。两者都取不到邮箱返回 null（前端据此默认「全部」）。

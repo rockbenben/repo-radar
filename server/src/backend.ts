@@ -13,6 +13,7 @@ import { isPortUnavailable, PORT, portCandidates } from "./port"
 import { forgetRememberedPort, loadRememberedPort, saveRememberedPort } from "./port-state"
 import { drainRepoLocks, pendingRepoOps, withRepoLock } from "./queue"
 import { RepoCache } from "./repo-cache"
+import { IdentityLedger } from "./repo-identity"
 import { type ApiExtras, createApi, originAllowed } from "./routes"
 import { createSerialQueue } from "./serial"
 import { createShutdown } from "./shutdown"
@@ -117,11 +118,14 @@ export function createBackend(options: BackendOptions): Backend {
   const descCache = new DescCache(join(dirname(configFile), "github-desc.json"))
   const inboxCache = new InboxCache(join(dirname(configFile), "github-inbox.json"))
   const repoCache = new RepoCache(join(dirname(configFile), "repo-cache.json"))
+  // 身份账本：仓库改名/移动后继续用老 id，config.json 里按 id 存的标签/收藏/归档/便签不受影响
+  const identity = new IdentityLedger(join(dirname(configFile), "repo-identity.json"))
   const store = new RepoStore(
     () => loadConfig(configFile),
     (id, url) => descCache.get(id, url),
     (id, url) => inboxCache.get(id, url),
     repoCache,
+    identity,
   )
   const hub = new WsHub()
 
@@ -233,6 +237,9 @@ export function createBackend(options: BackendOptions): Backend {
     descCache.prune(ids)
     inboxCache.prune(ids)
     repoCache.prune(ids)
+    // 账本的 30 天年龄护栏尤其要命：条目一剪，那批仓库回来时会被当成全新仓库，
+    // 标签/收藏/归档全丢——正是本轮要消灭的行为。护栏在 JsonStore.pruneStale 里
+    identity.prune(ids)
     // 扫描完成时刻：界面据此显示「上次扫描 …」。只在全量扫描后更新——文件监听的单仓库
     // refreshOne 不算「扫描」，把它算进来会让这个时间永远显示「刚刚」，等于没有信息量。
     // 放在 applyWatch 之后：那一步抛错时整轮扫描算失败（POST /api/scan 返回 500，界面弹
@@ -390,6 +397,9 @@ export function createBackend(options: BackendOptions): Backend {
     flushCaches: () => {
       inboxCache.flush()
       repoCache.flush() // 防抖窗口 1s：硬退会丢最后一轮缓存写入，下次启动白白付一轮全价
+      // 账本丢一轮写入的代价比缓存大得多：本轮认领/铸造的结果没落盘，下次启动这些仓库
+      // 会按新路径重新铸造 id，标签/收藏/归档当场对不上
+      identity.flush()
     },
     closeConnections: () => (server as { closeAllConnections?: () => void } | null)?.closeAllConnections?.(),
     log: (m) => console.log(m),

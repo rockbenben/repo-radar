@@ -305,21 +305,22 @@ describe("IdentityLedger", () => {
     expect((await led.resolve([renamed], noRootCommit, () => st(1, 77))).get(renamed)).toBe(before)
   })
 
-  // 判据②今天是关闭的：lost 一侧的 rootCommit 恒为 null，再去 spawn git 算 found 一侧
-  // 必然认不上。那批进程是确定无收益的，不该付
-  it("lost 一侧没有根提交时不调用 rootCommitOf（不付确定无收益的 git 进程）", async () => {
+  // 根提交在一轮里只该算一次：判据②先为「认不上的新路径」算一次，铸造时必须复用那一次，
+  // 不能再 spawn 一遍。（原先这条断言的是 0——那时铸造还不播种，判据②因 lost 侧恒为 null
+  // 而整轮跳过；播种之后每个新路径本来就要付一个 git 进程，能防的回归变成了「付两次」）
+  it("认不上的新路径本轮只算一次根提交（判据②与铸造共用同一次计算）", async () => {
     const file = tmpFile()
     const led = makeLedger(file)
     const oldP = join("D:", "p", "gone")
     const newP = join("D:", "p", "fresh")
-    await led.resolve([oldP], noRootCommit, () => st(1, 3))
+    await led.resolve([oldP], async () => "rootOLD", () => st(1, 3)) // lost 侧带着根提交，判据②那道闸是开的
     let calls = 0
     const counting = async () => {
       calls++
-      return null
+      return "rootNEW" // 与 lost 侧不同 → 判据②认不上，落到铸造
     }
-    await led.resolve([newP], counting, () => st(2, 4)) // ino 认不上，会走到判据②的入口
-    expect(calls).toBe(0)
+    await led.resolve([newP], counting, () => st(2, 4)) // ino 也认不上，会走到判据②的入口
+    expect(calls).toBe(1)
   })
 
   it("prune 带年龄护栏：刚见过的条目不剪", async () => {
@@ -339,5 +340,80 @@ describe("IdentityLedger", () => {
     writeFileSync(file, "{{{broken")
     const p = join("D:", "p", "a")
     expect((await makeLedger(file).resolve([p], noRootCommit, () => st(1, 1))).get(p)).toBe(repoId(p))
+  })
+})
+
+describe("判据②的播种与同轮次约束", () => {
+  // 约束 A：不在铸造时算根提交，判据②就是一段永远跑不到的死代码
+  it("铸造新 id 时把根提交写进账本", async () => {
+    const led = makeLedger(tmpFile())
+    const p = join("D:", "p", "fresh")
+    await led.resolve([p], async () => "rootXYZ", () => st(1, 10))
+    expect(led.get((await led.resolve([p], async () => null, () => st(1, 10))).get(p)!)?.rootCommit).toBe("rootXYZ")
+  })
+
+  // 约束 A 的收益：播种之后，跨卷移动（dev 变了、ino 也变了）才认得出来
+  it("播种过根提交后，跨卷移动仍能认领", async () => {
+    const file = tmpFile()
+    const oldP = join("D:", "p", "movable")
+    const newP = join("E:", "elsewhere", "movable")
+    const led = makeLedger(file)
+    const before = (await led.resolve([oldP], async () => "rootMOVE", () => st(1, 10))).get(oldP)
+    const after = (await led.resolve([newP], async () => "rootMOVE", () => st(2, 99))).get(newP)
+    expect(after).toBe(before)
+  })
+
+  // 每个新仓库一生只算一次根提交：已知路径零 git 进程，认领路径也不额外付钱
+  it("已知路径不再重算根提交", async () => {
+    const led = makeLedger(tmpFile())
+    const p = join("D:", "p", "once")
+    let calls = 0
+    const counting = async () => {
+      calls++
+      return "rootONCE"
+    }
+    await led.resolve([p], counting, () => st(1, 11))
+    expect(calls).toBe(1) // 铸造时播种
+    await led.resolve([p], counting, () => st(1, 11))
+    expect(calls).toBe(1) // 已知路径直接命中，不再 spawn
+  })
+
+  // 约束 B：上一轮还活着、这一轮没了的才可认领
+  it("上一轮消失的可以认领（关掉应用改名再打开）", async () => {
+    const file = tmpFile()
+    const oldP = join("D:", "p", "a")
+    const newP = join("D:", "p", "a-renamed")
+    const led = makeLedger(file)
+    const before = (await led.resolve([oldP], async () => null, () => st(1, 42))).get(oldP)
+    led.flush() // 防抖 1s：不 flush 的话下面这个实例读到的是空文件
+    // 新实例 = 重启；代必须是持久化的，否则这条会挂
+    const after = (await makeLedger(file).resolve([newP], async () => null, () => st(1, 42))).get(newP)
+    expect(after).toBe(before)
+  })
+
+  it("连续两轮没扫到的仓库不再可认领（硬盘拔了很久）", async () => {
+    const file = tmpFile()
+    const gone = join("D:", "p", "on-usb")
+    const other = join("D:", "p", "other")
+    const led = makeLedger(file)
+    const goneId = (await led.resolve([gone, other], async () => null, (p) => st(1, p === gone ? 42 : 7))).get(gone)
+    await led.resolve([other], async () => null, () => st(1, 7)) // 第 1 轮不见
+    await led.resolve([other], async () => null, () => st(1, 7)) // 第 2 轮仍不见 → 过期
+    const back = join("D:", "p", "came-back")
+    const newId = (await led.resolve([other, back], async () => null, (p) => st(1, p === back ? 42 : 7))).get(back)
+    expect(newId).not.toBe(goneId) // 隔了太久，不认
+  })
+
+  // 约束 C：返回的 Map 对每个输入路径都要有条目
+  it("重复拼写的路径都能取到同一个 id", async () => {
+    const led = makeLedger(tmpFile())
+    // 写死反斜杠而不是 join()：CI 跑 ubuntu + windows 两条腿，join 在 Linux 上给出的是
+    // 正斜杠，a 与 b 会是同一个字符串，这条用例就退化成「同一个键取两次」什么也没测到。
+    // 反斜杠在 Linux 上是合法文件名字符，normalizePath 照样把两种拼写折成同一个键
+    const a = "D:\\p\\dup"
+    const b = a.replace(/\\/g, "/")
+    const ids = await led.resolve([a, b], async () => null, () => st(1, 5))
+    expect(ids.get(a)).toBeDefined()
+    expect(ids.get(b)).toBe(ids.get(a)) // 而不是 undefined
   })
 })

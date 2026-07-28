@@ -22,6 +22,14 @@ export interface IdentityEntry {
   ino: string
   rootCommit: string | null
   seenAt: string // ISO 8601，prune 的年龄护栏用
+  /** 本条目最后一次被扫到的「代」：每轮 resolve 给所有活条目盖上「账本里最大代 + 1」。
+   *  认领只认「上一代还盖过章、这一代路径没了」的条目。理由：判据②按根提交匹配且**不能
+   *  比较 dev**（跨卷移动时 dev 本来就变了），于是同一 upstream 的两个 clone 分处 lost/found
+   *  两侧时会互相认领；不加约束这个窗口就是 prune 的 30 天年龄护栏。压到一轮之后，
+   *  硬盘拔了两轮以上的仓库回来时退化成丢数据——安全侧（认错身份是产生错误数据，更严重）。
+   *  代必须**持久化在条目里**：用内存计数器会让「关掉应用 → 改名 → 重新打开」这个主用例
+   *  坏掉，而那正是改名最常发生的时机 */
+  gen: number
 }
 
 export interface ClaimCandidate {
@@ -39,6 +47,12 @@ const isIdentityEntry = (v: unknown): v is IdentityEntry =>
   // 会被当成合法判据参与匹配，而判据一旦失真就是认错身份。缺字段允许（老条目没有它）
   ((v as IdentityEntry).rootCommit === undefined || (v as IdentityEntry).rootCommit === null || typeof (v as IdentityEntry).rootCommit === "string") &&
   typeof (v as IdentityEntry).seenAt === "string"
+
+/** 条目的代。刻意**不**进 isIdentityEntry：代只是认领的护栏，坏值（老条目没这个字段、
+ *  被改坏成字符串、JSON 把 NaN 写成了 null）当 0 就是「很老的一代，永远不可认领」——
+ *  安全侧。把它升格成丢弃条件则相反：为一个护栏字段丢掉整条身份，用户的标签全没，
+ *  正是本模块要消灭的后果 */
+const genOf = (e: IdentityEntry): number => (Number.isInteger(e.gen) ? e.gen : 0)
 
 /** 路径键的归一化。Windows 路径大小写不敏感，且同一目录可能以不同大小写出现，
  *  不归一化会让「D:\Repo」和「d:\repo」在账本里变成两个仓库。
@@ -93,9 +107,8 @@ function uniqueByKey<V>(items: Iterable<[string, V]>, keyOf: (v: V) => string | 
  * **判据②的已知限制**：一一对应**挡不住**同一 upstream 的多个 clone。它只在两个 clone
  * 落在匹配的同一侧时才起作用；若 clone C1 在线（是已知路径，根本不进候选池）、C2 在拔掉的
  * 移动硬盘上（→ lost）、用户又新 clone 出 C3（→ found），两侧就各自唯一，而判据②**不比较
- * dev**，于是 C3 认领 C2 的 id。收紧办法（要求「丢失」与「出现」发生在同一轮扫描等）涉及
- * 设计变更，留待判据②真正通电（Task 6 持久化根提交）之前定夺。今天判据②实际处于关闭
- * 状态：lost 一侧的 rootCommit 恒为 null，resolve 会因此整轮跳过它。
+ * dev**，于是 C3 认领 C2 的 id。这个窗口由调用方（resolve 的同轮次约束，见 IdentityEntry.gen）
+ * 从 30 天压到一轮：C2 要在「刚消失的那一轮」恰好撞上 C3 出现才会认错。
  */
 export function matchClaims(
   lost: Map<string, ClaimCandidate>,
@@ -155,10 +168,11 @@ export class IdentityLedger {
   }
 
   /**
-   * 把本轮扫描到的路径解析成 id。
+   * 把本轮扫描到的路径解析成 id。返回的 Map 对 `paths` 里的**每一个**路径都有条目
+   * （含被去重折掉的其它拼写），调用方可以直接 `get(p)!`。
    *
-   * rootCommitOf 只会在**确实有仓库消失、判据①没认完、且 lost 一侧确实存着根提交**时
-   * 才被调用，所以日常这里是零 git 进程。
+   * git 进程的代价：每个**新发现**的仓库一生一次（铸造时播种根提交，见下面的铸造段），
+   * 已知路径零进程。判据②的认领轮次复用这一次计算，不额外加价。
    */
   async resolve(
     paths: string[],
@@ -171,12 +185,21 @@ export class IdentityLedger {
     // 前置条件从公开契约里消掉（调用方不必保证 paths 已去重）
     const livePaths = new Set<string>()
     const uniquePaths: string[] = []
+    const repOfKey = new Map<string, string>() // 归一化键 → 代表路径，收尾补全映射时用
     for (const p of paths) {
       const key = normalizePath(p)
       if (livePaths.has(key)) continue
       livePaths.add(key)
+      repOfKey.set(key, p)
       uniquePaths.push(p)
     }
+
+    // 快照一份：下面的回写会改 store，而代与 lost 候选都必须按本轮开始时的账本算
+    const before = this.store.entries()
+    // 当前代 = 账本里最大代 + 1；账本为空时为 1
+    let maxGen = 0
+    for (const [, e] of before) maxGen = Math.max(maxGen, genOf(e))
+    const currentGen = maxGen + 1
 
     const out = new Map<string, string>()
     const unknown: string[] = []
@@ -186,10 +209,11 @@ export class IdentityLedger {
       else unknown.push(p)
     }
 
-    // 账本里记着、但本轮扫描已经不在的 id —— 认领的候选来源
+    // 可认领的 lost：上一代还被盖过章、这一代路径没了 —— 不是「30 天内消失过的都算」。
+    // 为什么必须收到一轮，见 IdentityEntry.gen
     const lostIds: string[] = []
-    for (const [id, e] of this.store.entries()) {
-      if (!livePaths.has(normalizePath(e.path))) lostIds.push(id)
+    for (const [id, e] of before) {
+      if (genOf(e) === currentGen - 1 && !livePaths.has(normalizePath(e.path))) lostIds.push(id)
     }
 
     const computedRoot = new Map<string, string | null>() // 本轮为认领算出的根提交，回写账本时复用
@@ -215,7 +239,7 @@ export class IdentityLedger {
       if (claims.size < Math.min(unknown.length, lostIds.length)) {
         for (const [id, c] of lostCands) c.rootCommit = this.store.get(id)?.rootCommit ?? null
         // lost 一侧一个可用根提交都没有时，found 一侧再怎么算也**必然**配不上——那一批
-        // git 进程是确定无收益的。Task 6 把根提交持久化之后这里会自动重新启用
+        // git 进程是确定无收益的（铸造播种之后这种账本只剩「判据②开工前写下的老条目」）
         if ([...lostCands.values()].some((c) => rootKey(c) !== null)) {
           for (const p of unknown) {
             if (claims.has(p)) continue
@@ -245,24 +269,45 @@ export class IdentityLedger {
       for (let n = 2; used.has(id) || this.store.get(id) !== undefined; n++) id = repoId(`${p}#${n}`)
       used.add(id)
       out.set(p, id)
+      // 判据②的播种，只能在这一刻做：认领发生时旧路径已经不存在了，那时**算不出**它的
+      // 根提交。不播种的话 lost 一侧的 rootCommit 恒为 null，上面那道闸恒假，判据②就是
+      // 一段永远跑不到的死代码，跨卷移动/从备份恢复/ino 不可用的文件系统全部认不回来。
+      // 代价是每个新发现的仓库一生一次一个 git 进程；认领轮次已经算过的直接复用
+      if (!computedRoot.has(p)) computedRoot.set(p, await rootCommitOf(p))
     }
 
-    // 回写账本：路径、判据、seenAt 一律刷新
+    // 回写账本：路径、判据、seenAt、代一律刷新
     for (const [p, id] of out) {
       const s = statOf(p)
       const prev = this.store.get(id)
       this.store.set(id, {
         path: p,
         // stat 瞬时失败（杀软锁住 .git、硬盘刚休眠）时保留上一轮的值，不要清成 "0"——
-        // 清零会废掉判据①，而它是目前唯一真正在工作的判据
+        // 清零会废掉判据①，而它是目前唯一零成本的判据
         dev: s?.dev ?? prev?.dev ?? "0",
         ino: s?.ino ?? prev?.ino ?? "0",
         rootCommit: computedRoot.get(p) ?? prev?.rootCommit ?? null,
         seenAt: new Date().toISOString(),
+        gen: currentGen, // 只有本轮扫到的才盖章；没扫到的条目留在上一代，下一轮就出了认领窗口
       })
     }
     this.reindex()
+
+    // 补全映射：去重折掉的其它拼写（D:\p\a vs D:/p/a、不同大小写）也要能取到 id。
+    // 少了它，调用方一句 ids.get(p)! 就是 undefined，整条仓库数据被存到 "undefined" 键下。
+    // 放在回写之后：账本里每个 id 只该留代表路径那一条，别让别名把 path 覆来覆去
+    for (const p of paths) {
+      if (out.has(p)) continue
+      const rep = repOfKey.get(normalizePath(p))
+      const id = rep === undefined ? undefined : out.get(rep)
+      if (id !== undefined) out.set(p, id)
+    }
     return out
+  }
+
+  /** 某个 id 的账本条目（只读查看：上次见到的路径、判据值、代） */
+  get(id: string): IdentityEntry | undefined {
+    return this.store.get(id)
   }
 
   /** 记下某个仓库的根提交（算过一次就存着，之后不必重算） */

@@ -1,9 +1,10 @@
 import { basename, relative, sep } from "node:path"
 import type { Config } from "./config"
 import { checkHealth } from "./health"
-import { composeStatus, getRepoCore, getRepoHeavy, repoId } from "./git"
+import { composeStatus, getRepoCore, getRepoHeavy, repoId, rootCommit } from "./git"
 import { gitFingerprint } from "./fingerprint"
 import type { RepoCache } from "./repo-cache"
+import type { IdentityLedger } from "./repo-identity"
 import { githubRemoteUrl } from "./github"
 import { scan } from "./scanner"
 import type { GithubInbox, RepoStatus } from "./types"
@@ -54,6 +55,8 @@ export class RepoStore {
     // 可选：heavy 字段的指纹缓存。不传时完全退化成「每轮全价刷新」（旧行为），
     // 测试与嵌入式用法据此免去落盘依赖
     private readonly cache?: RepoCache,
+    // 可选：身份账本。不传时 id 仍按路径算（改造前行为），改名会丢失用户数据
+    private readonly identity?: IdentityLedger,
   ) {}
 
   refreshAll(onProgress?: (scanned: number, total: number) => void): Promise<RepoStatus[]> {
@@ -84,15 +87,20 @@ export class RepoStore {
     this.freshened.clear() // 上一轮若中途抛错可能有残留，本轮只认本轮的
     const cfg = this.getConfig()
     const paths = [...new Set([...scan(cfg.roots, cfg.excludes), ...cfg.manualRepos])]
+    // 路径 → id。账本负责在仓库改名时把新路径认回老 id，从而让 config.json 里
+    // 按 id 存的标签/收藏/归档/便签/分组一个字节都不用改
+    const idByPath = this.identity
+      ? await this.identity.resolve(paths, rootCommit)
+      : new Map(paths.map((p) => [p, repoId(p)]))
     let scanned = 0
     const statuses = await mapLimit(paths, CONCURRENCY, async (p) => {
       let status: RepoStatus
       try {
-        const fresh = await this.refreshRepo(p, repoId(p))
+        const fresh = await this.refreshRepo(p, idByPath.get(p) ?? repoId(p))
         this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
         status = this.decorate(fresh, cfg)
       } catch (err) {
-        status = this.errorStatus(p, cfg, err)
+        status = this.errorStatus(p, cfg, err, idByPath.get(p) ?? repoId(p))
       }
       scanned++
       onProgress?.(scanned, paths.length)
@@ -127,7 +135,9 @@ export class RepoStore {
       this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
       next = this.decorate(fresh, cfg)
     } catch (err) {
-      next = this.errorStatus(existing.path, cfg, err)
+      // 必须带上 id：改名后的仓库用的是账本认回的老 id，按路径重算会得出另一个 id，
+      // 于是这条状态的 id 与它在 repos 里的键对不上，装饰时也读不到用户的标签/归档
+      next = this.errorStatus(existing.path, cfg, err, id)
     }
     if (!this.repos.has(id)) return undefined // 全量扫描已移除该仓库，勿复活
     this.repos.set(id, next)
@@ -173,10 +183,12 @@ export class RepoStore {
     return status
   }
 
-  private errorStatus(path: string, cfg: Config, err: unknown): RepoStatus {
+  // id 默认按路径算，但全量扫描要传账本认领后的那个——否则一个刚改完名又恰好 git 读失败的
+  // 仓库会以「新 id」进 store，用户的标签/归档在它恢复之前全部对不上
+  private errorStatus(path: string, cfg: Config, err: unknown, id: string = repoId(path)): RepoStatus {
     return this.decorate(
       {
-        id: repoId(path),
+        id,
         path,
         name: basename(path),
         displayName: null,
