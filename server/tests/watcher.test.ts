@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, it, vi } from "vitest"
 import { PerRepoStrategy, RecursiveRootStrategy, type StrategyHandlers, type WatchStrategy } from "../src/watch-strategy"
-import { RepoWatcher, shouldIgnorePath, watcherErrorIsNoise } from "../src/watcher"
+import { isStructuralPath, RepoWatcher, shouldIgnorePath, watcherErrorIsNoise } from "../src/watcher"
 import { cleanupFixtures, git, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
@@ -217,6 +217,36 @@ describe("shouldIgnorePath — 监听时跳过的路径", () => {
   it("仓库根目录本身不被忽略", () => {
     expect(shouldIgnorePath(join("D:", "repo"))).toBe(false)
     expect(shouldIgnorePath(join("D:", "repo", "src", "index.ts"))).toBe(false)
+  })
+})
+
+// C2 的另一半：结构变化信号的**收窄**。递归监听看得见 scan root 下的一切，而 root 下
+// 并不只有仓库——草稿目录、非 git 项目、被 excludes 排除的仓库都在这条未归属分支上，
+// 它们的深层写入不可能改变仓库集合，却会把「拆了重建全部监听句柄」的重扫变成持续水龙头
+describe("isStructuralPath — 未归属事件值不值得当成目录结构变化", () => {
+  const root = join("D:", "code")
+
+  it("末段是 .git → 任何深度都报（新仓库出现的确定信号）", () => {
+    // 仓库在第 6 层时它的 .git 在第 7 层，按深度算会被自己排除掉，必须由这条兜住
+    expect(isStructuralPath(join(root, "a", "b", "c", "d", "e", "f", ".git"), [root])).toBe(true)
+    expect(isStructuralPath(join(root, "newrepo", ".git"), [root])).toBe(true)
+  })
+
+  it("scanner 能走到的深度以内 → 报（仓库目录本身的创建/改名/删除都落在这里）", () => {
+    expect(isStructuralPath(join(root, "newrepo"), [root])).toBe(true)
+    expect(isStructuralPath(join(root, "a", "b", "c", "d", "e", "f"), [root])).toBe(true) // 恰好第 6 层
+    expect(isStructuralPath(root, [root])).toBe(true)
+  })
+
+  it("超过扫描深度 → 不报（那只可能是某个目录内部的内容变化）", () => {
+    // 草稿/笔记目录、非 git 项目、被 excludes 排除的仓库的深层写入
+    expect(isStructuralPath(join(root, "a", "b", "c", "d", "e", "f", "g"), [root])).toBe(false)
+    expect(isStructuralPath(join(root, "notes", "2026", "07", "28", "x", "y", "z.md"), [root])).toBe(false)
+  })
+
+  it("说不清在哪棵树下 → 报（少报的代价是新仓库要等 30 分钟兜底重扫，而那个开关可以关掉）", () => {
+    expect(isStructuralPath(join("E:", "elsewhere", "a", "b", "c", "d", "e", "f", "g"), [root])).toBe(true)
+    expect(isStructuralPath(join(root, "a", "b", "c", "d", "e", "f", "g"), [])).toBe(true)
   })
 })
 

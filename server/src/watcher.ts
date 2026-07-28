@@ -1,8 +1,8 @@
 import { resolve } from "node:path"
-import { isUnderPath, shouldIgnorePath, watcherErrorIsNoise } from "./watch-filter"
+import { isStructuralPath, isUnderPath, shouldIgnorePath, watcherErrorIsNoise } from "./watch-filter"
 import { defaultStrategy, type WatchStrategy, type WatchedRepo } from "./watch-strategy"
 
-export { shouldIgnorePath, watcherErrorIsNoise } from "./watch-filter"
+export { isStructuralPath, shouldIgnorePath, watcherErrorIsNoise } from "./watch-filter"
 export type { WatchedRepo }
 
 /** 路径键归一化：Windows 大小写不敏感，且同一目录可能以不同大小写回报 */
@@ -111,8 +111,13 @@ export class RepoWatcher {
     const owner = this.findOwner(abs)
     if (owner === undefined) {
       // 事件落在所有已知仓库之外：可能是新克隆的仓库、被改名的仓库、或刚删掉的仓库。
-      // 改造前这类变化要等最长 30 分钟的兜底重扫才被发现
-      if (!shouldIgnorePath(abs, this.roots)) this.onStructureChanged(`unowned path: ${abs}`)
+      // 改造前这类变化要等最长 30 分钟的兜底重扫才被发现。
+      // isStructuralPath 再筛一道：root 下的草稿目录/非 git 项目/被 excludes 排除的仓库
+      // 也在这条分支上，它们的深层写入不可能改变仓库集合，却会把结构重扫（force=true，
+      // 拆了重建全部句柄）变成一个持续水龙头
+      if (!shouldIgnorePath(abs, this.roots) && isStructuralPath(abs, this.roots)) {
+        this.onStructureChanged(`unowned path: ${abs}`)
+      }
       return
     }
     // 用查表时匹配上的那个祖先目录当仓库根，而不是仓库表里的原始字符串：前者一定是 abs 的

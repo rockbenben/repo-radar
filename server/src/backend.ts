@@ -98,6 +98,10 @@ export function createInboxEmitter(): InboxEmitter {
   }
 }
 
+/** 两轮结构触发的重扫之间的最小间隔（从上一轮**结束**算起）。
+ *  取 60 秒与 watcher 的每仓库冷却常量一致，且远小于 30 分钟的兜底重扫 */
+const STRUCTURE_COOLDOWN_MS = 60_000
+
 /**
  * 「目录结构变了 / 监听丢了事件」→ 一轮兜底重扫。这是自愈链的最后一环：新仓库出现、老仓库
  * 改名或消失、监听缓冲区溢出（那一批事件已经永久丢了）都汇到这里，接不上的话受影响的仓库
@@ -106,33 +110,79 @@ export function createInboxEmitter(): InboxEmitter {
  * 前沿抑制、后沿触发：改一批目录名会连发一串信号，而一轮重扫经指纹缓存后约 1.3 秒，
  * 没必要为每条各跑一轮。抽成独立工厂是为了能单测——它整条链上唯一的触发条件是「内核报了
  * 一个我们无法在测试里稳定复现的失败」，塞在 createBackend 的闭包里就等于永远测不到。
+ *
+ * **防抖不等于速率上限，两者都必须有。** 防抖只压住「窗口内的一串」，而信号源本身可以是
+ * 持续的：win/mac 的递归监听看得见 scan root 下的一切，于是任何「不在已知仓库内、路径段里
+ * 又没有 IGNORED_DIRS」的写入都会产生一条信号——root 下的非仓库文件夹、草稿/笔记/下载目录、
+ * 不是 git 仓库的项目，以及最容易撞上的：**任何被用户放进 excludes 的仓库**（它不进 scan()，
+ * 所以永远不在归属表里）。这些位置只要在持续写入，旧写法就是每约 2 秒 + 重扫时长无限触发
+ * 一轮全量重扫，而结构路径传的是 force=true，每一轮都要 stop() + start() 整套监听句柄——
+ * 在 Linux 上就是 chokidar 的完整拆建，正是这轮重构要消灭的那笔开销，却以约 600 倍于
+ * 它所取代的「每 30 分钟重建一次」的频率在跑；win/mac 上句柄便宜，但每约 3 秒约 100 个
+ * git 进程同样不可忽略。
+ *
+ * 冷却期内的信号**延后**而不是丢弃：丢弃的话，「冷却窗口里克隆了一个新仓库、之后再没有别的
+ * 写入」会一路错到 30 分钟兜底重扫（而那个开关用户可以关掉）。延后同样把稳态速率钉死在
+ * 一轮 / cooldownMs，却不会漏掉任何一次真实的结构变化。
  */
 export function createStructureRescan(deps: {
   rescan: () => Promise<unknown>
   delayMs?: number
+  cooldownMs?: number
   log?: (msg: string) => void
   logError?: (msg: string) => void
 }): { onStructureChanged: (reason: string) => void; stop: () => void } {
   const delayMs = deps.delayMs ?? 2000
+  const cooldownMs = deps.cooldownMs ?? STRUCTURE_COOLDOWN_MS
   const log = deps.log ?? ((m: string) => console.log(m))
   const logError = deps.logError ?? ((m: string) => console.error(m))
   let timer: ReturnType<typeof setTimeout> | null = null
-  return {
-    onStructureChanged(reason) {
-      if (timer) return // 窗口里已经排着一轮，这条信号并进去
-      timer = setTimeout(() => {
-        // 先置空再开跑。反过来的话，重扫期间到来的结构变化会被这个已经烧掉的定时器句柄
-        // 一直抑制住——「重扫本身要跑一会儿，这期间新克隆了一个仓库」正好是它该管的事
-        timer = null
-        log(`[repo-radar] 目录结构变化，触发重扫：${reason}`)
-        void deps.rescan().catch((err) => {
+  let running = false
+  let pending: string | null = null // 重扫进行中收到的信号，等这一轮收尾后按冷却重新排
+  let stopped = false
+  // 上一轮结构触发的重扫**结束**的时刻。从结束算起而不是从开始算起：重扫本身要跑几秒，
+  // 按开始算等于把重扫时长白送给下一轮，冷却就压不住「重扫刚结束又立刻起一轮」
+  let lastEndAt = Number.NEGATIVE_INFINITY
+
+  function arm(reason: string): void {
+    const wait = Math.max(delayMs, lastEndAt + cooldownMs - Date.now())
+    timer = setTimeout(() => {
+      // 先置空再开跑。反过来的话，重扫期间到来的结构变化会被这个已经烧掉的定时器句柄
+      // 一直抑制住——「重扫本身要跑一会儿，这期间新克隆了一个仓库」正好是它该管的事
+      timer = null
+      running = true
+      log(`[repo-radar] 目录结构变化，触发重扫：${reason}`)
+      void deps
+        .rescan()
+        .catch((err) => {
           logError(`[repo-radar] 结构变化触发的重扫失败：${err instanceof Error ? err.message : String(err)}`)
         })
-      }, delayMs)
+        .finally(() => {
+          running = false
+          lastEndAt = Date.now()
+          const next = pending
+          pending = null
+          // stopped 必须查：stop() 之后这一轮的收尾仍会到达，不查就等于退出后又排了一轮
+          if (!stopped && next !== null) arm(next)
+        })
+    }, wait)
+  }
+
+  return {
+    onStructureChanged(reason) {
+      if (stopped) return
+      if (timer) return // 窗口里已经排着一轮，这条信号并进去
+      if (running) {
+        pending ??= reason // 只记第一条原因，日志里够用；重扫是全局的，不按 root 切分
+        return
+      }
+      arm(reason)
     },
     stop() {
+      stopped = true
       if (timer) clearTimeout(timer)
       timer = null
+      pending = null
     },
   }
 }

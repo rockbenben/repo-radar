@@ -1,7 +1,9 @@
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
-const MAX_DEPTH = 6
+/** 从每个 root 往下最多走几层找仓库。导出给 watch-filter：递归监听下「一条未归属的事件
+ *  路径值不值得当成目录结构变化」要按同一个深度判断，两处各写一个常量迟早对不上 */
+export const MAX_DEPTH = 6
 
 export function scan(roots: string[], excludes: string[]): string[] {
   const found: string[] = []

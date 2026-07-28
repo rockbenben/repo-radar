@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createBackend, createRescanScheduler, createStructureRescan, type Backend } from "../src/backend"
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config"
 import { RepoWatcher } from "../src/watcher"
@@ -250,12 +250,15 @@ describe("createBackend", () => {
 describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-  function harness(rescan: () => Promise<unknown>, delayMs = 30) {
+  // cooldownMs 默认 0：本 describe 钉的是防抖/日志/撤销这一层，速率上限单独有一个
+  // 假时钟的 describe 负责，两者混在一起会让每条用例都要多等一个冷却窗口
+  function harness(rescan: () => Promise<unknown>, delayMs = 30, cooldownMs = 0) {
     const logs: string[] = []
     const errors: string[] = []
     const s = createStructureRescan({
       rescan,
       delayMs,
+      cooldownMs,
       log: (m) => void logs.push(m),
       logError: (m) => void errors.push(m),
     })
@@ -292,23 +295,84 @@ describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
     expect(calls).toBe(0)
   })
 
-  // 定时器要在开跑之前置空。反过来（重扫结束才置空）的话，重扫期间到来的结构变化会被
-  // 那个已经烧掉的定时器句柄一直抑制——正好是「重扫本身很慢、这期间新克隆的仓库」这种情况
-  it("重扫进行中到来的新信号仍能排下一轮", async () => {
+  // 定时器要在开跑之前置空，且重扫期间到来的信号必须被记住——正好是「重扫本身很慢、
+  // 这期间新克隆了一个仓库」这种情况。**但它不能立刻再起一轮**：那是 C2 那条无上界
+  // 速率的来源。新语义是「记下来，等这一轮收尾 + 冷却之后再排」，信号既不丢也不加速。
+  // 本用例把冷却设为 0，只钉「不丢」这一半；速率上限由下面的假时钟用例单独钉
+  it("重扫进行中到来的新信号被记住，等这一轮收尾后才排下一轮", async () => {
     let calls = 0
     let release: () => void = () => {}
     const h = harness(async () => {
       calls++
       await new Promise<void>((r) => (release = r))
-    })
+    }, 30, 0)
     h.onStructureChanged("first")
     await sleep(120)
     expect(calls).toBe(1) // 第一轮还没结束
     h.onStructureChanged("second")
     await sleep(120)
-    expect(calls).toBe(2)
+    expect(calls).toBe(1) // 上一轮还跑着，绝不能叠一轮上去
     release()
+    await sleep(120)
+    expect(calls).toBe(2) // 收尾之后那条信号如约兑现，没有被丢掉
     h.stop()
+  })
+})
+
+// C2：防抖只压得住「一串」，压不住「一直」。win/mac 的递归监听看得见 scan root 下的一切，
+// 于是 root 下的草稿目录、非 git 项目、以及被 excludes 排除的仓库只要在持续写入，就会
+// 源源不断地产生未归属事件；而结构重扫走的是 force=true（stop() + start() 整套监听句柄）
+// 的贵路径。旧写法是每约 2 秒 + 重扫时长无限触发一轮——约 600 倍于它所取代的
+// 「每 30 分钟重建一次」。用假时钟把这条不变量钉死：无论投多少信号，速率有上限。
+describe("createStructureRescan — 结构信号的速率上限（C2）", () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it("10 秒内投 100 个未归属信号，只触发一轮重扫", async () => {
+    let calls = 0
+    const s = createStructureRescan({
+      rescan: async () => void calls++,
+      delayMs: 2000,
+      cooldownMs: 60_000,
+      log: () => {},
+      logError: () => {},
+    })
+    try {
+      for (let i = 0; i < 100; i++) {
+        s.onStructureChanged(`noise ${i}`)
+        await vi.advanceTimersByTimeAsync(100) // 100 × 100ms = 10 秒
+      }
+      expect(calls).toBe(1)
+
+      // 冷却过去之后，攒着的那条信号如约兑现——限的是速率，不是把信号丢掉
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(calls).toBe(2)
+    } finally {
+      s.stop()
+    }
+  })
+
+  it("stop 之后，正在跑的那一轮收尾时不会再排一轮", async () => {
+    let calls = 0
+    let release: () => void = () => {}
+    const s = createStructureRescan({
+      rescan: async () => {
+        calls++
+        await new Promise<void>((r) => (release = r))
+      },
+      delayMs: 10,
+      cooldownMs: 0,
+      log: () => {},
+      logError: () => {},
+    })
+    s.onStructureChanged("first")
+    await vi.advanceTimersByTimeAsync(20)
+    expect(calls).toBe(1)
+    s.onStructureChanged("second") // 排进 pending
+    s.stop()
+    release()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(calls).toBe(1)
   })
 })
 

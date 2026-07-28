@@ -1,4 +1,5 @@
-import { resolve } from "node:path"
+import { relative, resolve } from "node:path"
+import { MAX_DEPTH as SCAN_MAX_DEPTH } from "./scanner"
 
 /**
  * 监听时整段跳过的目录名。除了 node_modules，主要是各语言的构建产物目录：内容由构建工具
@@ -107,4 +108,32 @@ export function isUnderPath(p: string, root: string): boolean {
 
 function foldCase(p: string): string {
   return process.platform === "win32" ? p.toLowerCase() : p
+}
+
+/**
+ * 一条**不属于任何已知仓库**的事件路径，值不值得当成「目录结构变化」上报。
+ *
+ * win/mac 的递归监听看得见 scan root 下的一切，而 root 下并不只有仓库：草稿/笔记/下载目录、
+ * 不是 git 仓库的项目、以及被用户放进 excludes 的仓库（它不进 scan()，所以永远不在归属表里）
+ * 都会源源不断地产生未归属事件。每一条都上报的话，结构重扫的信号源就是一个持续的水龙头，
+ * 而结构重扫走的是 force=true（拆了重建全部监听句柄）的贵路径。
+ *
+ * 判据是「这条路径**有没有可能**是一次仓库集合的变化」：
+ * - 末段是 `.git`：新仓库出现的确定信号，任何深度都要报（scanner 只找到 MAX_DEPTH 层，
+ *   但 `.git` 在仓库目录之下又多一层，按深度算会被自己排除掉）
+ * - 相对 root 的深度不超过 scanner 的 MAX_DEPTH：仓库只可能出现在这个范围内，因此
+ *   「仓库目录本身被创建/改名/删除」这类事件必然落在这里
+ * 更深的写入只可能是某个目录**内部**的内容变化，扫描结果不会因它而不同。
+ *
+ * 说不清在哪棵树下（roots 为空、或落在 manualRepos 那种 root 之外的监听目标下）时一律上报：
+ * 少报一次的代价是「新仓库要等 30 分钟兜底重扫才出现」，而那个开关用户是可以关掉的。
+ */
+export function isStructuralPath(p: string, roots: readonly string[] = []): boolean {
+  const abs = resolve(p)
+  if (abs.split(/[\\/]/).pop() === ".git") return true
+  const root = roots.find((r) => isUnderPath(abs, r))
+  if (root === undefined) return true
+  const rel = relative(resolve(root), abs)
+  if (rel === "") return true
+  return rel.split(/[\\/]/).length <= SCAN_MAX_DEPTH
 }
