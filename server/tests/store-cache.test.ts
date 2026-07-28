@@ -17,7 +17,10 @@ function cacheFile(): string {
   return join(d, "repo-cache.json")
 }
 afterAll(() => {
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  // maxRetries: 3——与套件里其余「异步/防抖写盘 + force:true 清理」的文件一致（desc-cache.test.ts、
+  // inbox-cache.test.ts、store.test.ts 等 20+ 处）：并发 I/O 下 rmSync 偶发因文件正被写入而失败，
+  // 重试几次就过去了，不加则在负载高时表现为 EPERM
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 3 })
 })
 
 describe("RepoStore 指纹缓存", () => {
@@ -38,6 +41,7 @@ describe("RepoStore 指纹缓存", () => {
     await store.refreshAll()
     expect(spy.mock.calls.length).toBe(afterFirst) // 一次都没再调用
     spy.mockRestore()
+    cache.flush() // debounceMs 1000：refreshAll 内部的 cache.set() 是防抖写盘，不 flush 定时器会活过本文件的 afterAll
   })
 
   it("仓库动过之后重新调用 getRepoHeavy", async () => {
@@ -46,7 +50,8 @@ describe("RepoStore 指纹缓存", () => {
     // 当 root 扫描，会把同一测试进程里其它并发用例正在建的 fixture 一并扫进来——
     // 全量套件并行跑时 getRepoHeavy 调用次数因此不确定，manualRepos 精确点名这一个仓库
     const cfg = { ...DEFAULT_CONFIG, manualRepos: [repo] }
-    const store = new RepoStore(() => cfg, undefined, undefined, new RepoCache(cacheFile()))
+    const cache = new RepoCache(cacheFile())
+    const store = new RepoStore(() => cfg, undefined, undefined, cache)
     await store.refreshAll()
 
     const spy = vi.spyOn(git, "getRepoHeavy")
@@ -58,6 +63,7 @@ describe("RepoStore 指纹缓存", () => {
     await store.refreshAll()
     expect(spy.mock.calls.length).toBeGreaterThan(0)
     spy.mockRestore()
+    cache.flush() // 同上：refreshAll 两轮各触发一次 cache.set()，防抖定时器不 flush 会活过 afterAll
   })
 
   // 缓存命中时看板上的字段必须与全价刷新完全一致，否则缓存就是在制造错误数据
@@ -72,6 +78,7 @@ describe("RepoStore 指纹缓存", () => {
     const first = (await store.refreshAll())[0]
     const second = (await store.refreshAll())[0]
     expect({ ...second, scannedAt: "" }).toEqual({ ...first, scannedAt: "" })
+    cache.flush() // 同上
   })
 
   // 不传 cache 时必须完全退化成改造前的行为（每轮都全价刷新）
