@@ -1700,7 +1700,7 @@ git commit -m "feat(server): 新增仓库身份账本与认领算法"
 - Consumes: `IdentityLedger`（Task 5）、`refreshRepo`（Task 4）
 - Produces: `rootCommit(path: string): Promise<string | null>`（`git.ts`）；`RepoStore` 构造参数新增可选第 5 参 `identity?: IdentityLedger`；`IdentityEntry` 增 `gen: number` 字段
 
-#### Task 5 交接的三条硬约束（评审确认，必须在本任务处理）
+#### 上一个任务交接过来的三条硬约束（评审确认，必须在本任务处理）
 
 **A. 判据②必须由本任务播种，否则它 100% 不存在。**
 Task 5 的 `resolve` 有一个稳定死锁：只有当某个 **lost** 候选已经带着非空 `rootCommit` 时才会去算 **found** 侧的根提交，而根提交又只在算过之后才写回账本。账本初始全是 `null` ⇒ 闸门恒假 ⇒ 永不计算 ⇒ 永远是 `null`。
