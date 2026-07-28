@@ -35,12 +35,16 @@ const IGNORED_DIRS = new Set([
  * 只看仓库根目录**以下**的段。仓库自己或它的上级目录叫 build/vendor/dist 完全合法
  * （`D:\vendor\myrepo`、`D:\projects\build`），拿绝对路径整条去匹配的话这些仓库会被整个
  * 忽略掉——同样是「静默不刷新」，比噪音严重得多。roots 为空时退化成整条路径匹配。
+ *
+ * root 归属与相对段都交给 `isUnderPath` / `relative` 算，不再自己写一份前缀比较：手写那份
+ * 是裸字符串比较，尾分隔符（`D:\code\`）、分隔符风格（`D:/code`）、Windows 大小写只要差一点
+ * 就整条匹配不上，于是**退化成拿绝对路径整条去比**——那个 root 下的所有仓库会因为路径里
+ * 恰好有一段 build/vendor 被整个静默忽略，界面上它们永远停在过期状态。卷根（`D:\`、`/`）
+ * 也只有 `isUnderPath` 处理对（它为「b 已以分隔符结尾」特判过），同一个边界不该有第二份实现。
  */
 export function shouldIgnorePath(p: string, roots: readonly string[] = []): boolean {
-  // 前缀必须停在分隔符上：裸 startsWith 会让根 `D:\repo` 认领 `D:\repo-other\...`，
-  // 那个仓库的 build/ 判断就跑到别人的坐标系里去了
-  const root = roots.find((r) => p === r || (p.startsWith(r) && /[\\/]/.test(p[r.length] ?? "")))
-  const rest = root === undefined ? p : p.slice(root.length)
+  const root = roots.find((r) => isUnderPath(p, r))
+  const rest = root === undefined ? p : relative(resolve(root), resolve(p))
   return rest.split(/[\\/]/).some((seg) => IGNORED_DIRS.has(seg))
 }
 

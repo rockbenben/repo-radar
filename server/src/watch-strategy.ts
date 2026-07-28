@@ -6,6 +6,16 @@ import { isUnderPath, shouldIgnorePath, watchTargetLost } from "./watch-filter"
 export interface WatchedRepo {
   id: string
   path: string
+  /**
+   * 已归档：**不为它建立任何监听目标，但仍要进 RepoWatcher 的归属映射**。两件事缺一不可。
+   *
+   * 不建目标：归档仓库不上看板、不参与后台处理，为它挂句柄纯属浪费。
+   * 仍要认得它：递归 root 句柄照样看得见它的写入，而**未归属**的事件会被当成「目录结构变化」，
+   * 触发一轮 force=true 的全量重扫（store.refreshAll + 全部监听句柄拆了重建），并按 60 秒冷却
+   * 持续重复。把归档仓库从映射表里删掉的净效果是荒谬的：归档一个你正在用的仓库，会让应用
+   * 比不归档时做多得多的后台工作——反复的 CPU 尖峰、每分钟重新出现的扫描进度条。
+   */
+  archived?: boolean
 }
 
 export interface StrategyHandlers {
@@ -38,10 +48,12 @@ export class RecursiveRootStrategy implements WatchStrategy {
 
   async start(roots: readonly string[], repos: readonly WatchedRepo[], h: StrategyHandlers): Promise<string[]> {
     const ok: string[] = []
-    // roots 之外的 manualRepos 也要各挂一个（数量本就很少）
-    const targets = [
-      ...new Set([...roots, ...repos.map((r) => r.path).filter((p) => !roots.some((root) => isUnderPath(p, root)))]),
-    ]
+    // roots 之外的 manualRepos 也要各挂一个（数量本就很少）。归档仓库不建目标（见 WatchedRepo.archived）
+    const outside = repos
+      .filter((r) => !r.archived)
+      .map((r) => r.path)
+      .filter((p) => !roots.some((root) => isUnderPath(p, root)))
+    const targets = [...new Set([...roots, ...outside])]
     // 交给 watcherErrorIsNoise 分级用的目标列表：两种形式都要在里面。它靠「出事的路径是不是
     // 监听目标本身」判断能不能咽掉，而 realpath 失败时错误带的是原始路径、监听建立后内核报的
     // 是 realpath——少一种形式，「整个 root 从此没有事件」就会被当成单文件噪音咽掉，
@@ -109,8 +121,10 @@ export class PerRepoStrategy implements WatchStrategy {
   private watcher: FSWatcher | null = null
 
   async start(_roots: readonly string[], repos: readonly WatchedRepo[], h: StrategyHandlers): Promise<string[]> {
-    // realpath 的理由同递归策略（8.3 断言崩溃）。原始形式必须留住：事件要按它报回去
-    const resolved = repos.map((r) => {
+    // realpath 的理由同递归策略（8.3 断言崩溃）。原始形式必须留住：事件要按它报回去。
+    // 归档仓库不进 chokidar 的目标列表（见 WatchedRepo.archived）——这条腿上每个仓库要挂
+    // 好几个 inotify watch，为不上看板的仓库挂等于白占 max_user_watches 的名额
+    const resolved = repos.filter((r) => !r.archived).map((r) => {
       try {
         return { orig: r.path, real: realpathSync.native(r.path) }
       } catch {

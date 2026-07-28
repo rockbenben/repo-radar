@@ -118,6 +118,17 @@ describe("RecursiveRootStrategy", () => {
     expect(ok).toEqual([root, outside])
     await s.stop()
   })
+
+  // 归档仓库要进 RepoWatcher 的归属映射（否则它的写入会被当成目录结构变化，见 watcher.test.ts），
+  // 但**不该为它建句柄**：它不上看板，挂了也只是白占资源
+  it("归档仓库不建立监听目标（它只该进归属映射，不该占一个句柄）", async () => {
+    const root = tmpRoot()
+    const archivedOutside = tmpRoot()
+    const s = new RecursiveRootStrategy()
+    const ok = await s.start([root], [{ id: "ARCH", path: archivedOutside, archived: true }], noopHandlers([]))
+    expect(ok).toEqual([root]) // 只有 scan root 自己，归档的 manualRepo 没有单独的句柄
+    await s.stop()
+  })
 })
 
 describe("PerRepoStrategy", () => {
@@ -163,6 +174,17 @@ describe("PerRepoStrategy", () => {
     const s = new PerRepoStrategy()
     const ok = await s.start([], [{ id: "R", path: repo }, { id: "G", path: gone }], noopHandlers([]))
     expect(ok).toEqual([repo])
+    await s.stop()
+  })
+
+  // 这条腿上每个仓库要挂好几个 inotify watch，为不上看板的归档仓库挂等于白占
+  // fs.inotify.max_user_watches 的名额
+  it("归档仓库不进 chokidar 的目标列表，也不算进覆盖", async () => {
+    const live = makeRepo()
+    const archived = makeRepo()
+    const s = new PerRepoStrategy()
+    const ok = await s.start([], [{ id: "L", path: live }, { id: "A", path: archived, archived: true }], noopHandlers([]))
+    expect(ok).toEqual([live])
     await s.stop()
   })
 

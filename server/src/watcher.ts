@@ -26,6 +26,9 @@ function pathKey(p: string): string {
 export class RepoWatcher {
   private repos: WatchedRepo[] = []
   private byKey = new Map<string, string>() // 归一化仓库路径 → id
+  // 归档仓库的 id。它们照样在 byKey 里（事件必须能被归属），只是归属之后就地丢弃，
+  // 理由见 WatchedRepo.archived：删出映射表 = 每一次保存都报一次「目录结构变化」
+  private mutedIds = new Set<string>()
   private roots: string[] = []
   private okRoots: string[] = []
   private started = false
@@ -89,14 +92,17 @@ export class RepoWatcher {
   private indexRepos(repos: WatchedRepo[]): void {
     this.repos = [...repos]
     this.byKey = new Map(this.repos.map((r) => [pathKey(r.path), r.id]))
+    this.mutedIds = new Set(this.repos.filter((r) => r.archived).map((r) => r.id))
   }
 
   /** 实际被监听覆盖的仓库数——某个 root 挂不上时必须如实变低，不能装作全覆盖。
    *  前缀停在分隔符上（见 isUnderPath）：虚高的覆盖数等于界面在说「这个仓库有人看着」，
-   *  而用户看到它不刷新时无从判断是哪一环坏了 */
+   *  而用户看到它不刷新时无从判断是哪一环坏了。
+   *  归档仓库不计入：它们进这张表只是为了让事件有归属可认（见 WatchedRepo.archived），
+   *  本来就不建目标，算进来会让覆盖数虚高，也会让 automation 的「覆盖够不够」判断跟着错 */
   coveredRepoCount(): number {
     if (!this.started) return 0
-    return this.repos.filter((r) => this.okRoots.some((root) => isUnderPath(r.path, root))).length
+    return this.repos.filter((r) => !r.archived && this.okRoots.some((root) => isUnderPath(r.path, root))).length
   }
 
   watchedRoots(): string[] {
@@ -122,6 +128,10 @@ export class RepoWatcher {
       }
       return
     }
+    // 归档仓库的事件到此为止：既不刷新它（它不上看板），也不报结构变化（仓库集合并没有变）。
+    // 这一步是「让 watcher 认得归档仓库」的另一半——只认不丢的话，归档仓库里的每一次保存
+    // 都会走上面那条未归属分支去触发全量重扫，见 WatchedRepo.archived
+    if (this.mutedIds.has(owner.id)) return
     // 用查表时匹配上的那个祖先目录当仓库根，而不是仓库表里的原始字符串：前者一定是 abs 的
     // 字符前缀，后者可能只差大小写或分隔符。shouldIgnorePath 靠裸 startsWith 找根，找不到
     // 就退化成拿整条绝对路径匹配——仓库放在 D:\vendor\x 这种目录下时会被整个静默忽略

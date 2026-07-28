@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, sep } from "node:path"
 import { afterAll, describe, expect, it, vi } from "vitest"
 import { PerRepoStrategy, RecursiveRootStrategy, type StrategyHandlers, type WatchStrategy } from "../src/watch-strategy"
 import { isStructuralPath, RepoWatcher, shouldIgnorePath, watcherErrorIsNoise } from "../src/watcher"
@@ -200,6 +200,28 @@ describe("shouldIgnorePath — 监听时跳过的路径", () => {
     expect(shouldIgnorePath(join("D:", "vendor", "myrepo", "vendor", "x.go"), roots)).toBe(true)
   })
 
+  // 卷根是受支持的扫描根（isUnderPath 为它特判过：「否则扫整个卷的用户一个仓库都匹配不上」）。
+  // 手写的前缀比较要求 root 之后紧跟一个分隔符，卷根永远匹配不上——这里两种形态都钉住，
+  // 免得以后有人把 root 归属判断改回裸 startsWith
+  it("卷根 scan root（D:\\ 与 /）按 root 之下的段判断，不把整条绝对路径拿来匹配", () => {
+    for (const volume of ["D:\\", "/"]) {
+      expect(shouldIgnorePath(join(volume, "code", "repo", "src", "a.ts"), [volume])).toBe(false)
+      expect(shouldIgnorePath(volume, [volume])).toBe(false) // root 自身
+      expect(shouldIgnorePath(join(volume, "code", "repo", "dist", "b.js"), [volume])).toBe(true) // root 之下的构建产物照旧跳过
+    }
+  })
+
+  // 这一条才是「退化成整条路径匹配」真正咬人的地方：配置里的扫描根带个尾分隔符、或写成正斜杠
+  //（Windows 上两种都合法且常见），裸字符串比较就整条对不上，于是拿绝对路径去逐段匹配——
+  // 那个 root 下的仓库只要路径里有一段叫 build/vendor/dist，事件就被全部丢弃，
+  // 界面上它永远停在过期状态，没有任何报错
+  it("root 的尾分隔符 / 分隔符风格不同也要认得出来（否则那个 root 下的仓库静默停止刷新）", () => {
+    const p = join("D:", "build", "myrepo", "src", "a.ts")
+    expect(shouldIgnorePath(p, [join("D:", "build", "myrepo")])).toBe(false) // 基准形式
+    expect(shouldIgnorePath(p, [`${join("D:", "build", "myrepo")}${sep}`])).toBe(false) // 尾分隔符
+    expect(shouldIgnorePath(p, ["D:/build/myrepo"])).toBe(false) // 正斜杠写法
+  })
+
   it("嵌套仓库按最长匹配根归属（调用方按长度倒序传入）", () => {
     const roots = [join("D:", "repo", "dist", "inner"), join("D:", "repo")] // 长度倒序
     // inner 是一个独立仓库，虽然它位于外层仓库的 dist/ 下，它自己的文件不该被忽略
@@ -388,6 +410,38 @@ describe("RepoWatcher — 归属映射", () => {
     await w.setRoots([join("D:", "work")], [{ id: "R", path: repo }])
     w.handleEventForTest(join("D:", "work", "brand-new-project", ".git"))
     expect(structural.length).toBe(1)
+    await w.close()
+  })
+
+  /**
+   * G2：归档仓库既不能刷新，**也不能报结构变化**。
+   *
+   * 递归 root 句柄照样看得见归档仓库里的写入。把它从归属映射里删掉（改造后 applyWatch/
+   * applyRepos 的 `filter(!archived)` 就是这么做的）的后果是：每一次保存都找不到 owner →
+   * 落进未归属分支 → 末段在扫描深度内 → 报结构变化 → 一轮 force=true 的全量重扫
+   *（store.refreshAll + 全部句柄拆建），按 60 秒冷却持续重复。净效果荒谬：归档一个你正在用的
+   * 仓库，会让应用比不归档时做多得多的后台工作，而归档前它连一个事件都不产生
+   */
+  it("归档仓库里的写入既不刷新它，也不报结构变化", async () => {
+    const root = join("D:", "work")
+    const fired: string[] = []
+    const structural: string[] = []
+    const fake = { async start() { return [root] }, async stop() {} }
+    const w = new RepoWatcher((id) => fired.push(id), (r) => structural.push(r), 10, 0, fake)
+    await w.setRoots([root], [
+      { id: "LIVE", path: join(root, "live") },
+      { id: "ARCH", path: join(root, "arch"), archived: true },
+    ])
+    w.handleEventForTest(join(root, "arch", "src", "a.ts")) // 归档仓库的工作区写入
+    w.handleEventForTest(join(root, "arch", ".git", "index")) // 以及它的 .git 内部
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual([]) // 不刷新：它不上看板
+    expect(structural).toEqual([]) // 更不能报结构变化：仓库集合根本没变
+
+    w.handleEventForTest(join(root, "live", "src", "a.ts")) // 同一批设置下正常仓库照常刷新
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual(["LIVE"])
+    expect(w.coveredRepoCount()).toBe(1) // 归档的不计入覆盖数，否则 coverage 虚高
     await w.close()
   })
 
