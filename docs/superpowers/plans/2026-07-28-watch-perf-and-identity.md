@@ -16,7 +16,7 @@
 - 不新增任何运行时依赖。`chokidar ^5.0.0` 保留，仅 `PerRepoStrategy` 使用。
 - 服务端全部 ESM（`server/package.json` 的 `"type": "module"`），import 路径不带扩展名，沿用现有写法。
 - 注释用中文，写「为什么」而不是「是什么」——与现有 `watcher.ts` / `store.ts` / `config.ts` 的风格一致。凡是修 bug 换来的约束，必须把「不这么写会怎样」写进注释。
-- 测试命令：`npm test -w server`（vitest）。单文件：`npx vitest run tests/<file> -w server`。类型检查：`npm run typecheck -w server`。
+- 测试命令：`npm test -w server`（vitest）。单文件：`npm test -w server -- tests/<file>`——注意 `-w` 只对 npm 有效，写成 `npx vitest run tests/<file> -w server` 会被 vitest 当成 `--watch` 而**永远挂住**。类型检查：`npm run typecheck -w server`。
 - 现有 `~/.repo-radar/config.json` 必须零破坏、零迁移。任何任务都不得改变 `repoId(path)` 的算法（`sha1(路径转正斜杠转小写).slice(0,12)`）。
 - commit message 只写变更内容本身，**不得带任何 AI 署名行**（`Co-Authored-By`、`Generated with` 等一律禁止）。
 - 落盘缓存/账本的 `prune` 一律带**年龄护栏**（默认 30 天），沿用 `desc-cache.ts:73` 的既有理由：网络盘根目录瞬时掉线会让一整批仓库在某轮扫描里消失，立即剪会把它们的落盘数据永久抹掉。
@@ -183,7 +183,7 @@ describe("JsonStore", () => {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run tests/json-store.test.ts -w server`
+Run: `npm test -w server -- tests/json-store.test.ts`
 Expected: FAIL — `Failed to resolve import "../src/json-store"`
 
 - [ ] **Step 3: 实现 `json-store.ts`**
@@ -308,7 +308,7 @@ export class JsonStore<T> {
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `npx vitest run tests/json-store.test.ts -w server`
+Run: `npm test -w server -- tests/json-store.test.ts`
 Expected: PASS（9 项全绿）
 
 - [ ] **Step 5: 把 `desc-cache.ts` 迁到底座上**
@@ -561,7 +561,7 @@ describe("parseStatus — branch.oid", () => {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run tests/fingerprint.test.ts tests/parse.test.ts -w server`
+Run: `npm test -w server -- tests/fingerprint.test.ts tests/parse.test.ts`
 Expected: FAIL —— `fingerprint` 模块不存在；`parseStatus(...).oid` 是 `undefined` 而非 `null`
 
 - [ ] **Step 3: 给 `parseStatus` 加 oid**
@@ -644,7 +644,7 @@ export function gitFingerprint(repoPath: string, oid: string | null): string | n
 
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `npx vitest run tests/fingerprint.test.ts tests/parse.test.ts -w server`
+Run: `npm test -w server -- tests/fingerprint.test.ts tests/parse.test.ts`
 Expected: PASS
 
 - [ ] **Step 6: 全量测试 + 类型检查**
@@ -756,7 +756,7 @@ describe("composeStatus 与 getRepoStatus 等价", () => {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run tests/repo-core-heavy.test.ts -w server`
+Run: `npm test -w server -- tests/repo-core-heavy.test.ts`
 Expected: FAIL —— `getRepoCore`、`getRepoHeavy`、`composeStatus` 未导出
 
 - [ ] **Step 3: 拆分实现**
@@ -886,7 +886,7 @@ export async function getRepoStatus(path: string, id: string = repoId(path)): Pr
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `npx vitest run tests/repo-core-heavy.test.ts -w server`
+Run: `npm test -w server -- tests/repo-core-heavy.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: 全量测试 + 类型检查**
@@ -997,7 +997,7 @@ describe("RepoCache", () => {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run tests/repo-cache.test.ts -w server`
+Run: `npm test -w server -- tests/repo-cache.test.ts`
 Expected: FAIL —— `Failed to resolve import "../src/repo-cache"`
 
 - [ ] **Step 3: 实现 `repo-cache.ts`**
@@ -1057,7 +1057,7 @@ export class RepoCache {
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `npx vitest run tests/repo-cache.test.ts -w server`
+Run: `npm test -w server -- tests/repo-cache.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: 写 store 接入的失败测试**
@@ -1148,7 +1148,7 @@ describe("RepoStore 指纹缓存", () => {
 
 - [ ] **Step 6: 运行确认失败**
 
-Run: `npx vitest run tests/store-cache.test.ts -w server`
+Run: `npm test -w server -- tests/store-cache.test.ts`
 Expected: FAIL —— `RepoStore` 尚不接受第 4 个构造参数，且第二轮仍会调用 `getRepoHeavy`
 
 - [ ] **Step 7: 改 `store.ts` 接入缓存**
@@ -1235,7 +1235,7 @@ import type { RepoCache } from "./repo-cache"
 
 - [ ] **Step 9: 运行测试确认通过**
 
-Run: `npx vitest run tests/store-cache.test.ts tests/store.test.ts tests/store-freshen.test.ts tests/backend.test.ts -w server`
+Run: `npm test -w server -- tests/store-cache.test.ts tests/store.test.ts tests/store-freshen.test.ts tests/backend.test.ts`
 Expected: PASS
 
 - [ ] **Step 10: 全量测试 + 类型检查**
@@ -1437,7 +1437,7 @@ describe("IdentityLedger", () => {
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `npx vitest run tests/repo-identity.test.ts -w server`
+Run: `npm test -w server -- tests/repo-identity.test.ts`
 Expected: FAIL —— `Failed to resolve import "../src/repo-identity"`
 
 - [ ] **Step 3: 实现 `repo-identity.ts`**
@@ -1661,7 +1661,7 @@ export class IdentityLedger {
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `npx vitest run tests/repo-identity.test.ts -w server`
+Run: `npm test -w server -- tests/repo-identity.test.ts`
 Expected: PASS（20 项全绿）
 
 - [ ] **Step 5: 类型检查 + 全量测试**
@@ -1781,7 +1781,7 @@ describe("RepoStore + 身份账本", () => {
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `npx vitest run tests/store-identity.test.ts -w server`
+Run: `npm test -w server -- tests/store-identity.test.ts`
 Expected: FAIL —— `RepoStore` 尚不接受第 5 个构造参数；改名后 id 会变
 
 - [ ] **Step 3: 在 `git.ts` 加根提交辅助函数**
@@ -1878,7 +1878,7 @@ import type { IdentityLedger } from "./repo-identity"
 
 - [ ] **Step 6: 运行测试确认通过**
 
-Run: `npx vitest run tests/store-identity.test.ts -w server`
+Run: `npm test -w server -- tests/store-identity.test.ts`
 Expected: PASS
 
 - [ ] **Step 7: 全量测试 + 类型检查**
@@ -2037,7 +2037,7 @@ describe("defaultStrategy", () => {
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `npx vitest run tests/watch-strategy.test.ts -w server`
+Run: `npm test -w server -- tests/watch-strategy.test.ts`
 Expected: FAIL —— 模块不存在
 
 - [ ] **Step 3: 实现 `watch-strategy.ts`**
@@ -2178,7 +2178,7 @@ export function defaultStrategy(): WatchStrategy {
 
 - [ ] **Step 4: 运行策略测试确认通过**
 
-Run: `npx vitest run tests/watch-strategy.test.ts -w server`
+Run: `npm test -w server -- tests/watch-strategy.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: 写 `RepoWatcher` 新 API 的失败测试**
@@ -2274,7 +2274,7 @@ describe("RepoWatcher — 归属映射", () => {
 
 - [ ] **Step 6: 运行确认失败**
 
-Run: `npx vitest run tests/watcher.test.ts -w server`
+Run: `npm test -w server -- tests/watcher.test.ts`
 Expected: FAIL —— `setRoots` / `setRepos` / `handleEventForTest` 不存在
 
 - [ ] **Step 7: 重写 `watcher.ts`**
@@ -2478,7 +2478,7 @@ export class RepoWatcher {
 
 - [ ] **Step 8: 运行 watcher 测试确认通过**
 
-Run: `npx vitest run tests/watcher.test.ts tests/watch-strategy.test.ts -w server`
+Run: `npm test -w server -- tests/watcher.test.ts tests/watch-strategy.test.ts`
 Expected: PASS
 
 - [ ] **Step 9: 提交**
@@ -2563,7 +2563,7 @@ describe("重扫不重建监听", () => {
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `npx vitest run tests/automation.test.ts -w server`
+Run: `npm test -w server -- tests/automation.test.ts`
 Expected: FAIL —— `applyRepos` 不存在
 
 - [ ] **Step 3: 改 `automation.ts`**
@@ -2669,7 +2669,7 @@ watcher 的创建处加上第二个回调，把结构变化接到重扫上（2 �
 
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `npx vitest run tests/automation.test.ts tests/backend.test.ts -w server`
+Run: `npm test -w server -- tests/automation.test.ts tests/backend.test.ts`
 Expected: PASS
 
 - [ ] **Step 6: 全量测试 + 类型检查**
@@ -2717,7 +2717,7 @@ describe("manualRepos 路径失效", () => {
 
 - [ ] **Step 2: 运行确认失败**
 
-Run: `npx vitest run tests/store.test.ts -w server`
+Run: `npm test -w server -- tests/store.test.ts`
 Expected: FAIL —— 目前 `getRepoCore` 抛出的是 git 的 spawn 错误，消息里不含路径，用户无从判断是「路径没了」还是「git 挂了」
 
 - [ ] **Step 3: 实现**
@@ -2745,7 +2745,7 @@ import { existsSync } from "node:fs"
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `npx vitest run tests/store.test.ts -w server`
+Run: `npm test -w server -- tests/store.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: 全量测试**
@@ -2850,7 +2850,7 @@ describe("端到端：缓存 + 身份", () => {
 
 - [ ] **Step 2: 运行确认通过**
 
-Run: `npx vitest run tests/perf-smoke.test.ts -w server`
+Run: `npm test -w server -- tests/perf-smoke.test.ts`
 Expected: PASS
 
 - [ ] **Step 3: 更新 README 的 "Stay fresh" 段**
