@@ -69,12 +69,26 @@ const genOf = (e: IdentityEntry): number => (Number.isInteger(e.gen) ? e.gen : 0
  */
 const isPrevGen = (e: IdentityEntry, currentGen: number): boolean => currentGen > 1 && genOf(e) === currentGen - 1
 
-/** 路径键的归一化。Windows 路径大小写不敏感，且同一目录可能以不同大小写出现，
- *  不归一化会让「D:\Repo」和「d:\repo」在账本里变成两个仓库。
- *  非 Windows 上大小写是有意义的（同名不同壳是两个真实目录），只折分隔符 */
+/**
+ * 路径键的归一化。**口径必须与本机文件系统的大小写语义一致**，win32 与 darwin（APFS/HFS+
+ * 默认大小写不敏感）都折大小写，Linux 保持敏感。
+ *
+ * 折少了会怎样：macOS 上 `scan()` 给出 `/Users/me/code/tool`、`manualRepos` 里写的是
+ * `/Users/me/Code/tool`（同一个目录），`new Set` 按精确字符串去重所以两条都活着，
+ * 归一化不折大小写就把它们当成两个仓库；而铸造用的 `repoId` 是**无条件小写**的
+ * （git.ts:78），两边算出同一个 id，第二条撞上铸造的碰撞守卫拿到合成 id
+ * `repoId("…#2")`——同一个仓库两张卡片，第二张的 id 在用户 config.json 里根本不存在，
+ * 标签/收藏/归档/便签全不显示，账本里还留一条永久的假记录。
+ *
+ * 折多了同样是错：Linux 上 `/home/Repo` 与 `/home/repo` 是两个真实不同的目录，折到一起
+ * 会让它们在账本里互相顶替。（`repoId` 无条件小写因此在 Linux 上本就会把这两个目录撞成
+ * 同一个 id，由铸造的碰撞守卫兜住——那是**另一个**已知遗留项。绝不能为了对齐而去改
+ * `repoId`：它的算法是「账本为空时 id === repoId(当前路径)」这条零迁移地基。）
+ */
 export function normalizePath(p: string): string {
   const slashed = p.replace(/\\/g, "/")
-  return process.platform === "win32" ? slashed.toLowerCase() : slashed
+  const caseInsensitiveFs = process.platform === "win32" || process.platform === "darwin"
+  return caseInsensitiveFs ? slashed.toLowerCase() : slashed
 }
 
 /**
@@ -183,6 +197,24 @@ export class IdentityLedger {
   }
 
   /**
+   * 默认的存在性实现：账本里记的这条路径现在还在磁盘上吗。测试可注入替身。
+   *
+   * 刻意**不用** `existsSync`，也**不用** statDotGit 的成败来代替：只有 ENOENT 才算
+   * 「不在了」，EACCES / EPERM / EBUSY（杀软锁住、网络盘鉴权失败、目录被独占）一律当
+   * 「还在」。判反的代价是不对称的——把一个还在磁盘上的仓库判成「没了」，它的账本条目
+   * 就进了认领候选池，同一轮里任何一个新 clone 都可能按根提交把它的 id（连同标签、收藏、
+   * **归档**）整个认走，属于产生错误数据；判成「还在」最多是这一轮不认领，退回丢数据。
+   * `throwIfNoEntry: false` 正好把这两类分开：ENOENT 返回 undefined，其它错误照样抛。
+   */
+  private static pathExists(path: string): boolean {
+    try {
+      return statSync(path, { throwIfNoEntry: false }) !== undefined
+    } catch {
+      return true // 非 ENOENT：无从判断，按「还在」处理（保守侧 = 不可认领）
+    }
+  }
+
+  /**
    * 把本轮扫描到的路径解析成 id。返回的 Map 对 `paths` 里的**每一个**路径都有条目
    * （含被去重折掉的其它拼写），调用方可以直接 `get(p)!`。
    *
@@ -193,18 +225,23 @@ export class IdentityLedger {
     paths: string[],
     rootCommitOf: (path: string) => Promise<string | null>,
     statOf: (path: string) => { dev: string; ino: string } | null = IdentityLedger.statDotGit,
+    existsOf: (path: string) => boolean = IdentityLedger.pathExists,
   ): Promise<Map<string, string>> {
     // 先按归一化路径去重。同一仓库以两种拼写（大小写/分隔符）出现在同一轮时，两条会算出
     // 同一个 repoId，后一条被下面的撞车守卫改成合成 id，又在 reindex 时**赢下**那个共享的
     // 归一化键——用户 config.json 里那个真 id 就成了孤儿，标签全丢。去重同时把这条隐含
-    // 前置条件从公开契约里消掉（调用方不必保证 paths 已去重）
-    const livePaths = new Set<string>()
+    // 前置条件从公开契约里消掉（调用方不必保证 paths 已去重）。
+    //
+    // 这个集合叫 seenKeys 而不是 livePaths：它回答的是「本轮列表里出现过吗」，**不是**
+    // 「这个仓库还活着吗」。曾经拿它当过后者的答案，代价是两个身份 bug——判据见下面
+    // stillOnDisk 的注释。别再把它接回「live」的判定里
+    const seenKeys = new Set<string>()
     const uniquePaths: string[] = []
     const repOfKey = new Map<string, string>() // 归一化键 → 代表路径，收尾补全映射时用
     for (const p of paths) {
       const key = normalizePath(p)
-      if (livePaths.has(key)) continue
-      livePaths.add(key)
+      if (seenKeys.has(key)) continue
+      seenKeys.add(key)
       repOfKey.set(key, p)
       uniquePaths.push(p)
     }
@@ -273,11 +310,32 @@ export class IdentityLedger {
       unknown = unknown.filter((p) => !out.has(p)).concat(movedAway)
     }
 
-    // 可认领的 lost：上一代还被盖过章、这一代路径没了 —— 不是「30 天内消失过的都算」。
+    /**
+     * 「账本里记的这条路径，现在磁盘上还在吗」——「live 还是 lost」的唯一判据。
+     *
+     * 关键是**不能**拿「本轮扫描列表里有没有这条路径」当答案，两个方向都会错：
+     *  · 在列表里 ≠ 还在磁盘上。`store.ts` 无条件把 `cfg.manualRepos` 并进 paths（有意为之：
+     *    失效的手动仓库必须留一张「路径已失效」的卡片，不能静默消失）。拿列表当答案，
+     *    这条记录就永远算 live、永远进不了候选池——用户把 `D:\side\myapp` 移进扫描根，
+     *    dev+ino 明明完全匹配，却因为候选池里根本没有它而铸出一个全新的无标签 id。
+     *  · 不在列表里 ≠ 已经没了。`scanner.ts` 按**目录名**过滤，用户往 `excludes` 里加一个
+     *    名字，那个仓库就从 paths 里消失了、磁盘上还在；一次 `readdirSync` 的 EACCES 同理。
+     *    拿列表当答案，这条记录当场变成可认领，同一轮里新 clone 一个同 upstream 的仓库，
+     *    判据②（根提交，**不比较 dev**）就会把它的 id 连同标签/收藏/**归档**整个认走。
+     */
+    const stillOnDisk = (p: string): boolean => {
+      // 本轮 statOf 成功的路径必然还在（打的就是它下面的 .git），省掉一次 syscall。
+      // 只有这一条捷径成立——它证明的是磁盘状态，不是配置内容
+      const rep = repOfKey.get(normalizePath(p))
+      if (rep !== undefined && (stats.get(rep) ?? null) !== null) return true
+      return existsOf(p)
+    }
+
+    // 可认领的 lost：上一代还被盖过章、这一代路径在磁盘上没了 —— 不是「30 天内消失过的都算」。
     // 为什么必须收到一轮，见 IdentityEntry.gen
     const lostIds: string[] = []
     for (const [id, e] of before) {
-      if (isPrevGen(e, currentGen) && !livePaths.has(normalizePath(e.path))) lostIds.push(id)
+      if (isPrevGen(e, currentGen) && !stillOnDisk(e.path)) lostIds.push(id)
     }
 
     const computedRoot = new Map<string, string | null>() // 本轮为认领算出的根提交，回写账本时复用
@@ -310,6 +368,19 @@ export class IdentityLedger {
           }
           claims = matchClaims(lostCands, foundCands)
         }
+      }
+
+      // 认领可能抢走一条**路径命中**的记录：那条路径在 paths 里、byPath 也认得它，但它
+      // 在磁盘上已经不存在了（失效的 manualRepo 就是这个形状）。同一个 id 决不能同时挂在
+      // 两条路径上——回写账本时两条会互相覆盖，`doRefreshAll` 收尾的 `new Map(按 id 建)`
+      // 还会让其中一个仓库从看板上凭空消失。让认领赢：它对应的是磁盘上真实存在的那个仓库，
+      // 用户的标签理应跟着仓库走；被抢走的死路径退回未知，去下面铸一个全新 id——它本来
+      // 就只是一张「路径已失效」的错误卡片，不该再顶着别人的身份
+      const claimedIds = new Set(claims.values())
+      for (const [p, id] of [...out]) {
+        if (!claimedIds.has(id)) continue
+        out.delete(p)
+        unknown.push(p) // 已经过了认领轮次，只会走到铸造——不存在的路径绝不能反过来去认领谁
       }
 
       for (const [p, id] of claims) out.set(p, id)
@@ -359,7 +430,13 @@ export class IdentityLedger {
         ino: s?.ino ?? prev?.ino ?? "0",
         rootCommit: computedRoot.get(p) ?? prev?.rootCommit ?? null,
         seenAt: new Date().toISOString(),
-        gen: currentGen, // 只有本轮扫到的才盖章；没扫到的条目留在上一代，下一轮就出了认领窗口
+        // 只有本轮**真的扫到**的才盖章；没扫到的条目留在上一代，下一轮就出了认领窗口。
+        // 「路径在 paths 里」不等于「扫到了」：磁盘上已经不存在的条目（失效的 manualRepo）
+        // 一样不盖章。盖了会怎样：这条记录永远满足「上一代盖过章 + 路径不在磁盘上」，
+        // 于是**永久**留在认领候选池里——半年后用户新 clone 一个同 upstream 的仓库，
+        // 判据②当场把它的标签/收藏/归档认走；ino 被文件系统回收后判据①也会误中。
+        // 同轮次窗口本来就是为了把这个口子压到一轮，这里破例等于没加过它
+        gen: s !== null || stillOnDisk(p) ? currentGen : (prev?.gen ?? 0),
       })
     }
     this.reindex()
