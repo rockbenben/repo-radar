@@ -288,11 +288,20 @@ export class JsonStore<T> {
    */
   pruneStale(keepIds: Set<string>, timestampOf: (v: T) => string, maxAgeMs = 30 * 86_400_000): void {
     const now = Date.now()
+    let changed = false
     for (const [key, v] of this.map) {
       if (keepIds.has(key)) continue
       const at = new Date(timestampOf(v)).getTime()
-      if (Number.isNaN(at) || now - at > maxAgeMs) this.delete(key)
+      if (Number.isNaN(at) || now - at > maxAgeMs) {
+        this.map.delete(key)
+        changed = true
+      }
     }
+    // 一轮剪枝只安排一次落盘。逐条走公开的 delete() 会让 debounceMs === 0 的使用者
+    // （DescCache）每删一条就把整个 map 同步 stringify + writeFileSync 一遍——剪掉 N 条
+    // 就是 N 次全量写盘。而年龄护栏针对的恰恰是「一整批仓库同时消失」的网络盘场景，
+    // 那时最不该做的就是一串同步写。改造前的两个缓存用 changed 标志批量成一次，别丢掉
+    if (changed) this.schedule()
   }
 
   /** 立刻把待写内容落盘。退出路径专用——防抖窗口内硬退会丢掉最后一批写入 */
