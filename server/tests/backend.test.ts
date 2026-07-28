@@ -49,6 +49,18 @@ function track(b: Backend): Backend {
   return b
 }
 
+/** 等启动扫描（force=true 的第一轮）真正落定。轮询预算按 vitest 的 testTimeout（30s）走而不是
+ *  写死几秒：CI 负载高时启动扫描要跑真 git，写死会变成一条偶发红线，而超时本来就有兜底 */
+async function waitForFirstScan(b: Backend): Promise<void> {
+  let last: string | null = null
+  for (let i = 0; i < 500 && last === null; i++) {
+    await new Promise((r) => setTimeout(r, 50))
+    const s = (await (await fetch(`http://127.0.0.1:${b.port}/api/scan`)).json()) as { lastScanAt: string | null }
+    last = s.lastScanAt
+  }
+  expect(last).not.toBeNull()
+}
+
 describe("createBackend", () => {
   it("start 后端口可访问，/api/version 自报注入的版本", async () => {
     const b = track(createBackend(opts()))
@@ -397,16 +409,8 @@ describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）",
     const b = track(createBackend(o))
     await b.start()
 
-    // 等启动扫描（force=true 的第一轮）落定，再装间谍——否则启动那一次的 setRoots 会被误数进来。
-    // 轮询预算按 vitest 的 testTimeout（30s）走而不是写死 3 秒：CI 负载高时启动扫描要跑真 git，
-    // 3 秒会变成一条偶发红线，而超时本来就有兜底、把预算调大不会让真正的失败变慢多少
-    let last: string | null = null
-    for (let i = 0; i < 500 && last === null; i++) {
-      await new Promise((r) => setTimeout(r, 50))
-      const s = (await (await fetch(`http://127.0.0.1:${b.port}/api/scan`)).json()) as { lastScanAt: string | null }
-      last = s.lastScanAt
-    }
-    expect(last).not.toBeNull()
+    // 等启动扫描（force=true 的第一轮）落定，再装间谍——否则启动那一次的 setRoots 会被误数进来
+    await waitForFirstScan(b)
 
     const setRootsSpy = vi.spyOn(RepoWatcher.prototype, "setRoots")
     const setReposSpy = vi.spyOn(RepoWatcher.prototype, "setRepos")
@@ -427,6 +431,15 @@ describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）",
       })
       expect(res.status).toBe(200) // 前提：创建必须成功，否则不会走到 rescanFresh，下面的断言就没有意义
       expect(setRootsSpy).toHaveBeenCalled()
+
+      // 断言到手了，但这条用例制造的异步还没落地：新建项目在磁盘上添了一个目录，递归监听会把它
+      // 报成「目录结构变化」，防抖到点后又排一轮 force 重扫，那一轮的收尾同样会重建监听句柄。
+      // 重扫链是串行的：那一轮若已经开跑，这次 /api/scan 必然排在它后面（或直接共乘它），await
+      // 它就等于等它落定；若防抖还没到点，afterEach 里 stop() 的 structure.stop() 会把它掐掉。
+      // 不这么写：本用例自己触发的重扫会一路飘到 afterEach，和 rmSync 抢那个目录——Windows 上
+      // 递归 fs.watch 握着 scan root 的目录句柄，重建的瞬间正好撞上就是 EPERM。
+      // （产品侧的 stop() 现在也会等重扫排空，但测试自己制造的异步不该留给 afterEach 收拾）
+      await fetch(`http://127.0.0.1:${b.port}/api/scan`, { method: "POST" })
     } finally {
       setRootsSpy.mockRestore()
       setReposSpy.mockRestore()
@@ -510,5 +523,123 @@ describe("createRescanScheduler — force 与已排队轮次的交错（约束 A
     gate.resolve([])
     await Promise.all([running, p2])
     expect(calls).toEqual([false, false])
+  })
+})
+
+// 关停竞态（本轮重构引入）：重扫的收尾会走 applyWatch → watcher.setRoots，那是「重新建立监听」。
+// 改造前的收尾无条件重装监听，关停时谁先谁后无所谓；现在退出要真正把监听关掉，就必须先等重扫链
+// 排空——否则 closeWatcher 关完之后，那一轮在飞的重扫又把句柄建回来，而这批句柄再没有人会去关。
+// drainOps 覆盖不到这条链：它排空的是每仓库的 git 操作锁（withRepoLock），重扫链不走那把锁。
+describe("createRescanScheduler.drain — 退出前把在飞的重扫等干净", () => {
+  it("排上队但还没开跑的一轮也算在飞，drain 必须等到它跑完", async () => {
+    const order: string[] = []
+    const scheduler = createRescanScheduler<void>({
+      run: async () => {
+        await new Promise((r) => setTimeout(r, 20))
+        order.push("round")
+      },
+      scanTargets: () => "same",
+    })
+    // trigger 之后同步调 drain：SerialQueue.share 排的任务要等一个微任务才真正开跑，
+    // 这里精确摆出「已排队、还没开跑」这个窗口。计数若只在任务体里自增，drain 会当场报
+    // 「已排空」，退出流程随即关掉监听，而这一轮紧接着开跑、收尾再把监听建回来
+    const round = scheduler.trigger(true)
+    const drained = scheduler.drain(5000).then((ok) => void order.push(ok ? "drained" : "timeout"))
+    await Promise.all([round, drained])
+    expect(order).toEqual(["round", "drained"])
+  })
+
+  it("没有在飞的重扫时立刻返回 true", async () => {
+    const scheduler = createRescanScheduler<void>({ run: async () => {}, scanTargets: () => "same" })
+    await expect(scheduler.drain(5000)).resolves.toBe(true)
+    await scheduler.trigger()
+    await expect(scheduler.drain(5000)).resolves.toBe(true) // 跑完的那一轮不该继续算在飞
+  })
+
+  // 超时路径必须有：一轮卡死的重扫（磁盘挂了、git 子进程僵住）不能让退出永远挂着——
+  // 托盘退出/关机路径上挂死比慢几秒严重得多
+  it("卡死的一轮：超时返回 false，不把退出永远挂住", async () => {
+    const gate = deferred<void>()
+    const scheduler = createRescanScheduler<void>({ run: () => gate.promise, scanTargets: () => "same" })
+    const round = scheduler.trigger(true)
+    await expect(scheduler.drain(20)).resolves.toBe(false)
+    gate.resolve()
+    await round
+  })
+
+  it("一轮抛错也要解除等待，否则失败的一轮会把退出卡到超时", async () => {
+    const scheduler = createRescanScheduler<void>({
+      run: async () => {
+        throw new Error("boom")
+      },
+      scanTargets: () => "same",
+    })
+    await expect(scheduler.trigger(true)).rejects.toThrow("boom")
+    await expect(scheduler.drain(20)).resolves.toBe(true)
+  })
+})
+
+describe("stop() 与在飞重扫的时序", () => {
+  it("重扫正卡在重建监听那一步时调 stop()：关监听排在那一轮之后", async () => {
+    const o = opts()
+    const root = mkdtempSync(join(tmpdir(), "rr-backend-root-"))
+    dirs.push(root)
+    saveConfig(o.configFile, { ...DEFAULT_CONFIG, roots: [root] })
+    const b = track(createBackend(o))
+    await b.start()
+    // 启动扫描本身就是一轮 force=true 的重扫（会调 setRoots）。不等它落定就装 gate，
+    // 卡住的会是启动那一轮，摆出来的就不是「退出撞上重扫」这个时序
+    await waitForFirstScan(b)
+
+    const order: string[] = []
+    const gate = deferred<void>()
+    const entered = deferred<void>()
+    const realSetRoots = RepoWatcher.prototype.setRoots
+    const realClose = RepoWatcher.prototype.close
+    const setRootsSpy = vi
+      .spyOn(RepoWatcher.prototype, "setRoots")
+      .mockImplementation(async function (this: RepoWatcher, roots: string[], repos: { id: string; path: string }[]) {
+        entered.resolve()
+        await gate.promise // 「重扫收尾正停在重建监听这一步」——不靠 sleep 撞时序
+        order.push("setRoots")
+        await realSetRoots.call(this, roots, repos)
+      })
+    const closeSpy = vi.spyOn(RepoWatcher.prototype, "close").mockImplementation(async function (this: RepoWatcher) {
+      order.push("close")
+      await realClose.call(this)
+    })
+    try {
+      // 新建项目 → rescanFresh(force=true) → 收尾 applyWatch → setRoots，停在 gate 上
+      // 响应大概率送不出去（退出的最后一步会断掉所有连接），这里只关心关停顺序，不关心那条响应；
+      // 不当场接住 rejection 的话它会变成一条 unhandled rejection 噪音
+      const creating = fetch(`http://127.0.0.1:${b.port}/api/new-project`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parent: root, name: "new-repo" }),
+      }).catch(() => undefined)
+      await entered.promise
+
+      const stopping = b.stop()
+      // 一个宏任务足够让关停链跑到 closeWatcher：它前面只有 stopListening（不等待）和
+      // drainOps（此刻没有仓库操作，立即返回），全是微任务。不等重扫排空的话，close 就发生在
+      // 这里，order 变成 ["close", "setRoots"]：监听先被关掉，随后又被那一轮重扫建了回来，
+      // 而这批句柄已经没有任何人会去关（Windows 上递归 fs.watch 会一直握着 scan root 的目录句柄，
+      // 表现为退出后那个目录删不掉，EPERM）
+      await new Promise((r) => setTimeout(r, 0))
+      gate.resolve()
+      await stopping
+      await creating
+
+      // 不写死成 ["setRoots", "close"]：新建项目在磁盘上添了目录，递归监听会把它报成「目录结构
+      // 变化」，防抖到点后又排一轮 force 重扫——那一轮同样要重建监听，同样必须排在关监听之前。
+      // 几轮重扫是时序决定的（取决于防抖有没有到点），「关监听排在最后」才是这条用例要钉的不变量
+      expect(order).toContain("setRoots")
+      expect(order.filter((s) => s === "close")).toEqual(["close"])
+      expect(order[order.length - 1]).toBe("close")
+    } finally {
+      gate.resolve() // 断言中途抛出时也要放行，否则 afterEach 的 stop() 要白等一个排空超时
+      setRootsSpy.mockRestore()
+      closeSpy.mockRestore()
+    }
   })
 })

@@ -9,6 +9,7 @@ function steps(over: Partial<ShutdownSteps> = {}) {
     stopListening: () => void calls.push("stopListening"),
     drainOps: async () => (calls.push("drainOps"), true),
     pendingOps: () => 0,
+    drainRescans: async () => (calls.push("drainRescans"), true),
     closeWatcher: async () => void calls.push("closeWatcher"),
     flushCaches: () => void calls.push("flushCaches"),
     closeConnections: () => void calls.push("closeConnections"),
@@ -22,7 +23,16 @@ describe("createShutdown — 退出编排", () => {
   it("按固定顺序收尾：先停监听、再排空、最后才断连接", async () => {
     const { calls, base } = steps()
     await createShutdown(base)("SIGTERM")
-    expect(calls).toEqual(["stopListening", "drainOps", "closeWatcher", "flushCaches", "closeConnections"])
+    expect(calls).toEqual(["stopListening", "drainOps", "drainRescans", "closeWatcher", "flushCaches", "closeConnections"])
+  })
+
+  // 重扫的收尾会走 applyWatch → watcher.setRoots（重新建立监听）。这两步一旦换位，一轮在飞的
+  // 重扫就会在监听关掉之后又把句柄建回来，而这批句柄再没有人会去关——Windows 上递归 fs.watch
+  // 一直握着 scan root 的目录句柄，退出后那个目录谁也删不掉（EPERM）
+  it("重扫必须排空在关监听之前，否则关完又会被重新建起来", async () => {
+    const { calls, base } = steps()
+    await createShutdown(base)("SIGTERM")
+    expect(calls.indexOf("drainRescans")).toBeLessThan(calls.indexOf("closeWatcher"))
   })
 
   it("连接必须最后断：/api/shutdown 的响应要在停止监听之后才送得出去", async () => {
@@ -75,6 +85,23 @@ describe("createShutdown — 退出编排", () => {
   it("drainOps 本身 reject 也按「没等到」处理，不把退出卡死", async () => {
     const { calls, base } = steps({ drainOps: () => Promise.reject(new Error("boom")) })
     await expect(createShutdown(base)("SIGTERM")).resolves.toBeUndefined()
+    expect(calls).toContain("closeConnections")
+  })
+
+  // 一轮卡死的重扫不能让退出永远挂着（托盘退出/关机路径上挂死比慢几秒严重得多）：等不到也得走完，
+  // 但必须留下一行能解释「退出后目录还被占着」的日志——否则那个现象在事后完全无从归因
+  it("重扫排空超时：照样关监听走完剩下的步骤，并留下可归因的日志", async () => {
+    const logs: string[] = []
+    const { calls, base } = steps({ drainRescans: async () => false, log: (m) => void logs.push(m) })
+    await createShutdown(base)("SIGTERM")
+    expect(calls).toEqual(["stopListening", "drainOps", "closeWatcher", "flushCaches", "closeConnections"])
+    expect(logs.join("\n")).toContain("重扫未在超时内结束")
+  })
+
+  it("drainRescans 本身 reject 也按「没等到」处理，不把退出卡死", async () => {
+    const { calls, base } = steps({ drainRescans: () => Promise.reject(new Error("boom")) })
+    await expect(createShutdown(base)("SIGTERM")).resolves.toBeUndefined()
+    expect(calls).toContain("closeWatcher")
     expect(calls).toContain("closeConnections")
   })
 

@@ -211,27 +211,63 @@ export function createRescanScheduler<T>(deps: {
   run: (rebuild: boolean) => Promise<T>
   /** 当前扫描目标的快照，用于判断「进行中的一轮」能不能被共乘 */
   scanTargets: () => string
-}): { trigger: (force?: boolean) => Promise<T> } {
+}): { trigger: (force?: boolean) => Promise<T>; drain: (timeoutMs: number) => Promise<boolean> } {
   const queue = createSerialQueue<T>()
   let runningRound: { promise: Promise<T>; targets: string } | null = null
   let pendingRebuild = false
+  // 在飞的轮次数 + 归零时的唤醒队列，与 queue.ts 的 drainRepoLocks 同一形状。存在的理由只有一个：
+  // 退出时必须等重扫链跑完再关监听。重扫的收尾会走 applyWatch → watcher.setRoots，那是「重新
+  // 建立监听」的动作——先关后建等于关完又开，而重建出来的句柄再没有任何人会去关：Windows 上
+  // 递归 fs.watch 一直握着 scan root 的目录句柄，那个目录在进程退出前谁也删不掉（EPERM）。
+  // 改造前重扫收尾是无条件重装监听的，关停时谁先谁后无所谓；现在退出要真正把监听关掉，这条
+  // 「先排空重扫、再关监听」的顺序就变成了硬约束。退出流程里那把 drainRepoLocks 覆盖不到这条链：
+  // 它排空的是每仓库的 git 操作锁（withRepoLock），重扫链根本不走那把锁
+  let inFlight = 0
+  let idleWaiters: (() => void)[] = []
+  const settle = (): void => {
+    if (--inFlight > 0) return
+    const waiters = idleWaiters
+    idleWaiters = []
+    for (const w of waiters) w()
+  }
   function trigger(force = false): Promise<T> {
     if (force) pendingRebuild = true // 尽早置位：即便这次触发最终共乘到别人已排的一轮，也不会丢
     if (queue.queued) return queue.queued
     if (!force && runningRound && deps.scanTargets() === runningRound.targets) return runningRound.promise
-    return queue.share(async () => {
+    // 同步自增，必须在 share() 之前：SerialQueue.share 排的任务要等一个微任务才真正开跑，
+    // 只在任务体里计数的话，退出恰好落在「已排队、还没开跑」这个窗口时 drain 会当场报「已排空」，
+    // 监听随即被关掉，而这一轮紧接着开跑、收尾又把监听建了回来——正是要防的那件事
+    inFlight++
+    const round = queue.share(async () => {
       const rebuild = pendingRebuild // 迟读：开跑那一刻才决定，排队期间新增的 force 请求也算数
       pendingRebuild = false
-      const round = { promise: deps.run(rebuild), targets: deps.scanTargets() }
-      runningRound = round
+      const started = { promise: deps.run(rebuild), targets: deps.scanTargets() }
+      runningRound = started
       try {
-        return await round.promise
+        return await started.promise
       } finally {
-        if (runningRound === round) runningRound = null
+        if (runningRound === started) runningRound = null
       }
     })
+    void round.then(settle, settle) // 失败的一轮同样要解除等待，否则一次抛错就把退出卡到超时
+    return round
   }
-  return { trigger }
+  /**
+   * 等在飞的重扫跑完。返回是否等到了——超时返回 false，由调用方决定「等不到也得走」。
+   * 与 drainRepoLocks 同一取舍：不做无限等待。一轮卡死的重扫（磁盘挂了、git 子进程僵住）
+   * 若能让退出永远挂着，在托盘退出/关机路径上比慢几秒严重得多。
+   */
+  function drain(timeoutMs: number): Promise<boolean> {
+    if (inFlight === 0) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs)
+      idleWaiters.push(() => {
+        clearTimeout(timer)
+        resolve(true)
+      })
+    })
+  }
+  return { trigger, drain }
 }
 
 const INBOX_REFRESH_MS = 12 * 60 * 1000
@@ -549,7 +585,11 @@ export function createBackend(options: BackendOptions): Backend {
     stopListening: () => void server?.close(),
     drainOps: () => drainRepoLocks(DRAIN_TIMEOUT_MS),
     pendingOps: pendingRepoOps,
-    closeWatcher: () => watcher.close(),
+    // 与仓库锁共用同一个超时口径：两笔等待都只在病态情况下才会走满，最坏情况相加也是有界的，
+    // 而「退出时把在飞的那一轮重扫等完」正常只需几百毫秒
+    drainRescans: () => rescanScheduler.drain(DRAIN_TIMEOUT_MS),
+    // dispose 而不是 close：退出之后不再接受任何重新建立监听的请求，见 watcher.ts 的 dispose
+    closeWatcher: () => watcher.dispose(),
     flushCaches: () => {
       inboxCache.flush()
       repoCache.flush() // 防抖窗口 1s：硬退会丢最后一轮缓存写入，下次启动白白付一轮全价

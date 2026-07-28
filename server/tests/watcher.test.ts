@@ -330,6 +330,30 @@ describe("RepoWatcher — 归属映射", () => {
     await w.close()
   })
 
+  // 退出后还能重新建句柄 = 一批没人认领的监听：Windows 上递归 fs.watch 一直握着 scan root 的
+  // 目录句柄，那个目录在进程退出前谁也删不掉（EPERM）。退出流程已经会先排空重扫链再关监听，
+  // 但还有两条不被任何人等待的路能在关闭之后再调一次 setRoots（见 dispose 的注释），
+  // 这道门闩是最后一手。反过来 close() 绝不能有这个语义：关掉自动监听开关之后还要能再打开
+  it("dispose 之后 setRoots 不再建句柄；普通 close 之后仍能重新建立", async () => {
+    const repo = join("D:", "work", "repo")
+    let starts = 0
+    const fake = { async start() { starts++; return [] }, async stop() {} }
+
+    const reopenable = new RepoWatcher(() => {}, () => {}, 10, 0, fake)
+    await reopenable.setRoots([], [{ id: "R", path: repo }])
+    await reopenable.close() // 用户关掉自动监听
+    await reopenable.setRoots([], [{ id: "R", path: repo }]) // 又打开
+    expect(starts).toBe(2)
+
+    const w = new RepoWatcher(() => {}, () => {}, 10, 0, fake)
+    await w.setRoots([], [{ id: "R", path: repo }])
+    expect(starts).toBe(3)
+    await w.dispose()
+    await w.setRoots([], [{ id: "R", path: repo }]) // 退出后迟到的重建请求
+    expect(starts).toBe(3) // 一个句柄都没再建
+    expect(w.coveredRepoCount()).toBe(0)
+  })
+
   it("嵌套仓库按最深路径归属", async () => {
     const outer = join("D:", "work", "outer")
     const inner = join(outer, "vendor", "inner")

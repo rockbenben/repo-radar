@@ -29,6 +29,7 @@ export class RepoWatcher {
   private roots: string[] = []
   private okRoots: string[] = []
   private started = false
+  private disposed = false
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private pendingTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private cooldownUntil = new Map<string, number>()
@@ -55,6 +56,7 @@ export class RepoWatcher {
 
   /** 建立/重建监听。只在 roots 或 manualRepos 真的变化时调用 */
   setRoots(roots: string[], repos: WatchedRepo[]): Promise<void> {
+    if (this.disposed) return Promise.resolve() // 见 dispose()：退出之后一律不再建句柄
     return this.serialize(async () => {
       await this.strategy.stop()
       // 归一化后再存：下面 handle 里拿事件路径（同样 resolve 过）与它比前缀，
@@ -183,6 +185,25 @@ export class RepoWatcher {
       this.started = false
       await this.strategy.stop()
     })
+  }
+
+  /**
+   * 退出时的终态关闭：关掉之后不再接受任何「重新建立监听」的请求。
+   *
+   * 与 close() 分开是因为 close() 还有一个日常用途——用户关掉自动监听开关（applyWatch(false)），
+   * 之后再打开必须还能建起来，所以这个标志不能塞进 close()。
+   *
+   * 为什么还需要它：退出流程已经会先把重扫链排空再关监听（shutdown.ts 的 drainRescans），但那只
+   * 覆盖走重扫调度器的轮次。还有两条不被任何人等待的路能在关闭之后再调一次 setRoots——
+   * 退出瞬间仍在跑的 HTTP 处理器（POST /api/clone 落盘之后才调 rescanFresh；stopListening 的
+   * server.close() 只是不再接新连接，不会打断已经在跑的请求），以及 automation.applyRepos 里
+   * 那次「上一轮有监听目标没建成」的降级重挂（void applyWatch，刻意不阻塞重扫）。
+   * 少了这道门闩：重建出来的句柄没有任何人会再去关，Windows 上递归 fs.watch 会一直握着
+   * scan root 的目录句柄，那个目录在进程退出前谁也删不掉（EPERM）
+   */
+  dispose(): Promise<void> {
+    this.disposed = true
+    return this.close()
   }
 
   /** 丢掉已不在监听列表里的仓库的定时器/冷却记录（仓库被删或被排除后不再需要，
