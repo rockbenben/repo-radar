@@ -2617,6 +2617,21 @@ git commit -m "perf(watcher): 监听改为按平台选策略，win/mac 每个 ro
 - Consumes: `RepoWatcher.setRoots` / `setRepos` / `coveredRepoCount`（Task 7）
 - Produces: `Automation.applyRepos(repos: RepoStatus[]): void`；`Automation.applyWatch(enabled, repos?)` 语义收窄为「按开关装/拆」
 
+#### 上一个任务交接过来的三条（前两条是硬要求）
+
+**A. 结构变化触发的那一轮重扫，收尾必须走能重建监听的路径，不能只走 `applyRepos`。**
+
+上一个任务把「监听目标本身失守」的判定从「按错误码白名单」改成了「**不看错误码**，只看出事的路径是不是监听目标本身」——因为 Node 的 `fs.watch` 在 emit `error` **之前**就把句柄关了，所以 EMFILE、EIO、FSEvents 失败之后那棵树同样是死的，不只是 EPERM/ENOENT。
+
+于是现在 `onOverflow` 收到的信号里包含「这棵树已经死了」这一类，而**重建监听是唯一能救回它的动作**。本任务的主旨恰恰是「重扫不再重建监听」，两者直接冲突：若把结构变化也收窄成只调 `applyRepos`，等于把这些信号收下又扔掉——那个 root 下的所有仓库会在进程余下的生命周期里静默冻结，而周期兜底重扫是用户可以关掉的（`autoScanMinutes = 0` 是受支持的配置）。
+
+做法：把「普通重扫」与「结构变化/溢出触发的重扫」分开。前者收尾调 `applyRepos`（纯 JS，本任务的性能收益所在）；后者收尾调 `applyWatch`（重建监听）。结构变化本来就已经防抖 2 秒且下游有队列去重，重建的频率不会失控。
+
+**B. `coverage()` 必须改成取自 watcher 的真实覆盖数。**
+`coveredRepoCount()` / `watchedRoots()` 目前**没有生产调用方**，`automation.coverage()` 仍返回 `chosen.length`——也就是「本该监听的数量」而不是「实际挂上的数量」。某个 root 挂不上时界面照旧显示全覆盖，这正是规格里明令禁止的「装作还在监听」。
+
+**C.（Minor，可延后）** 位于 scan root 之下、但被 `excludes` 排除的仓库若持续写入，会每 2 秒触发一轮重扫。需要一段「重扫后冷却」，但要避免与本任务自己的防抖语义打架。若本轮不做，记进账本交给最终评审分诊。
+
 - [ ] **Step 1: 写失败测试**
 
 在 `server/tests/automation.test.ts` 末尾追加：
