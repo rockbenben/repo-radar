@@ -28,7 +28,7 @@ async function runBatchToEnd(action: "fetch" | "push", repos: RepoStatus[], extr
 
 describe("startBatch", () => {
   it("processes repos, reports progress and finishes", async () => {
-    const repos = await Promise.all([makeRepoWithUpstream(), makeRepoWithUpstream()].map(getRepoStatus))
+    const repos = await Promise.all([makeRepoWithUpstream(), makeRepoWithUpstream()].map((path) => getRepoStatus(path)))
     const { taskId, events } = await runBatchToEnd("fetch", repos)
     expect(taskId).toMatch(/^batch-/)
     const last = events[events.length - 1]

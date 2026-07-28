@@ -546,11 +546,39 @@ export async function commitRepo(path: string, message: string, push: boolean): 
   return { ok: true, code: "committed", message: "已提交" }
 }
 
-export async function getRepoStatus(path: string): Promise<RepoStatus> {
-  // status 失败（非 git 目录、git 缺失）直接抛出，由调用方决定如何降级
-  // --no-optional-locks：读状态时不刷新/写 .git/index，避免触发文件监听的自反馈
+/** status 一条命令就能得到的部分。永远执行——工作区脏状态必须实算，不能缓存 */
+export interface RepoCore {
+  branch: string | null
+  dirty: DirtyCounts
+  ahead: number
+  behind: number
+  oid: string | null
+}
+
+/** 需要额外 6 个 git 进程（外加读 package.json/README、探测语言标志文件）的部分。
+ *  这些结果只会因 `.git` 里的变化而变，因此可以按指纹缓存 */
+export interface RepoHeavy {
+  stashCount: number
+  stashOldest: string | null
+  release: { tag: string; ahead: number; tagDate: string } | null
+  remotes: RemoteInfo[]
+  lastCommit: CommitInfo | null
+  mergedBranches: string[]
+  displayName: string | null
+  description: string | null
+  language: string | null
+}
+
+/** 1 个 git 进程。status 失败（非 git 目录、git 缺失）直接抛出，由调用方决定如何降级。
+ *  --no-optional-locks：读状态时不刷新/写 .git/index，避免触发文件监听的自反馈 */
+export async function getRepoCore(path: string): Promise<RepoCore> {
   const status = await runGit(path, ["--no-optional-locks", "status", "--porcelain=v2", "--branch"])
   const parsed = parseStatus(status.stdout)
+  return { branch: parsed.branch, dirty: parsed.dirty, ahead: parsed.ahead, behind: parsed.behind, oid: parsed.oid }
+}
+
+/** 至多 6 个 git 进程，全部并发。branch 由 core 传入，用于剔除 mergedBranches 里的当前分支 */
+export async function getRepoHeavy(path: string, branch: string | null): Promise<RepoHeavy> {
   const [stashInfo, release, remotes, lastCommit, mergedRaw] = await Promise.all([
     // stash 条数 + 最老一条的时间（list 新→旧，最老在末行）——「搁了多久」提醒用
     runGit(path, ["stash", "list", "--format=%cI"])
@@ -563,7 +591,6 @@ export async function getRepoStatus(path: string): Promise<RepoStatus> {
     // 不用 describe——它只找 HEAD 可达的最近 tag，会漏掉未合并分支上刚发的版、日期也会错拿提交时间。
     // 计数用 HEAD --not --tags（HEAD 上不被任何 tag 覆盖的提交）：即便最新 tag 不是 HEAD 的祖先
     // （比如在老维护分支上补发 v1.0.1），也不会把 merge-base 以来的所有提交都算成「未发版」。
-    // 没打过 tag → null（没发版习惯的仓库不提醒）。
     (async () => {
       try {
         const r = await runGit(path, ["for-each-ref", "refs/tags", "--sort=-creatordate", "--count=1", "--format=%(refname:short)%00%(creatordate:iso-strict)"])
@@ -575,46 +602,65 @@ export async function getRepoStatus(path: string): Promise<RepoStatus> {
         return null
       }
     })(),
-    runGit(path, ["remote", "-v"])
-      .then((r) => parseRemotes(r.stdout))
-      .catch(() => []),
+    runGit(path, ["remote", "-v"]).then((r) => parseRemotes(r.stdout)).catch(() => []),
     runGit(path, ["log", "-1", "--format=%H%x00%s%x00%an%x00%aI"])
       .then((r) => parseLastCommit(r.stdout))
       .catch(() => null), // 空仓库无 HEAD 时 git log 非零退出
     // --format 必须在 --merged 之前：否则 git 会把 --format=… 当成 --merged 的 commit 参数而报错
     runGit(path, ["branch", "--format=%(refname:short)", "--merged"])
       .then((r) => r.stdout.split("\n").map((s) => s.trim()).filter(Boolean))
-      .catch(() => []), // 已合并进 HEAD 的本地分支（含当前分支/主干，下面再排除）
+      .catch(() => []),
   ])
-  // 可安全清理的已合并分支：排除当前分支与主干（main/master）
-  const mergedBranches = mergedRaw.filter((b) => b !== parsed.branch && b !== "main" && b !== "master")
   const meta = readRepoMeta(path, remotes)
   return {
-    id: repoId(path),
-    path,
-    name: basename(path),
+    stashCount: stashInfo.count,
+    stashOldest: stashInfo.oldest,
+    release,
+    remotes,
+    lastCommit,
+    // 可安全清理的已合并分支：排除当前分支与主干（main/master）
+    mergedBranches: mergedRaw.filter((b) => b !== branch && b !== "main" && b !== "master"),
     displayName: meta.displayName,
     description: meta.description,
     language: detectLanguage(path),
+  }
+}
+
+/** 把 core + heavy 拼成看板用的完整状态。装饰字段（tags/favorite/…）留给 RepoStore.decorate */
+export function composeStatus(path: string, id: string, core: RepoCore, heavy: RepoHeavy): RepoStatus {
+  return {
+    id,
+    path,
+    name: basename(path),
+    displayName: heavy.displayName,
+    description: heavy.description,
+    language: heavy.language,
     group: "",
     tags: [],
     favorite: false,
     archived: false,
     note: null,
     lastOpened: null,
-    mergedBranches,
-    branch: parsed.branch,
-    dirty: parsed.dirty,
-    ahead: parsed.ahead,
-    behind: parsed.behind,
-    stashCount: stashInfo.count,
-    stashOldest: stashInfo.oldest,
-    release,
-    remotes,
-    lastCommit,
+    mergedBranches: heavy.mergedBranches,
+    branch: core.branch,
+    dirty: core.dirty,
+    ahead: core.ahead,
+    behind: core.behind,
+    stashCount: heavy.stashCount,
+    stashOldest: heavy.stashOldest,
+    release: heavy.release,
+    remotes: heavy.remotes,
+    lastCommit: heavy.lastCommit,
     health: [],
     githubInbox: null,
     error: null,
     scannedAt: new Date().toISOString(),
   }
+}
+
+/** 完整刷新（core + heavy）。id 可由调用方指定——身份账本认领后，仓库沿用老 id 而不是按新路径重算 */
+export async function getRepoStatus(path: string, id: string = repoId(path)): Promise<RepoStatus> {
+  const core = await getRepoCore(path)
+  const heavy = await getRepoHeavy(path, core.branch)
+  return composeStatus(path, id, core, heavy)
 }
