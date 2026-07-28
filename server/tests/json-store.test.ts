@@ -1,8 +1,16 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { JsonStore } from "../src/json-store"
+
+// pruneStale 的批量落盘断言要数落盘次数——vi.spyOn 在 ESM 下挡在
+// "Module namespace is not configurable" 报错上（node:fs 具名导出不可重新定义），
+// 只能整模块 mock：默认原样代理给真实实现，只把 writeFileSync 包一层用于计数
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>()
+  return { ...actual, writeFileSync: vi.fn(actual.writeFileSync) }
+})
 
 interface Entry { v: number; at?: string }
 const isEntry = (x: unknown): x is Entry =>
@@ -99,6 +107,21 @@ describe("JsonStore", () => {
     s.set("bad", { v: 1, at: "not-a-date" })
     s.pruneStale(new Set(), (e) => e.at ?? "")
     expect(s.entries()).toEqual([])
+  })
+
+  // 性能钉子：debounceMs 0（DescCache 就是这个配置）时，剪 N 条不该触发 N 次
+  // writeFileSync——网络盘瞬时掉线导致一整批条目同时过期，正是这种时候最不该串行全量写盘
+  it("pruneStale：debounceMs 0 时一次剪多条也只落盘一次，不是逐条同步写", () => {
+    const file = tmpFile()
+    const s = new JsonStore<Entry>({ file, isValid: isEntry })
+    const old = new Date(Date.now() - 40 * 86_400_000).toISOString()
+    s.set("a", { v: 1, at: old })
+    s.set("b", { v: 2, at: old })
+    s.set("c", { v: 3, at: old })
+    vi.mocked(writeFileSync).mockClear() // 只数 pruneStale 本身触发的落盘次数
+    s.pruneStale(new Set(), (e) => e.at ?? "")
+    expect(s.entries()).toEqual([])
+    expect(writeFileSync).toHaveBeenCalledTimes(1)
   })
 
   it("没有待写内容时 flush 不写盘（不产生文件）", () => {

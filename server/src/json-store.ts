@@ -92,14 +92,24 @@ export class JsonStore<T> {
    *
    * timestampOf 让各使用者指定自己的时间戳字段（fetchedAt / seenAt）。非法时间戳按已过期
    * 处理——否则 NaN 比较恒为 false，坏条目会永久赖着不走。
+   *
+   * 不逐条调用公开的 delete()：debounceMs === 0（如 DescCache）时 delete() 会同步落盘一次，
+   * 逐条调用就是剪 N 条条目做 N 次全量 JSON.stringify + writeFileSync。而剪枝恰好在
+   * 「网络盘根目录瞬时掉线、一整批条目同时过期」时删得最多——那正是磁盘最慢、最不该做
+   * 一串同步全量写的时刻。这里直接改 map，循环结束后最多只落盘一次。
    */
   pruneStale(keepIds: Set<string>, timestampOf: (v: T) => string, maxAgeMs = 30 * 86_400_000): void {
     const now = Date.now()
+    let changed = false
     for (const [key, v] of this.map) {
       if (keepIds.has(key)) continue
       const at = new Date(timestampOf(v)).getTime()
-      if (Number.isNaN(at) || now - at > maxAgeMs) this.delete(key)
+      if (Number.isNaN(at) || now - at > maxAgeMs) {
+        this.map.delete(key)
+        changed = true
+      }
     }
+    if (changed) this.schedule()
   }
 
   /** 立刻把待写内容落盘。退出路径专用——防抖窗口内硬退会丢掉最后一批写入 */
