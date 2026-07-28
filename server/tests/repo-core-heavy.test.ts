@@ -28,13 +28,35 @@ describe("getRepoCore", () => {
 })
 
 describe("getRepoHeavy", () => {
-  it("给出 stash / 最近提交 / 语言", async () => {
+  it("给出 stash / 最近提交", async () => {
     const repo = makeRepo({ stash: true })
-    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "demo" }))
     const heavy = await getRepoHeavy(repo, "main")
     expect(heavy.stashCount).toBe(1)
     expect(heavy.lastCommit?.message).toBe("c0")
-    expect(heavy.displayName).toBe("demo")
+  })
+
+  // displayName / description / language 来自工作区（package.json / README / 根目录列表），
+  // 而 heavy 是按一个完全由 .git 算出来的指纹缓存的。留在 heavy 里的话，改 package.json
+  // 的 name——正是用户重命名项目的那一刻——卡片标题会冻结到某次无关的 git 操作为止
+  it("工作区派生的字段不在 heavy 里（它们不可能被 .git 指纹感知）", async () => {
+    const heavy = await getRepoHeavy(makeRepo(), "main")
+    expect(heavy).not.toHaveProperty("displayName")
+    expect(heavy).not.toHaveProperty("description")
+    expect(heavy).not.toHaveProperty("language")
+  })
+
+  it("composeStatus 现算工作区字段：改 package.json 后无需任何 git 操作即刻生效", async () => {
+    const repo = makeRepo()
+    const core = await getRepoCore(repo)
+    const heavy = await getRepoHeavy(repo, core.branch) // 只算一次，模拟「heavy 命中缓存」
+    expect(composeStatus(repo, "id", core, heavy).displayName).toBeNull()
+
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "demo", description: "d" }))
+    // 同一份 heavy 再拼一次——指纹一个字节都没变（package.json 不在 .git 下），
+    // 而标题和描述必须已经跟上
+    const after = composeStatus(repo, "id", core, heavy)
+    expect(after.displayName).toBe("demo")
+    expect(after.description).toBe("d")
   })
 
   it("mergedBranches 排除当前分支与主干", async () => {

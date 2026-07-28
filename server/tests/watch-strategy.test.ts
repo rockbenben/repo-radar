@@ -153,6 +153,63 @@ describe("PerRepoStrategy", () => {
     await new Promise((r) => setTimeout(r, 600))
     expect(events).toEqual([])
   })
+
+  // 这条腿上**一个** FSWatcher 管着所有仓库，start 却无条件返回全部仓库，
+  // 于是被删掉/网络盘掉线的仓库照样计进 coveredRepoCount——设置面板说「全部实时监听中」，
+  // 而那些仓库其实一个事件都收不到。接口注释自己写着「coverage 要如实反映」
+  it("不存在的仓库不算进覆盖（start 只返回真正挂上的）", async () => {
+    const repo = makeRepo()
+    const gone = join(tmpRoot(), "no-such-repo")
+    const s = new PerRepoStrategy()
+    const ok = await s.start([], [{ id: "R", path: repo }, { id: "G", path: gone }], noopHandlers([]))
+    expect(ok).toEqual([repo])
+    await s.stop()
+  })
+
+  // Task 7 为 win/mac 建的自愈链（失守 → onOverflow → 重扫补票 + 重建句柄）必须延伸到 Linux。
+  // 不延伸的后果：ENOSPC（inotify 上限，73+ 仓库时是真实场景）或 EMFILE 打掉整个实例，
+  // 所有仓库一起冻结、日志一行、无人重建，而 coverage 还在报满覆盖。
+  // 内核错误没法在测试里稳定复现（要真把 inotify 上限打满），直接在实例上 emit 一条——
+  // 这正是 chokidar 收到内核错误时对我们做的事，测的是我们的分流而不是它的行为
+  describe("PerRepoStrategy 的错误分流", () => {
+    const emitError = (s: PerRepoStrategy, err: NodeJS.ErrnoException): void => {
+      const w = (s as unknown as { watcher: { emit: (ev: string, e: unknown) => void } }).watcher
+      w.emit("error", err)
+    }
+
+    it("监听目标本身失守（ENOSPC/EMFILE，路径不明也算）→ onOverflow + onError", async () => {
+      const repo = makeRepo()
+      const overflows: string[] = []
+      const errors: NodeJS.ErrnoException[] = []
+      const s = new PerRepoStrategy()
+      await s.start([], [{ id: "R", path: repo }], {
+        onEvent: () => {},
+        onOverflow: (r) => void overflows.push(r),
+        onError: (e) => void errors.push(e),
+      })
+      emitError(s, Object.assign(new Error("no space"), { code: "ENOSPC" }))
+      emitError(s, Object.assign(new Error("too many files"), { code: "EMFILE", path: realpathSync.native(repo) }))
+      expect(overflows.length).toBe(2)
+      expect(errors.length).toBe(2)
+      await s.stop()
+    })
+
+    it("目标底下某个文件出错 → 只记日志，不重建（那是本地开发的日常噪音）", async () => {
+      const repo = makeRepo()
+      const overflows: string[] = []
+      const errors: NodeJS.ErrnoException[] = []
+      const s = new PerRepoStrategy()
+      await s.start([], [{ id: "R", path: repo }], {
+        onEvent: () => {},
+        onOverflow: (r) => void overflows.push(r),
+        onError: (e) => void errors.push(e),
+      })
+      emitError(s, Object.assign(new Error("busy"), { code: "EBUSY", path: join(realpathSync.native(repo), "obj", "x.tmp") }))
+      expect(overflows).toEqual([])
+      expect(errors.length).toBe(1)
+      await s.stop()
+    })
+  })
 })
 
 describe("defaultStrategy", () => {

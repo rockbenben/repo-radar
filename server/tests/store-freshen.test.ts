@@ -46,9 +46,6 @@ const HEAVY: RepoHeavy = {
   remotes: [],
   lastCommit: null,
   mergedBranches: [],
-  displayName: null,
-  description: null,
-  language: null,
 }
 gitMock.getRepoHeavy.mockResolvedValue(HEAVY) // 全文件恒定；这组测试只关心 core 带来的 dirty 计数
 

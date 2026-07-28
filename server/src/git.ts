@@ -572,8 +572,17 @@ export interface RepoCore {
   oid: string | null
 }
 
-/** 需要额外 6 个 git 进程（外加读 package.json/README、探测语言标志文件）的部分。
- *  这些结果只会因 `.git` 里的变化而变，因此可以按指纹缓存 */
+/**
+ * 需要额外 6 个 git 进程的部分。这些结果**只会因 `.git` 里的变化而变**，因此可以按指纹缓存。
+ *
+ * 「只由 `.git` 决定」是这个接口的准入条件，不是描述。displayName（package.json 的 name）、
+ * description（README 首段）、language（根目录列表）曾经也在这里，但它们全部来自**工作区**：
+ * 任何一个都不可能出现在一个完全由 `.git` 算出来的指纹里，于是改 package.json 的 name——
+ * 正是用户重命名项目的那一刻——卡片标题会一直冻结到某次无关的 git 操作为止。
+ * 它们已经移到 composeStatus 里永远执行（都不 spawn 进程，只是几次 existsSync/readFileSync
+ * 和一次 readdirSync），从此不再依赖探针集合的完备性。往这里加字段之前先问一遍：
+ * 它会不会因为工作区的变化而变？会的话就不属于这里。
+ */
 export interface RepoHeavy {
   stashCount: number
   stashOldest: string | null
@@ -581,9 +590,6 @@ export interface RepoHeavy {
   remotes: RemoteInfo[]
   lastCommit: CommitInfo | null
   mergedBranches: string[]
-  displayName: string | null
-  description: string | null
-  language: string | null
 }
 
 /** 1 个 git 进程。status 失败（非 git 目录、git 缺失）直接抛出，由调用方决定如何降级。
@@ -628,7 +634,6 @@ export async function getRepoHeavy(path: string, branch: string | null): Promise
       .then((r) => r.stdout.split("\n").map((s) => s.trim()).filter(Boolean))
       .catch(() => []),
   ])
-  const meta = readRepoMeta(path, remotes)
   return {
     stashCount: stashInfo.count,
     stashOldest: stashInfo.oldest,
@@ -637,21 +642,28 @@ export async function getRepoHeavy(path: string, branch: string | null): Promise
     lastCommit,
     // 可安全清理的已合并分支：排除当前分支与主干（main/master）
     mergedBranches: mergedRaw.filter((b) => b !== branch && b !== "main" && b !== "master"),
-    displayName: meta.displayName,
-    description: meta.description,
-    language: detectLanguage(path),
   }
 }
 
-/** 把 core + heavy 拼成看板用的完整状态。装饰字段（tags/favorite/…）留给 RepoStore.decorate */
+/**
+ * 把 core + heavy 拼成看板用的完整状态。装饰字段（tags/favorite/…）留给 RepoStore.decorate。
+ *
+ * displayName / description / language 在这里现算，**不进 heavy 也就不进指纹缓存**：
+ * 它们分别来自 package.json 的 name、README 首段、根目录列表——统统是工作区的东西，
+ * 而指纹完全由 `.git` 算出来，不可能反映它们的变化。放在 heavy 里的那阵子，
+ * 改 package.json 的 name（正是用户重命名项目的时刻）卡片标题会一直冻结到某次无关的
+ * git 操作为止。代价是每仓库每轮几次 existsSync/readFileSync 加一次 readdirSync，
+ * 一个进程都不 spawn——当初并进 heavy 是图结构方便，不是为了省开销。
+ */
 export function composeStatus(path: string, id: string, core: RepoCore, heavy: RepoHeavy): RepoStatus {
+  const meta = readRepoMeta(path, heavy.remotes)
   return {
     id,
     path,
     name: basename(path),
-    displayName: heavy.displayName,
-    description: heavy.description,
-    language: heavy.language,
+    displayName: meta.displayName,
+    description: meta.description,
+    language: detectLanguage(path),
     group: "",
     tags: [],
     favorite: false,

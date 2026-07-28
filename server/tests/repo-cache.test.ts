@@ -20,7 +20,7 @@ afterAll(() => {
 
 const heavy: RepoHeavy = {
   stashCount: 2, stashOldest: "2026-01-01T00:00:00Z", release: null, remotes: [],
-  lastCommit: null, mergedBranches: [], displayName: "x", description: null, language: "TypeScript",
+  lastCommit: null, mergedBranches: [],
 }
 
 describe("RepoCache", () => {
