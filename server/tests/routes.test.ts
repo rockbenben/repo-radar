@@ -304,6 +304,34 @@ describe("api", () => {
     t.cleanup()
   })
 
+  // 清单导入改写的是 config.manualRepos，而导入进来的仓库多半落在所有扫描根之外（跨机器清单的
+  // 常见情形）——applyConfig 的 manualRepos 分支是**唯一**会给这类仓库建立监听句柄的地方。
+  // 只落盘不调它的话，前端随后那次 POST /api/scan（force=false，收尾走 applyRepos）只会把它
+  // 加进归属映射表：卡片出现了，内容却直到进程结束都不会实时刷新
+  it("POST /api/manifest/import 落盘后携带新旧配置调用 applyConfig", async () => {
+    const t = setup()
+    const calls: { next: string[]; prev: string[] }[] = []
+    const app = createApi(t.store, t.configFile, {
+      applyConfig: async (next, prev) => void calls.push({ next: next.manualRepos, prev: prev.manualRepos }),
+    })
+    const imported = makeRepo()
+    const manifest = { version: 1, exportedAt: "", repos: [{ name: "x", path: imported, remote: null, group: "", tags: [] }] }
+    const res = await app.request("/api/manifest/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ manifest }),
+    })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { added: number }).added).toBe(1)
+    expect(loadConfig(t.configFile).manualRepos).toContain(imported) // 确实落了盘
+    expect(calls).toHaveLength(1)
+    expect(calls[0].next).toContain(imported)
+    // prev 必须是导入**之前**的那一份：就地改写 cfg 再当 prev 传的话，applyConfig 逐字段
+    // diff 会看到两份一模一样的 manualRepos，于是照样一个句柄都不建
+    expect(calls[0].prev).not.toContain(imported)
+    t.cleanup()
+  })
+
   // 落盘成功后 applyWatch 才抛错（chokidar EMFILE 等）不能整个 500：配置确实存上了，
   // 500 会让客户端以为没存上而重试/回滚 UI。以磁盘为准返回 200，错误进日志
   it("PUT /api/config 在 applyConfig 抛错时仍返回已保存的配置", async () => {

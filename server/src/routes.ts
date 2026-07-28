@@ -72,6 +72,25 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   const openFn = extras.openFn ?? openTarget
   const rescan = extras.rescan ?? (() => store.refreshAll())
   const rescanFresh = extras.rescanFresh ?? rescan
+  /**
+   * 配置落盘之后，让运行期的监听器/定时器跟上。所有会改写 config.json 的端点都必须走这里，
+   * 不只是 PUT /api/config：applyConfig 里的 `manualReposChanged` 分支是**唯一**会为
+   * 「落在所有扫描根之外的仓库」建立监听句柄的地方（清单导入正是这种仓库的主要来源），
+   * 少调一次的后果是卡片出现了、内容却直到进程结束都不实时刷新。
+   *
+   * 监听器失败只记日志，绝不推翻已经落盘的配置：500 会让客户端以为没存上而重试/回滚 UI，
+   * 从此界面显示的和盘上存的对不上。以磁盘为准——也不会就此不了了之，automation 会把
+   * 「有目标没建成」记进 watchDegraded，下一轮重扫补一次便宜的重挂
+   */
+  async function applyConfigSafely(next: Config, prev: Config): Promise<void> {
+    if (!extras.applyConfig) return
+    try {
+      await extras.applyConfig(next, prev)
+    } catch (err) {
+      console.error(`[repo-radar] 配置已保存，但重装监听器失败：${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   const batchDeps: BatchDeps = {
     getRepo: (id) => store.get(id),
     // skipCache：批量动作与自定义命令刚在这个仓库里跑过 git/shell，必须实算（见 RefreshOptions）
@@ -588,10 +607,15 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       return c.json({ error: "invalid JSON body" }, 400)
     }
     if (!isManifest(body.manifest)) return c.json({ error: "manifest must have a repos array of { path }" }, 400)
-    const cfg = loadConfig(configFile)
-    const { manualRepos, summary } = importManifest(body.manifest, cfg.manualRepos)
-    cfg.manualRepos = manualRepos
-    saveConfig(configFile, cfg)
+    const prev = loadConfig(configFile)
+    const { manualRepos, summary } = importManifest(body.manifest, prev.manualRepos)
+    const next: Config = { ...prev, manualRepos }
+    saveConfig(configFile, next)
+    // 落盘不算改完：导入进来的仓库多半落在所有扫描根之外（跨机器清单的常见情形），
+    // 而给这类仓库建立监听句柄的唯一入口就是 applyConfig 的 manualRepos 分支。少了这一步，
+    // 前端随后那次 POST /api/scan（force=false，收尾走 applyRepos）只会把它加进归属映射表，
+    // 卡片出现了却拿不到句柄——提交、切分支要等最长 30 分钟的兜底重扫，而那个开关可以关掉
+    await applyConfigSafely(next, prev)
     return c.json(summary)
   })
 
@@ -611,18 +635,8 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     saveConfig(configFile, next)
     // 自动化字段有运行期副作用（监听器、两个定时器），光落盘不算改完；applyConfig 内部
     // 逐字段与 prev 比对，只重装真变了的——存标签/备注或原值 round-trip 都不会动监听器。
-    // 落盘成功后 applyWatch 才抛错（如 chokidar EMFILE）的情况不能整个 500：配置确实
-    // 存上了、定时器也已生效，回 500 会让客户端以为没存上而重试/回滚 UI。以磁盘为准
-    // 返回 200，监听器错误进日志——不是就此不了了之：automation.ts 的 applyWatch 会把
-    // 「有目标没建成」记进 watchDegraded，下一轮重扫（走 applyRepos 的那条轻量路径）
-    // 会看到这个标志补一次便宜的重挂，不需要再等一轮完整的 applyWatch
-    if (extras.applyConfig) {
-      try {
-        await extras.applyConfig(next, prev)
-      } catch (err) {
-        console.error(`[repo-radar] 配置已保存，但重装监听器失败：${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
+    // 抛错时仍返回 200，理由见 applyConfigSafely
+    await applyConfigSafely(next, prev)
     return c.json(next)
   })
 
