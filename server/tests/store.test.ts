@@ -190,3 +190,14 @@ describe("redecorate", () => {
     expect(store.redecorate("nope")).toBeUndefined()
   })
 })
+
+describe("manualRepos 路径失效", () => {
+  it("路径不存在的 manualRepo 仍出现在列表里，并带错误说明", async () => {
+    const gone = join(tmpdir(), "rr-definitely-not-here-" + Date.now())
+    const cfg: Config = { ...DEFAULT_CONFIG, roots: [], manualRepos: [gone] }
+    const list = await new RepoStore(() => cfg).refreshAll()
+    const entry = list.find((r) => r.path === gone)
+    expect(entry).toBeDefined()
+    expect(entry!.error).toContain(gone)
+  })
+})

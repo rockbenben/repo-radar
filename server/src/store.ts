@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs"
 import { basename, relative, sep } from "node:path"
 import type { Config } from "./config"
 import { checkHealth } from "./health"
@@ -62,6 +63,16 @@ export class RepoStore {
    * 而它能识别出「mtime 因触碰而变、内容其实没变」以及反过来的情况。
    */
   private async refreshRepo(path: string, id: string): Promise<RepoStatus> {
+    // 路径整个不在了：多半是 manualRepos 里的仓库被改名或移动了。scan() 不覆盖根目录之外的
+    // 路径，认领也就没有「新出现的路径」可配对——救不回来，但绝不能让卡片静默消失，
+    // 用户会以为自己删过它。existsSync 是同步 stat，比起接下来必然要 spawn 的 git 进程
+    // 可忽略不计，不会在正常路径（存在）上引入额外开销。
+    // 提示指向配置文件而非「设置」面板：⚙ 设置里的「扫描来源管理」（RootsEditor）只编辑
+    // config.roots，manualRepos 目前没有对应 UI（见 web/src/components/RootsEditor.tsx 顶部注释），
+    // 唯一真实可行的路是直接改配置文件——指错地方等于没提示
+    if (!existsSync(path)) {
+      throw new Error(`repo path no longer exists: ${path} — 若是改名或移动，请在配置文件的 manualRepos 中更新这条路径`)
+    }
     const core = await getRepoCore(path)
     const fp = gitFingerprint(path, core.oid)
     const cached = this.cache?.get(id, fp) ?? null

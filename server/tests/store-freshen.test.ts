@@ -18,6 +18,13 @@ vi.mock("../src/git", async (importOriginal) => ({
   getRepoCore: gitMock.getRepoCore,
   getRepoHeavy: gitMock.getRepoHeavy,
 }))
+// REPO 是假路径（"/fake/r1"），磁盘上真不存在——refreshRepo 新加的存在性检查会在
+// 走到 mock 的 getRepoCore 之前就抛错，把这组测试全部依赖的交错时机破坏掉。
+// 这里只关心 core/heavy 的交错，存在性检查不是这组测试的对象，恒真即可
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  existsSync: () => true,
+}))
 
 import { repoId } from "../src/git"
 import { RepoStore } from "../src/store"
