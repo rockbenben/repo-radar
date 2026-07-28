@@ -3,7 +3,7 @@ import { basename, join } from "node:path"
 import { tmpdir } from "node:os"
 import { afterAll, describe, expect, it } from "vitest"
 import { DEFAULT_CONFIG, type Config } from "../src/config"
-import { deriveGroup, RepoStore } from "../src/store"
+import { deriveGroup, pathGoneMessage, RepoStore } from "../src/store"
 import { cleanupFixtures, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
@@ -199,5 +199,54 @@ describe("manualRepos 路径失效", () => {
     const entry = list.find((r) => r.path === gone)
     expect(entry).toBeDefined()
     expect(entry!.error).toContain(gone)
+  })
+})
+
+/**
+ * 路径失效的守卫最初只为 manualRepos 而写，但**同一个守卫也会对扫描根下的仓库触发**：
+ * 仓库被删/改名，或网络盘在 `scan()` 枚举与 `mapLimit` 处理之间抖动（并发 8 处理几百个
+ * 仓库时这个窗口是秒级的）。对这些仓库说「请在配置文件的 manualRepos 中更新这条路径」是
+ * **无法执行的指示**——用户打开 config.json，manualRepos 里根本没有这条路径。
+ */
+describe("路径失效提示按仓库来源分文案", () => {
+  const gone = join(tmpdir(), "rr-definitely-not-here-msg")
+
+  it("manualRepo：指向配置文件的 manualRepos（那是唯一能改的地方）", () => {
+    const msg = pathGoneMessage(gone, { ...DEFAULT_CONFIG, roots: [], manualRepos: [gone] })
+    expect(msg).toContain(gone)
+    expect(msg).toContain("manualRepos")
+  })
+
+  it("扫描根下的仓库：不得指向 manualRepos，而是说明下一轮扫描会自行更正", () => {
+    const msg = pathGoneMessage(gone, { ...DEFAULT_CONFIG, roots: [tmpdir()], manualRepos: [] })
+    expect(msg).toContain(gone)
+    expect(msg).not.toContain("manualRepos")
+    expect(msg).toContain("下一轮全量扫描")
+  })
+
+  // 归一化后比较而不是裸 includes：分隔符风格随手一改就对不上，比不上就退到「扫描根」文案，
+  // 那对真正的 manualRepo 又成了另一句无法执行的指示（win32 上 join 给出反斜杠；
+  // POSIX 上两种拼写本来就是同一个字符串，这条用例退化成恒等，无害）
+  it("manualRepos 里分隔符风格不同也认得出是手动仓库", () => {
+    const cfg: Config = { ...DEFAULT_CONFIG, roots: [], manualRepos: [gone.replace(/\\/g, "/")] }
+    expect(pathGoneMessage(gone, cfg)).toContain("manualRepos")
+  })
+
+  // 端到端：守卫真的会对扫描根下的仓库触发，且吐出来的是扫描根那句（H3 回归）
+  it("扫描根下的仓库消失后，refreshOne 的错误文案不提 manualRepos", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rr-gone-root-"))
+    const repo = makeRepo()
+    const moved = join(root, basename(repo))
+    renameSync(repo, moved)
+    const cfg: Config = { ...structuredClone(DEFAULT_CONFIG), roots: [root], manualRepos: [] }
+    const store = new RepoStore(() => cfg)
+    const first = (await store.refreshAll()).find((r) => r.path === moved)!
+    expect(first.error).toBeNull()
+
+    rmSync(moved, { recursive: true, force: true, maxRetries: 3 })
+    const after = await store.refreshOne(first.id)
+    expect(after?.error).toContain(moved)
+    expect(after?.error).not.toContain("manualRepos")
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 })
   })
 })

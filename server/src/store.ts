@@ -6,7 +6,7 @@ import { composeStatus, getRepoCore, getRepoHeavy, repoId, rootCommit } from "./
 import { gitFingerprint } from "./fingerprint"
 import { mapLimit } from "./map-limit"
 import type { RepoCache } from "./repo-cache"
-import type { IdentityLedger } from "./repo-identity"
+import { normalizePath, type IdentityLedger } from "./repo-identity"
 import { githubRemoteUrl } from "./github"
 import { scan } from "./scanner"
 import type { GithubInbox, RepoStatus } from "./types"
@@ -29,6 +29,30 @@ export interface RefreshOptions {
    * 也是这套缓存唯一要省的开销。
    */
   skipCache?: boolean
+}
+
+/**
+ * 「这条路径没了」写给用户看的那句话。**必须按仓库来源分文案**。
+ *
+ * 这个守卫最初只为 manualRepos 而写（scan() 不覆盖根目录之外的路径，认领没有「新出现的
+ * 路径」可配对，救不回来，只能让用户自己去改配置），但**同一个守卫也会对扫描根下的仓库
+ * 触发**：仓库被删/改名，或网络盘在 `scan()` 枚举与 `mapLimit` 处理之间抖动——并发 8 处理
+ * 几百个仓库时这个窗口是秒级的。对这些仓库说「请在 manualRepos 中更新这条路径」是**无法
+ * 执行的指示**：用户打开 config.json，manualRepos 里根本没有这条路径。
+ *
+ * 手动那条指向配置文件而不是「设置」面板：⚙ 设置里的「扫描来源管理」（RootsEditor）只编辑
+ * config.roots，manualRepos 目前没有对应 UI（见 web/src/components/RootsEditor.tsx 顶部注释），
+ * 唯一真实可行的路是直接改配置文件——指错地方等于没提示。
+ *
+ * 归一化后比较而不是裸 `includes`：Windows/macOS 上大小写与分隔符风格随手一改就对不上，
+ * 比不上就退到「扫描根」文案，那对真正的 manualRepo 又成了另一句无法执行的指示。
+ */
+export function pathGoneMessage(path: string, cfg: Config): string {
+  const key = normalizePath(path)
+  const manual = cfg.manualRepos.some((m) => normalizePath(m) === key)
+  return manual
+    ? `repo path no longer exists: ${path} — 手动添加的仓库；若是改名或移动，请在配置文件的 manualRepos 中更新这条路径`
+    : `repo path no longer exists: ${path} — 扫描根下的仓库；可能已被删除或改名，也可能是所在磁盘/网络盘暂时不可用。下一轮全量扫描会自动更正这张卡片`
 }
 
 export function deriveGroup(repoPath: string, roots: string[]): string {
@@ -80,17 +104,10 @@ export class RepoStore {
    * 顺序很关键：先跑 core 拿到 oid，再算指纹。oid 是 status 顺带给的（不额外 spawn），
    * 而它能识别出「mtime 因触碰而变、内容其实没变」以及反过来的情况。
    */
-  private async refreshRepo(path: string, id: string, skipCache = false): Promise<RepoStatus> {
-    // 路径整个不在了：多半是 manualRepos 里的仓库被改名或移动了。scan() 不覆盖根目录之外的
-    // 路径，认领也就没有「新出现的路径」可配对——救不回来，但绝不能让卡片静默消失，
-    // 用户会以为自己删过它。existsSync 是同步 stat，比起接下来必然要 spawn 的 git 进程
-    // 可忽略不计，不会在正常路径（存在）上引入额外开销。
-    // 提示指向配置文件而非「设置」面板：⚙ 设置里的「扫描来源管理」（RootsEditor）只编辑
-    // config.roots，manualRepos 目前没有对应 UI（见 web/src/components/RootsEditor.tsx 顶部注释），
-    // 唯一真实可行的路是直接改配置文件——指错地方等于没提示
-    if (!existsSync(path)) {
-      throw new Error(`repo path no longer exists: ${path} — 若是改名或移动，请在配置文件的 manualRepos 中更新这条路径`)
-    }
+  private async refreshRepo(path: string, id: string, cfg: Config, skipCache = false): Promise<RepoStatus> {
+    // 路径整个不在了。existsSync 是同步 stat，比起接下来必然要 spawn 的 git 进程可忽略不计，
+    // 不会在正常路径（存在）上引入额外开销。绝不能让卡片静默消失——用户会以为自己删过它。
+    if (!existsSync(path)) throw new Error(pathGoneMessage(path, cfg))
     const core = await getRepoCore(path)
     const fp = gitFingerprint(path, core.oid)
     // skipCache 只跳过**读**，仍然照常写回：刚算出来的这份是最新的，下一轮重扫理应命中它
@@ -118,7 +135,7 @@ export class RepoStore {
     const statuses = await mapLimit(paths, CONCURRENCY, async (p) => {
       let status: RepoStatus
       try {
-        const fresh = await this.refreshRepo(p, idByPath.get(p) ?? repoId(p))
+        const fresh = await this.refreshRepo(p, idByPath.get(p) ?? repoId(p), cfg)
         this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
         status = this.decorate(fresh, cfg)
       } catch (err) {
@@ -153,7 +170,7 @@ export class RepoStore {
     const cfg = this.getConfig()
     let next: RepoStatus
     try {
-      const fresh = await this.refreshRepo(existing.path, id, opts.skipCache ?? false)
+      const fresh = await this.refreshRepo(existing.path, id, cfg, opts.skipCache ?? false)
       this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
       next = this.decorate(fresh, cfg)
     } catch (err) {
