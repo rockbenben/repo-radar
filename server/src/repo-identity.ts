@@ -147,8 +147,8 @@ export class IdentityLedger {
   private store: JsonStore<IdentityEntry>
   private byPath = new Map<string, string>() // 归一化路径 → id
 
-  constructor(file: string) {
-    this.store = new JsonStore({ file, isValid: isIdentityEntry, debounceMs: 1000 })
+  constructor(file: string, onCorrupt?: (err: unknown) => void) {
+    this.store = new JsonStore({ file, isValid: isIdentityEntry, debounceMs: 1000, onCorrupt })
     this.reindex()
   }
 

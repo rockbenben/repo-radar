@@ -17,8 +17,8 @@ const isDescEntry = (v: unknown): v is DescEntry =>
 export class DescCache {
   private store: JsonStore<DescEntry>
 
-  constructor(file: string) {
-    this.store = new JsonStore({ file, isValid: isDescEntry })
+  constructor(file: string, onCorrupt?: (err: unknown) => void) {
+    this.store = new JsonStore({ file, isValid: isDescEntry, onCorrupt })
   }
 
   /**

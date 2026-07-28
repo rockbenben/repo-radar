@@ -252,11 +252,16 @@ export function createBackend(options: BackendOptions): Backend {
     console.log(`[repo-radar] 已生成默认配置 / created default config: ${configFile}`)
   }
 
-  const descCache = new DescCache(join(dirname(configFile), "github-desc.json"))
-  const inboxCache = new InboxCache(join(dirname(configFile), "github-inbox.json"))
-  const repoCache = new RepoCache(join(dirname(configFile), "repo-cache.json"))
+  // 落盘文件损坏时的日志。四个文件都能「当空继续跑」，但绝不能静默：打包之后日志是唯一的
+  // 诊断面，而账本损坏的表现是「所有改过名的仓库标签一夜之间全没了」——没有这行的话，
+  // 用户和维护者都无从判断到底发生了什么，只能怀疑应用把数据搞丢了
+  const onCorrupt = (file: string) => (err: unknown) =>
+    console.error(`[repo-radar] ${file} 已损坏，本次按空文件继续 / corrupt, continuing as empty: ${err instanceof Error ? err.message : String(err)}`)
+  const descCache = new DescCache(join(dirname(configFile), "github-desc.json"), onCorrupt("github-desc.json"))
+  const inboxCache = new InboxCache(join(dirname(configFile), "github-inbox.json"), onCorrupt("github-inbox.json"))
+  const repoCache = new RepoCache(join(dirname(configFile), "repo-cache.json"), onCorrupt("repo-cache.json"))
   // 身份账本：仓库改名/移动后继续用老 id，config.json 里按 id 存的标签/收藏/归档/便签不受影响
-  const identity = new IdentityLedger(join(dirname(configFile), "repo-identity.json"))
+  const identity = new IdentityLedger(join(dirname(configFile), "repo-identity.json"), onCorrupt("repo-identity.json"))
   const store = new RepoStore(
     () => loadConfig(configFile),
     (id, url) => descCache.get(id, url),

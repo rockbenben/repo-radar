@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -129,6 +129,46 @@ describe("JsonStore", () => {
     const s = new JsonStore<Entry>({ file, isValid: isEntry, debounceMs: 1000 })
     s.flush()
     expect(() => readFileSync(file, "utf8")).toThrow()
+  })
+
+  // 规格的错误处理表有两行明确要求「记日志」，而 load 只是 catch 后丢弃。对身份账本而言，
+  // 这是「所有改过名的仓库标签消失了、但日志里有一行解释」和「用户数据丢失且零诊断面」
+  // 之间的差别——打包之后日志是唯一诊断面
+  it("文件损坏时 onCorrupt 被调用（不再静默吞掉）", () => {
+    const file = tmpFile()
+    writeFileSync(file, "{not json")
+    const seen: unknown[] = []
+    const s = new JsonStore<Entry>({ file, isValid: isEntry, onCorrupt: (err) => void seen.push(err) })
+    expect(seen.length).toBe(1)
+    expect(seen[0]).toBeInstanceOf(Error)
+    expect(s.entries()).toEqual([]) // 仍然当空继续跑，不抛
+  })
+
+  it("文件正常时不调 onCorrupt（含文件根本不存在的情况）", () => {
+    const file = tmpFile()
+    let calls = 0
+    new JsonStore<Entry>({ file, isValid: isEntry, onCorrupt: () => void calls++ }).set("k", { v: 1 })
+    new JsonStore<Entry>({ file, isValid: isEntry, onCorrupt: () => void calls++ })
+    // 逐条校验丢弃的坏条目也不算「文件损坏」：那是预期中的 schema 演进，不是诊断信号
+    writeFileSync(file, JSON.stringify({ bad: { v: "x" } }))
+    new JsonStore<Entry>({ file, isValid: isEntry, onCorrupt: () => void calls++ })
+    expect(calls).toBe(0)
+  })
+
+  // 非原子写入：writeFileSync 先截断再写，崩溃/断电落在这个窗口里就留下一个截断的文件，
+  // 下次启动整份丢掉。账本每轮扫描都重写，这个窗口真实且反复出现
+  it("落盘走临时文件 + rename，目标文件不会被截断后半途暴露", () => {
+    const file = tmpFile()
+    const s = new JsonStore<Entry>({ file, isValid: isEntry })
+    vi.mocked(writeFileSync).mockClear() // 只看本用例触发的写入（整模块 mock 的调用历史是跨用例累积的）
+    s.set("k", { v: 1 })
+    // 写入落在临时文件上，rename 之后目标文件才整份出现——写进去的那一次调用的是
+    // `${file}.tmp` 而不是 file 本身
+    const paths = vi.mocked(writeFileSync).mock.calls.map((c) => String(c[0]))
+    expect(paths.length).toBe(1)
+    expect(paths.every((x) => x.endsWith(".tmp"))).toBe(true)
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ k: { v: 1 } })
+    expect(existsSync(`${file}.tmp`)).toBe(false) // rename 之后临时文件不该留下
   })
 
   // 写盘失败静默：缓存只是加速，不能因为磁盘满/只读就让功能挂掉

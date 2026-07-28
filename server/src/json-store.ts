@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
 export interface JsonStoreOptions<T> {
@@ -8,6 +8,15 @@ export interface JsonStoreOptions<T> {
   /** 落盘防抖毫秒数；0（默认）= 每次 set/delete 立即写。
    *  轮询类使用者（一轮连着 set 几十次）给个 1000，避免频繁写盘 */
   debounceMs?: number
+  /**
+   * 文件存在但整份读不出/解析不了时调用（内容已按空处理）。
+   *
+   * 不给默认实现、也不在这里直接 console：底座不知道自己是哪个文件，日志里一句
+   * 「JSON 坏了」对排查毫无用处。但**必须有人接**——对身份账本而言，这是
+   * 「用户改过名的仓库标签全没了，但日志里有一行解释」和「用户数据丢失且零诊断面」
+   * 之间的差别，而打包之后日志是唯一的诊断面。
+   */
+  onCorrupt?: (err: unknown) => void
 }
 
 /**
@@ -15,7 +24,7 @@ export interface JsonStoreOptions<T> {
  * 形状完全相同（load 时逐条校验、写盘失败静默、坏文件当空），各写一遍必然逐渐走样。
  *
  * 落盘失败一律静默：这四个文件都是「丢了最多是慢一轮或退化成旧行为」的性质，
- * 让磁盘满/只读把整个应用带崩是不划算的。真正需要知道文件坏了的场景由调用方记日志。
+ * 让磁盘满/只读把整个应用带崩是不划算的。**文件坏了则必须让调用方知道**，见 onCorrupt。
  */
 export class JsonStore<T> {
   private map = new Map<string, T>()
@@ -27,23 +36,32 @@ export class JsonStore<T> {
   constructor(opts: JsonStoreOptions<T>) {
     this.file = opts.file
     this.debounceMs = opts.debounceMs ?? 0
-    this.load(opts.isValid)
+    this.load(opts.isValid, opts.onCorrupt)
   }
 
-  private load(isValid: (v: unknown) => v is T): void {
+  private load(isValid: (v: unknown) => v is T, onCorrupt?: (err: unknown) => void): void {
     try {
       if (!existsSync(this.file)) return
       const obj = JSON.parse(readFileSync(this.file, "utf8")) as Record<string, unknown>
       for (const [k, v] of Object.entries(obj)) if (isValid(v)) this.map.set(k, v)
-    } catch {
-      /* 坏文件忽略，当作空 */
+    } catch (err) {
+      // 坏文件当作空继续跑（缓存只是加速，账本坏了也只是退化成改造前行为），但必须留痕：
+      // 静默吞掉的话，用户看到的是「所有改过名的仓库标签消失了」而日志里一个字都没有
+      onCorrupt?.(err)
     }
   }
 
   private write(): void {
     try {
       mkdirSync(dirname(this.file), { recursive: true })
-      writeFileSync(this.file, JSON.stringify(Object.fromEntries(this.map), null, 2), "utf8")
+      // 先写同目录的临时文件再 rename，不直接写目标文件：writeFileSync 是「先截断再写」，
+      // 崩溃/断电正好落在这个窗口里就留下一个截断的文件，下次启动 load 会把它整份丢掉。
+      // 对身份账本而言那意味着所有 id 按当前路径重新铸造——**用户改过名的每一个仓库**
+      // 永久失去标签/收藏/归档/便签，而它 debounceMs 1000、每轮扫描都重写，
+      // 这个窗口真实且反复出现。同目录 rename 在 NTFS 与 POSIX 上都是原子替换。
+      const tmp = `${this.file}.tmp`
+      writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.map), null, 2), "utf8")
+      renameSync(tmp, this.file)
       this.dirty = false
     } catch {
       /* 写盘失败静默 */

@@ -18,9 +18,9 @@ const isInboxEntry = (v: unknown): v is InboxEntry =>
 export class InboxCache {
   private store: JsonStore<InboxEntry>
 
-  constructor(file: string) {
+  constructor(file: string, onCorrupt?: (err: unknown) => void) {
     // 防抖 1s：一整轮轮询会连着 set 几十次，攒起来写一次
-    this.store = new JsonStore({ file, isValid: isInboxEntry, debounceMs: 1000 })
+    this.store = new JsonStore({ file, isValid: isInboxEntry, debounceMs: 1000, onCorrupt })
   }
 
   /** 立刻把待写的内容落盘。退出路径专用：防抖窗口是 1 秒，硬退会把最后一轮拉取结果丢掉 */
