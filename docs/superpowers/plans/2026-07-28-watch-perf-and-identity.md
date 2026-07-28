@@ -20,6 +20,7 @@
 - 现有 `~/.repo-radar/config.json` 必须零破坏、零迁移。任何任务都不得改变 `repoId(path)` 的算法（`sha1(路径转正斜杠转小写).slice(0,12)`）。
 - commit message 只写变更内容本身，**不得带任何 AI 署名行**（`Co-Authored-By`、`Generated with` 等一律禁止）。
 - 落盘缓存/账本的 `prune` 一律带**年龄护栏**（默认 30 天），沿用 `desc-cache.ts:73` 的既有理由：网络盘根目录瞬时掉线会让一整批仓库在某轮扫描里消失，立即剪会把它们的落盘数据永久抹掉。
+- **测试里绝不要拿 `dirname(makeRepo())` 当 scan root。** `makeRepo` 建在 `tmpdir()` 下，它的 `dirname` 就是 `tmpdir()` 本身；拿它当 root，整套测试并行跑时会把其它测试的临时仓库全部扫进来，既慢又互相干扰。要么用 `manualRepos: [repo]`，要么用 `mkdtempSync` 建一个专属父目录再在里面 `git init`。
 
 ---
 
@@ -1704,41 +1705,60 @@ git commit -m "feat(server): 新增仓库身份账本与认领算法"
 创建 `server/tests/store-identity.test.ts`：
 
 ```ts
-import { mkdtempSync, renameSync, rmSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
 import { DEFAULT_CONFIG, type Config } from "../src/config"
 import { repoId } from "../src/git"
 import { IdentityLedger } from "../src/repo-identity"
 import { RepoStore } from "../src/store"
-import { cleanupFixtures, makeRepo } from "./fixtures"
-
-afterAll(cleanupFixtures)
 
 const dirs: string[] = []
-function ledgerFile(): string {
-  const d = mkdtempSync(join(tmpdir(), "rr-sid-"))
+function isolatedDir(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix))
   dirs.push(d)
-  return join(d, "repo-identity.json")
+  return d
 }
 afterAll(() => {
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 3 })
 })
+
+const ledgerFile = () => join(isolatedDir("rr-sid-"), "repo-identity.json")
+
+/**
+ * 在一个**专属**父目录里建一个仓库，返回 [父目录, 仓库路径]。
+ *
+ * 绝对不要用 `dirname(makeRepo())` 当 scan root——`makeRepo` 建在 `tmpdir()` 下，
+ * 它的 dirname 就是 `tmpdir()` 本身。拿它当 root，整套测试并行跑时会把**其它测试的
+ * 临时仓库全部扫进来**：既慢又互相干扰，任何针对数量或内容的断言都会随机挂掉。
+ */
+function repoInOwnRoot(name = "demo"): [string, string] {
+  const parent = isolatedDir("rr-root-")
+  const repo = join(parent, name)
+  execFileSync("git", ["init", "-b", "main", repo])
+  execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: repo })
+  execFileSync("git", ["config", "user.name", "t"], { cwd: repo })
+  execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: repo })
+  writeFileSync(join(repo, "a.txt"), "1")
+  execFileSync("git", ["add", "-A"], { cwd: repo })
+  execFileSync("git", ["commit", "-m", "c0"], { cwd: repo })
+  return [parent, repo]
+}
 
 describe("RepoStore + 身份账本", () => {
   // 现有用户升级时账本为空。这一条挂了就意味着所有人的标签/收藏/归档在升级瞬间全丢
   it("账本为空时，id 与 repoId(路径) 完全一致（向后兼容）", async () => {
-    const repo = makeRepo()
-    const cfg: Config = { ...DEFAULT_CONFIG, roots: [dirname(repo)] }
+    const [parent, repo] = repoInOwnRoot()
+    const cfg: Config = { ...DEFAULT_CONFIG, roots: [parent] }
     const store = new RepoStore(() => cfg, undefined, undefined, undefined, new IdentityLedger(ledgerFile()))
     const list = await store.refreshAll()
     expect(list.find((r) => r.path === repo)?.id).toBe(repoId(repo))
   })
 
   it("改名后 id 不变，标签/收藏/归档/便签全部保留", async () => {
-    const repo = makeRepo()
-    const parent = dirname(repo)
+    const [parent, repo] = repoInOwnRoot()
     const cfg: Config = { ...DEFAULT_CONFIG, roots: [parent] }
     const store = new RepoStore(() => cfg, undefined, undefined, undefined, new IdentityLedger(ledgerFile()))
 
@@ -1749,7 +1769,7 @@ describe("RepoStore + 身份账本", () => {
     cfg.archived.push(before.id)
     cfg.notes[before.id] = "记一笔"
 
-    const renamed = join(parent, "renamed-" + Date.now())
+    const renamed = join(parent, "demo-renamed")
     renameSync(repo, renamed)
 
     const after = (await store.refreshAll()).find((r) => r.path === renamed)!
@@ -1758,31 +1778,22 @@ describe("RepoStore + 身份账本", () => {
     expect(after.favorite).toBe(true)
     expect(after.archived).toBe(true)
     expect(after.note).toBe("记一笔")
-    rmSync(renamed, { recursive: true, force: true })
   })
 
   // 不传账本时必须完全退化成改造前的行为，便于回退与嵌入式用法
   it("未提供账本时按路径算 id（旧行为）", async () => {
-    const repo = makeRepo()
-    const cfg: Config = { ...DEFAULT_CONFIG, roots: [dirname(repo)] }
+    const [parent, repo] = repoInOwnRoot()
+    const cfg: Config = { ...DEFAULT_CONFIG, roots: [parent] }
     const list = await new RepoStore(() => cfg).refreshAll()
     expect(list.find((r) => r.path === repo)?.id).toBe(repoId(repo))
   })
 
   it("新增一个仓库不影响已有仓库的 id", async () => {
-    const parent = mkdtempSync(join(tmpdir(), "rr-multi-"))
-    dirs.push(parent)
+    const [parent, a] = repoInOwnRoot("a")
     const cfg: Config = { ...DEFAULT_CONFIG, roots: [parent] }
     const store = new RepoStore(() => cfg, undefined, undefined, undefined, new IdentityLedger(ledgerFile()))
-    const { execFileSync } = await import("node:child_process")
-    const mk = (name: string) => {
-      const d = join(parent, name)
-      execFileSync("git", ["init", "-b", "main", d])
-      return d
-    }
-    const a = mk("a")
     const idA = (await store.refreshAll()).find((r) => r.path === a)!.id
-    mk("b")
+    execFileSync("git", ["init", "-b", "main", join(parent, "b")])
     expect((await store.refreshAll()).find((r) => r.path === a)!.id).toBe(idA)
   })
 })
