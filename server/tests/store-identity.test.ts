@@ -115,23 +115,33 @@ describe("RepoStore + 身份账本", () => {
     expect(errored?.id).toBe(before.id)
   })
 
-  // 两条活路径共用一个 id，会让其中一个仓库从看板上凭空消失（store 按 id 建 Map），
-  // 比丢标签严重得多
-  it("同一轮里改名 + 原路径新建仓库 → 两个仓库都在，id 不撞", async () => {
+  // 「A 改名成 B」+「同一轮里原路径 A 上又出现一个无关仓库」：账本记的 (dev,ino) 现在挂在 B 上，
+  // 身份必须跟着仓库走而不是跟着路径走——否则新仓库连人带标签继承 A 的身份、真正的 B 什么都
+  // 不剩，且全程无报错。另外两条活路径若共用一个 id，还会让其中一个仓库从看板上凭空消失
+  //（doRefreshAll 收尾按 id 建 Map）
+  it("同一轮里改名 + 原路径新建仓库 → 身份跟着仓库走，两个都在且 id 不撞", async () => {
     const [parent, repo] = repoInOwnRoot("proj")
     const cfg = configWithRoot(parent)
     const store = new RepoStore(() => cfg, undefined, undefined, undefined, makeLedger())
     const before = (await store.refreshAll()).find((r) => r.path === repo)!
+    cfg.tags[before.id] = ["app"]
+    cfg.archived.push(before.id)
 
-    renameSync(repo, join(parent, "proj-2026"))
+    const renamed = join(parent, "proj-2026")
+    renameSync(repo, renamed)
     execFileSync("git", ["init", "-b", "main", repo]) // 原路径上又出现一个无关仓库
 
     const list = await store.refreshAll()
     expect(list.length).toBe(2)
     expect(new Set(list.map((r) => r.id)).size).toBe(2)
-    // 路径命中优先于 ino（见 repo-identity 的「同一路径上 ino 变了 → 仍是同一仓库」：
-    // 「删掉重新 clone 回原路径」远比「原路径新建无关仓库」常见）。要紧的是两者不共用 id
-    expect(list.find((r) => r.path === repo)!.id).toBe(before.id)
+    const moved = list.find((r) => r.path === renamed)!
+    const fresh = list.find((r) => r.path === repo)!
+    expect(moved.id).toBe(before.id) // 标签/归档跟着真正的那个仓库走
+    expect(moved.tags).toEqual(["app"])
+    expect(moved.archived).toBe(true)
+    expect(fresh.id).not.toBe(before.id) // 新仓库拿全新 id
+    expect(fresh.tags).toEqual([]) // 且不继承别人的标签/归档
+    expect(fresh.archived).toBe(false)
   })
 
   it("新增一个仓库不影响已有仓库的 id", async () => {

@@ -440,3 +440,67 @@ describe("判据②的播种与同轮次约束", () => {
     expect(ids.get(b)).toBe(ids.get(a)) // 而不是 undefined
   })
 })
+
+// 路径命中（byPath 直接命中就用老 id）有且只有一个例外：账本里记的 (dev,ino) 与现在对不上，
+// 且本轮恰好有一个未知路径正带着那个老 (dev,ino)。不认这个信号的话，「A 改名成 B + 同一轮里
+// 原路径 A 上又出现一个无关仓库」会让新仓库连人带标签继承 A 的身份，真正的 B 什么都不剩，
+// 而且全程无报错——是「产生错误数据」，比丢数据严重
+describe("已知路径的唯一例外：仓库其实搬走了", () => {
+  const A = "D:\\p\\proj"
+  const B = "D:\\p\\proj-2026"
+
+  it("同轮撞车：A 改名成 B + 原路径新建无关仓库 → 身份跟着 (dev,ino) 走", async () => {
+    const led = makeLedger(tmpFile())
+    const oldId = (await led.resolve([A], noRootCommit, () => st(1, 42))).get(A)
+    // 同一轮里：ino 42 那个仓库现在在 B；A 这个路径上是个刚建的无关仓库（ino 99）
+    const ids = await led.resolve([A, B], noRootCommit, (p) => st(1, p === B ? 42 : 99))
+    expect(ids.get(B)).toBe(oldId) // 标签/收藏/归档跟着真正的那个仓库走
+    expect(ids.get(A)).not.toBe(oldId) // 新仓库拿全新 id，不继承别人的身份
+  })
+
+  // 这条挂了就是推翻用户拍板的既定行为（Task 5）：「删掉重新 clone 回原路径」ino 同样会变，
+  // 但没有任何未知路径带着老 ino，此时路径命中必须照样赢——否则用户重装一次仓库标签就没了
+  it("不回归 re-clone：同一路径 ino 变了但没人带着老 ino → 路径命中仍然赢", async () => {
+    const led = makeLedger(tmpFile())
+    const other = "D:\\p\\unrelated"
+    const oldId = (await led.resolve([A], noRootCommit, () => st(1, 42))).get(A)
+    // A 被删掉重新 clone（ino 变成 7）；同一轮里还冒出一个不相干的新仓库（ino 8），
+    // 它并不带着老 ino 42——搬家信号必须不触发
+    const ids = await led.resolve([A, other], noRootCommit, (p) => st(1, p === A ? 7 : 8))
+    expect(ids.get(A)).toBe(oldId)
+    expect(ids.get(other)).not.toBe(oldId)
+  })
+
+  // 搬家判定与认领共用同一个轮次窗口：文件系统会回收 ino，隔了轮次的「相等」不可信。
+  // 代价是这个角落（仓库一整轮没被扫到，之后才改名 + 原路径新建）退化回改造前的行为，
+  // 与判据①在 lostIds 上受同一约束是一致的取舍——宁可不认，不要认错
+  it("隔了一轮的相等不认（ino 会被文件系统回收）", async () => {
+    const led = makeLedger(tmpFile())
+    const other = "D:\\p\\keeps-generation-moving"
+    const oldId = (await led.resolve([A, other], noRootCommit, (p) => st(1, p === A ? 42 : 7))).get(A)
+    await led.resolve([other], noRootCommit, () => st(1, 7)) // A 这一轮没被扫到（根目录掉线）
+    const ids = await led.resolve([A, B, other], noRootCommit, (p) => st(1, p === B ? 42 : p === A ? 99 : 7))
+    expect(ids.get(A)).toBe(oldId) // 隔了一代，不动
+    expect(ids.get(B)).not.toBe(oldId)
+  })
+
+  it("普通改名（老路径整个消失、原路径没有新仓库）→ 行为与改造前完全一致", async () => {
+    const led = makeLedger(tmpFile())
+    const oldId = (await led.resolve([A], noRootCommit, () => st(1, 42))).get(A)
+    expect((await led.resolve([B], noRootCommit, () => st(1, 42))).get(B)).toBe(oldId)
+  })
+
+  // ino === "0"（FAT32 / exFAT / 部分网络共享）是本模块最危险的一类输入：一个哨兵值让
+  // 两个毫不相干的仓库「相等」。形状：A 记的是 (dev 1, ino 0)，现在盘符变了 stat 成
+  // (dev 2, ino 0)（于是「与记的对不上」成立），而本轮某个不相干的新仓库恰好也在一个 ino
+  // 不可用的卷上、stat 成 (dev 1, ino 0)。只按字符串比 "1:0" === "1:0" 的实现会把 A 的
+  // 身份整个搬给那个新仓库
+  it("ino 不可用（全是 0）时绝不触发搬家判定", async () => {
+    const led = makeLedger(tmpFile())
+    const fresh = "D:\\p\\on-fat32"
+    const oldId = (await led.resolve([A], noRootCommit, () => st(1, 0))).get(A)
+    const ids = await led.resolve([A, fresh], noRootCommit, (p) => (p === A ? st(2, 0) : st(1, 0)))
+    expect(ids.get(A)).toBe(oldId) // 路径命中仍然赢
+    expect(ids.get(fresh)).not.toBe(oldId) // 新仓库不得继承 A 的身份
+  })
+})

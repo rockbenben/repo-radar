@@ -206,12 +206,61 @@ export class IdentityLedger {
     for (const [, e] of before) maxGen = Math.max(maxGen, genOf(e))
     const currentGen = maxGen + 1
 
+    // 每条活路径只 stat 一次，判据①、搬家判定、回写共用这一份——比原先「认领时 stat 一遍、
+    // 回写时再 stat 一遍」还少一次 syscall
+    const stats = new Map<string, { dev: string; ino: string } | null>()
+    for (const p of uniquePaths) stats.set(p, statOf(p))
+    /** 某条活路径**当前**的判据①键；stat 失败或 ino 不可用（"0"）时为 null */
+    const liveKey = (p: string): string | null => {
+      const s = stats.get(p) ?? null
+      return s === null ? null : inoKey({ dev: s.dev, ino: s.ino, rootCommit: null })
+    }
+
     const out = new Map<string, string>()
-    const unknown: string[] = []
+    let unknown: string[] = []
+    const pathHit: [string, string][] = []
     for (const p of uniquePaths) {
       const known = this.byPath.get(normalizePath(p))
-      if (known !== undefined) out.set(p, known)
-      else unknown.push(p)
+      if (known === undefined) unknown.push(p)
+      else pathHit.push([p, known])
+    }
+
+    // 路径命中（上面这一步）有且只有一个例外：账本里记的 (dev,ino) 与现在对不上，**并且**
+    // 本轮恰好有一个未知路径正带着那个老 (dev,ino)——那说明仓库搬到那个未知路径去了，
+    // 这条路径上现在坐着的是别人。不认这个信号的话，「A 改名成 B + 同一轮里原路径 A 上又
+    // 出现一个无关仓库」会让新仓库连人带标签继承 A 的身份（byPath 在任何候选逻辑之前就
+    // 命中，那条账本条目的 path 还是 live 的，根本进不了 lostIds，认领机器压根没被调用），
+    // 而真正的 B 铸新 id 什么都不剩，全程无报错——是「产生错误数据」，比丢数据严重。
+    //
+    // 「删掉重新 clone 回原路径」不会命中这个例外：那时 ino 同样变了，但**没有任何未知路径
+    // 带着老 ino**，路径命中照样赢（Task 5 定的行为，不能回归）。
+    const unknownByKey = uniqueByKey(unknown.map((p) => [p, p] as [string, string]), liveKey)
+    // 老键在已知这一侧也必须唯一：两条已知路径记着同一个 (dev,ino) 就分不清是谁搬走了，宁可不动
+    const hitByOldKey = uniqueByKey(pathHit.map(([p, id]) => [p, this.store.get(id)!] as [string, IdentityEntry]), inoKey)
+    const movedAway: string[] = []
+    for (const [p, id] of pathHit) {
+      const e = this.store.get(id)!
+      const oldKey = inoKey(e) // null = 账本里那条的 ino 不可用（"0"/空），判据①对它整体作废
+      const target = oldKey === null ? undefined : unknownByKey.get(oldKey)
+      const moved =
+        oldKey !== null &&
+        target !== undefined && // 本轮恰好有一个未知路径带着这个老 (dev,ino)
+        hitByOldKey.get(oldKey) === p &&
+        liveKey(p) !== null && // 现在 stat 不出来 / ino 不可用：无从判断，别动
+        liveKey(p) !== oldKey && // 记的与现在对不上
+        // 与认领同一个窗口：ino 会被文件系统回收，隔了轮次的「相等」不可信（见 IdentityEntry.gen）
+        genOf(e) === currentGen - 1
+      if (moved) {
+        out.set(target!, id) // 身份跟着 (dev,ino) 走
+        movedAway.push(p)
+      } else {
+        out.set(p, id) // 路径命中，照旧
+      }
+    }
+    if (movedAway.length > 0) {
+      // 搬家的目标路径身份已定，别再进认领池；反过来，被腾出来的那条路径按未知处理——
+      // 它可能是从别处搬来的（会被对应的 lost 认领），否则铸一个全新 id
+      unknown = unknown.filter((p) => !out.has(p)).concat(movedAway)
     }
 
     // 可认领的 lost：上一代还被盖过章、这一代路径没了 —— 不是「30 天内消失过的都算」。
@@ -224,9 +273,6 @@ export class IdentityLedger {
     const computedRoot = new Map<string, string | null>() // 本轮为认领算出的根提交，回写账本时复用
 
     if (unknown.length > 0 && lostIds.length > 0) {
-      const foundStats = new Map<string, { dev: string; ino: string } | null>()
-      for (const p of unknown) foundStats.set(p, statOf(p))
-
       // 先只用 dev+ino 认一轮；能全认完就完全不必算根提交
       const lostCands = new Map<string, ClaimCandidate>()
       for (const id of lostIds) {
@@ -235,7 +281,7 @@ export class IdentityLedger {
       }
       const foundCands = new Map<string, ClaimCandidate>()
       for (const p of unknown) {
-        const s = foundStats.get(p) ?? null
+        const s = stats.get(p) ?? null
         foundCands.set(p, { dev: s?.dev ?? "0", ino: s?.ino ?? "0", rootCommit: null })
       }
       let claims = matchClaims(lostCands, foundCands)
@@ -293,7 +339,7 @@ export class IdentityLedger {
 
     // 回写账本：路径、判据、seenAt、代一律刷新
     for (const [p, id] of out) {
-      const s = statOf(p)
+      const s = stats.get(p) ?? null
       const prev = this.store.get(id)
       this.store.set(id, {
         path: p,
