@@ -1698,7 +1698,39 @@ git commit -m "feat(server): 新增仓库身份账本与认领算法"
 
 **Interfaces:**
 - Consumes: `IdentityLedger`（Task 5）、`refreshRepo`（Task 4）
-- Produces: `rootCommit(path: string): Promise<string | null>`（`git.ts`）；`RepoStore` 构造参数新增可选第 5 参 `identity?: IdentityLedger`
+- Produces: `rootCommit(path: string): Promise<string | null>`（`git.ts`）；`RepoStore` 构造参数新增可选第 5 参 `identity?: IdentityLedger`；`IdentityEntry` 增 `gen: number` 字段
+
+#### Task 5 交接的三条硬约束（评审确认，必须在本任务处理）
+
+**A. 判据②必须由本任务播种，否则它 100% 不存在。**
+Task 5 的 `resolve` 有一个稳定死锁：只有当某个 **lost** 候选已经带着非空 `rootCommit` 时才会去算 **found** 侧的根提交，而根提交又只在算过之后才写回账本。账本初始全是 `null` ⇒ 闸门恒假 ⇒ 永不计算 ⇒ 永远是 `null`。
+
+修法：**铸造一个新 id 时，同时算一次根提交并写进账本**（`rootCommitOf(p)`，即 `git.ts` 的 `rootCommit`）。代价是每个**新发现**的仓库一生一次一个 git 进程——全新安装首轮 73 个仓库约多 1～2 秒，之后为零。这是判据②唯一可行的播种时机：认领发生时旧路径已经不存在，那时**算不出**它的根提交。
+
+**B. 同轮次约束（用户拍板）：只允许认领「上一轮还活着、这一轮没了」的 id。**
+
+背景：判据②按根提交匹配且**不能比较 `dev`**（跨卷移动时 `dev` 本来就变了，比了判据②就失去意义）。于是「C1 在线 + C2 在拔掉的移动硬盘上 + 用户把同一 upstream clone 到 C3」会让 C3 认领 C2 的身份——一一对应挡不住，因为两个 clone 分处匹配的两侧。不加约束的话这个窗口是整整 30 天（`prune` 的年龄护栏）。
+
+做法：`IdentityEntry` 增 `gen: number`。
+
+```ts
+// 当前代 = 账本里最大代 + 1；账本为空时为 1
+const currentGen = Math.max(0, ...[...this.store.entries()].map(([, e]) => e.gen ?? 0)) + 1
+// 可认领的 lost：上一代还被盖过章、这一代路径没了。不是「30 天内消失过的都算」
+const lostIds = [...].filter(([id, e]) => e.gen === currentGen - 1 && !livePaths.has(normalizePath(e.path)))
+// 收尾：本轮所有活条目盖上 currentGen
+```
+
+代必须**持久化**（就存在条目里，别用内存计数器）——否则「关掉应用 → 改名 → 重新打开」这个主用例会坏掉，而那正是改名最常发生的时机。
+
+自检这两条：① 全新安装（账本为空）→ 没有任何 lost，不影响「铸造结果 === `repoId(path)`」的零迁移地基；② 关掉应用改名再打开 → 上一轮盖的是 gen N，重开首轮 currentGen = N+1，`e.gen === N` 成立 → 可认领 ✓。硬盘拔掉两轮以上的仓库不再可认领，退化成丢数据（安全侧）。
+
+`prune` 的 30 天年龄护栏**照旧不变**，它管的是存储回收，跟可认领性是两件事。
+
+**C. `resolve` 返回的 Map 对 `paths` 不是全函数，本任务必须补全。**
+Task 5 加了按 `normalizePath` 去重，但只有代表路径进了结果——同一路径的其它拼写（`D:\p\a` vs `D:/p/a`，或不同大小写）在返回的 Map 里**根本没有条目**。调用方写 `ids.get(p)!` 会拿到 `undefined`，数据被存到 `"undefined"` 键下。
+
+修法：去重时记住 `归一化键 → 代表路径`，解析完再把每个重复拼写指回代表路径的 id。`resolve` 的文档注释目前写着「调用方不必保证 paths 已去重」，补完之后这句话才成立。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1799,10 +1831,74 @@ describe("RepoStore + 身份账本", () => {
 })
 ```
 
+- [ ] **Step 1b: 给交接的三条约束各写失败测试**
+
+追加到 `server/tests/repo-identity.test.ts`（它们测的是账本本身，不是 store）：
+
+```ts
+describe("判据②的播种与同轮次约束", () => {
+  // 约束 A：不在铸造时算根提交，判据②就是一段永远跑不到的死代码
+  it("铸造新 id 时把根提交写进账本", async () => {
+    const led = new IdentityLedger(tmpFile())
+    const p = join("D:", "p", "fresh")
+    await led.resolve([p], async () => "rootXYZ", () => st(1, 10))
+    expect(led.get((await led.resolve([p], async () => null, () => st(1, 10))).get(p)!)?.rootCommit).toBe("rootXYZ")
+  })
+
+  // 约束 A 的收益：播种之后，跨卷移动（dev 变了、ino 也变了）才认得出来
+  it("播种过根提交后，跨卷移动仍能认领", async () => {
+    const file = tmpFile()
+    const oldP = join("D:", "p", "movable")
+    const newP = join("E:", "elsewhere", "movable")
+    const led = new IdentityLedger(file)
+    const before = (await led.resolve([oldP], async () => "rootMOVE", () => st(1, 10))).get(oldP)
+    const after = (await led.resolve([newP], async () => "rootMOVE", () => st(2, 99))).get(newP)
+    expect(after).toBe(before)
+  })
+
+  // 约束 B：上一轮还活着、这一轮没了的才可认领
+  it("上一轮消失的可以认领（关掉应用改名再打开）", async () => {
+    const file = tmpFile()
+    const oldP = join("D:", "p", "a")
+    const newP = join("D:", "p", "a-renamed")
+    const led = new IdentityLedger(file)
+    const before = (await led.resolve([oldP], async () => null, () => st(1, 42))).get(oldP)
+    // 新实例 = 重启；代必须是持久化的，否则这条会挂
+    const after = (await new IdentityLedger(file).resolve([newP], async () => null, () => st(1, 42))).get(newP)
+    expect(after).toBe(before)
+  })
+
+  it("连续两轮没扫到的仓库不再可认领（硬盘拔了很久）", async () => {
+    const file = tmpFile()
+    const gone = join("D:", "p", "on-usb")
+    const other = join("D:", "p", "other")
+    const led = new IdentityLedger(file)
+    const goneId = (await led.resolve([gone, other], async () => null, (p) => st(1, p === gone ? 42 : 7))).get(gone)
+    await led.resolve([other], async () => null, () => st(1, 7)) // 第 1 轮不见
+    await led.resolve([other], async () => null, () => st(1, 7)) // 第 2 轮仍不见 → 过期
+    const back = join("D:", "p", "came-back")
+    const newId = (await led.resolve([other, back], async () => null, (p) => st(1, p === back ? 42 : 7))).get(back)
+    expect(newId).not.toBe(goneId) // 隔了太久，不认
+  })
+
+  // 约束 C：返回的 Map 对每个输入路径都要有条目
+  it("重复拼写的路径都能取到同一个 id", async () => {
+    const led = new IdentityLedger(tmpFile())
+    const a = join("D:", "p", "dup")
+    const b = a.replace(/\\/g, "/")
+    const ids = await led.resolve([a, b], async () => null, () => st(1, 5))
+    expect(ids.get(a)).toBeDefined()
+    expect(ids.get(b)).toBe(ids.get(a)) // 而不是 undefined
+  })
+})
+```
+
+（`tmpFile()`、`st()`、`cand()` 沿用该文件已有的辅助函数；`st(dev, ino)` 返回 `{ dev: String(dev), ino: String(ino) }`——Task 5 已把 schema 改成字符串。）
+
 - [ ] **Step 2: 运行确认失败**
 
-Run: `npm test -w server -- tests/store-identity.test.ts`
-Expected: FAIL —— `RepoStore` 尚不接受第 5 个构造参数；改名后 id 会变
+Run: `npm test -w server -- tests/store-identity.test.ts tests/repo-identity.test.ts`
+Expected: FAIL —— `RepoStore` 尚不接受第 5 个构造参数；改名后 id 会变；上面五条新用例全红（根提交没播种、没有 gen 字段、重复拼写取不到 id）
 
 - [ ] **Step 3: 在 `git.ts` 加根提交辅助函数**
 
