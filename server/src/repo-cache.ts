@@ -1,14 +1,16 @@
 import type { RepoHeavy } from "./git"
 import { JsonStore } from "./json-store"
 
-// 「重」字段（stash / tag / remote / 最近提交 / 已合并分支 / 语言 / 描述）的落盘缓存，
+// 「重」字段（stash / tag / remote / 最近提交 / 已合并分支）的落盘缓存，
 // 键为 repoId，落盘到 config 同目录的 repo-cache.json。
+// 语言与描述**不在**这里：它们来自工作区而不是 .git，被一个由 .git 算出来的指纹缓存住的话
+// 永远等不到失效信号，现在由 composeStatus 每次现算（见 git.ts 的 RepoHeavy 注释）。
 // 存在的意义：一轮全量重扫本来要为每个仓库 spawn 6.4 个 git 进程（实测 73 个仓库 7151ms），
 // 而绝大多数仓库两轮之间根本没动过。按 .git 指纹命中缓存后只剩 status 一个进程（实测 1301ms）。
 /**
  * repo-cache.json 的 schema 版本。**RepoHeavy 的形状一变就必须 +1。**
  *
- * 逐字段校验 heavy 在这里是行不通的（它有九个字段、还嵌着 release/remotes/lastCommit
+ * 逐字段校验 heavy 在这里是行不通的（它有六个字段、还嵌着 release/remotes/lastCommit
  * 三个对象），而不校验的后果是致命的：这个文件已经在用户磁盘上了，形状必然会变，
  * 而旧条目只要通过校验，composeStatus 就会把缺掉的字段原样复制成 undefined，
  * 前端一句 `repo.mergedBranches.length` 当场抛 TypeError —— 整块白板，服务端零报错，

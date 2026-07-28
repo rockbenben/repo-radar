@@ -46,11 +46,38 @@ const WRITE_OPS: FingerprintCase[] = [
   { name: "tag", op: (r) => git(r, "tag", "v1.0.0") },
   { name: "branch", op: (r) => git(r, "branch", "feature") },
   { name: "branch -d", prep: (r) => git(r, "branch", "feature"), op: (r) => git(r, "branch", "-d", "feature") },
-  // 嵌套的松散引用：refs/heads 下多一层目录，`refs/heads` 本身的 mtime 仍然要动
+  // ↓ 带斜杠的 ref 名。这四条各自打在一个**不同**的位置上，别把它们当同一条的重复：
+  //   父目录不存在时，新建第一个嵌套 ref 要先创建 refs/heads/<ns> 这个目录，于是顶层
+  //   refs/heads 的 mtime 会动；父目录**已经存在**时变的只有 refs/heads/<ns> 自己，
+  //   顶层纹丝不动。只 stat 三个顶层目录的实现恰好能过前者、栽在后者上——
+  //   而 feature/* 正是最主流的分支命名。删除侧同理：删掉命名空间里最后一个 ref 会让 git
+  //   顺手把空父目录也删掉（顶层因此变化），同级还有兄弟 ref 存活时则不会
   {
-    name: "branch -d（嵌套 refs/heads/nested/deep）",
+    name: "branch nested/deep（父目录不存在，新建第一个）",
+    op: (r) => git(r, "branch", "nested/deep"),
+  },
+  {
+    name: "branch -D nested/deep（删掉后空父目录被 git 一并清掉）",
     prep: (r) => git(r, "branch", "nested/deep"),
     op: (r) => git(r, "branch", "-D", "nested/deep"),
+  },
+  {
+    name: "branch feature/c（父目录已存在）",
+    prep: (r) => git(r, "branch", "feature/a"),
+    op: (r) => git(r, "branch", "feature/c"),
+  },
+  {
+    name: "tag rel/z（父目录已存在）",
+    prep: (r) => git(r, "tag", "rel/x"),
+    op: (r) => git(r, "tag", "rel/z"),
+  },
+  {
+    name: "tag -d rel/z（同级还有兄弟 ref 存活，父目录不会被清掉）",
+    prep: (r) => {
+      git(r, "tag", "rel/x")
+      git(r, "tag", "rel/z")
+    },
+    op: (r) => git(r, "tag", "-d", "rel/z"),
   },
   { name: "remote add", op: (r) => git(r, "remote", "add", "origin", "https://example.invalid/a.git") },
   {
@@ -119,6 +146,25 @@ describe("gitFingerprint", () => {
   it("空仓库（oid 为 null）也能算出指纹", () => {
     const repo = makeRepo({ commits: 0 })
     expect(gitFingerprint(repo, null)).not.toBeNull()
+  })
+
+  // refs/ 下的命名空间目录多到超出上界时，宁可每轮全价刷新，也不要「只遍历前 N 个」——
+  // 那等于给漏判开了一个既随机又不可解释的口子
+  it("refs/ 下的目录数超出上界 → 返回 null（不可缓存）", () => {
+    const repo = makeRepo()
+    expect(gitFingerprint(repo, "o")).not.toBeNull() // 前提：正常仓库当然是可缓存的
+    for (let i = 0; i < 300; i++) mkdirSync(join(repo, ".git", "refs", `ns${i}`), { recursive: true })
+    expect(gitFingerprint(repo, "o")).toBeNull()
+  })
+
+  // readdirSync 的返回顺序不保证跨调用稳定；不排序的话指纹会在内容根本没变时抖动，
+  // 表现为缓存永远不命中——这套机制整个失效，且没有任何报错
+  it("嵌套命名空间下反复求值仍然稳定（遍历顺序不得泄漏进指纹）", () => {
+    const repo = makeRepo()
+    git(repo, "branch", "feature/a")
+    git(repo, "branch", "release/1.0/rc")
+    git(repo, "tag", "rel/x")
+    expect(gitFingerprint(repo, "o")).toBe(gitFingerprint(repo, "o"))
   })
 
   it("FETCH_HEAD 从无到有 → 指纹变化", () => {
