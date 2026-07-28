@@ -551,4 +551,115 @@ describe("RepoWatcher + RecursiveRootStrategy — 真实文件系统端到端", 
     expect(structural.some((s) => s.includes("brand-new-project"))).toBe(true)
     await w.close()
   })
+
+  // 多 scan root 是 RecursiveRootStrategy 的核心场景（每个 root 一个句柄），但全套测试里
+  // 唯一用过两个 root 的地方（automation.test.ts）走的是假 watcher。这里补的四条钉住
+  // start() 返回值、coverage、以及「单个 root 挂不上不拖垮其它 root」这条只在注释里
+  // 承诺过、从没被验证过的性质
+  it("两个真实 root 各自工作：分别写入触发各自的仓库，互不串台", async () => {
+    const rootA = tmpRoot()
+    const rootB = tmpRoot()
+    const repoA = join(rootA, "alpha")
+    const repoB = join(rootB, "beta")
+    mkdirSync(join(repoA, ".git"), { recursive: true })
+    mkdirSync(join(repoB, ".git"), { recursive: true })
+    const fired: string[] = []
+    const structural: string[] = []
+    const w = new RepoWatcher(
+      (id) => fired.push(id),
+      (reason) => structural.push(reason),
+      100,
+      2000,
+      new RecursiveRootStrategy(),
+    )
+    await w.setRoots([rootA, rootB], [
+      { id: "A", path: repoA },
+      { id: "B", path: repoB },
+    ])
+    expect(w.watchedRoots().slice().sort()).toEqual([rootA, rootB].slice().sort()) // 各自一个句柄，都挂上了
+    expect(w.coveredRepoCount()).toBe(2)
+    await new Promise((r) => setTimeout(r, 300)) // Windows 上递归监听建立后需要一点缓冲
+
+    writeFileSync(join(repoA, ".git", "index"), "x")
+    await waitFor(() => fired.length > 0)
+    expect(fired).toEqual(["A"]) // 只有 A 触发，没有串到 B
+
+    writeFileSync(join(repoB, ".git", "index"), "x")
+    await waitFor(() => fired.length > 1)
+    expect(fired).toEqual(["A", "B"])
+    expect(structural).toEqual([]) // 两次写入都落在已知仓库里，不该被当成结构变化
+    await w.close()
+  })
+
+  it("一个 root 挂不上（路径不存在），另一个仍然工作，且失守留下痕迹", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const rootGood = tmpRoot()
+      const rootBad = join(tmpRoot(), "does-not-exist") // realpathSync.native 对它必抛 ENOENT → catch → 不进 ok
+      const repoGood = join(rootGood, "good")
+      const repoBad = join(rootBad, "bad") // 从未创建，只用来验证 coveredRepoCount 会把它排除
+      mkdirSync(join(repoGood, ".git"), { recursive: true })
+      const fired: string[] = []
+      const w = new RepoWatcher((id) => fired.push(id), () => {}, 100, 2000, new RecursiveRootStrategy())
+      await w.setRoots([rootGood, rootBad], [
+        { id: "GOOD", path: repoGood },
+        { id: "BAD", path: repoBad },
+      ])
+
+      expect(w.watchedRoots()).toEqual([rootGood]) // 坏的那个没能挂上，不进成功列表
+      expect(w.coveredRepoCount()).toBe(1) // 只数好 root 下的仓库，BAD 不计入
+      expect(spy).toHaveBeenCalled() // 失守必须留痕迹：onError 被调用了，不是被当噪音悄悄吞掉
+
+      await new Promise((r) => setTimeout(r, 300))
+      writeFileSync(join(repoGood, ".git", "index"), "x")
+      await waitFor(() => fired.length > 0)
+      expect(fired).toEqual(["GOOD"]) // 好的 root 完全不受坏 root 拖累
+      await w.close()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("coveredRepoCount() 跨 root 数得对，其中一个失守后如实下降", async () => {
+    const rootA = tmpRoot()
+    const rootB = tmpRoot()
+    // repos 不需要真实存在：coveredRepoCount 只按路径字符串前缀判断，不碰文件系统
+    const reposA = ["a1", "a2"].map((n) => join(rootA, n))
+    const reposB = ["b1", "b2"].map((n) => join(rootB, n))
+    const watched = [
+      ...reposA.map((path, i) => ({ id: `A${i}`, path })),
+      ...reposB.map((path, i) => ({ id: `B${i}`, path })),
+    ]
+    const w = new RepoWatcher(() => {}, () => {}, 100, 2000, new RecursiveRootStrategy())
+    await w.setRoots([rootA, rootB], watched)
+    expect(w.coveredRepoCount()).toBe(4) // 两个 root 各 2 个仓库，加起来 4
+
+    // 模拟 rootB 失守之后的重扫重建：仓库列表不变，rootB 换成一个已经不存在的路径
+    const rootBGone = join(tmpRoot(), "does-not-exist")
+    await w.setRoots([rootA, rootBGone], watched)
+    expect(w.coveredRepoCount()).toBe(2) // reposB 仍在列表里，但不再落在任何成功 root 之下
+    await w.close()
+  })
+
+  // 已知粗糙面：targets 按裸字符串去重，root 与它的子目录会各挂一个句柄，同一棵树被监听
+  // 两次——这里钉住的是「只是多花一份 syscall 成本，不是正确性问题」，不是要求改实现
+  it("嵌套 root 各挂一个句柄，但一次写入只触发一次刷新，仓库不被重复计数", async () => {
+    const rootA = tmpRoot()
+    const rootB = join(rootA, "sub")
+    mkdirSync(rootB, { recursive: true })
+    const repo = join(rootB, "repo")
+    mkdirSync(join(repo, ".git"), { recursive: true })
+    const fired: string[] = []
+    const w = new RepoWatcher((id) => fired.push(id), () => {}, 100, 2000, new RecursiveRootStrategy())
+    await w.setRoots([rootA, rootB], [{ id: "NESTED", path: repo }])
+    expect(w.watchedRoots().slice().sort()).toEqual([rootA, rootB].slice().sort()) // 两个 target 都真的各自挂上
+    expect(w.coveredRepoCount()).toBe(1) // 按仓库过滤，不是按 root 累加求和
+    await new Promise((r) => setTimeout(r, 300))
+
+    writeFileSync(join(repo, ".git", "index"), "x") // 同一次写入会被两个句柄各报一次
+    await waitFor(() => fired.length > 0)
+    await new Promise((r) => setTimeout(r, 400)) // 给可能的第二次触发留出时间：真出现的话会在这里现形
+    expect(fired).toEqual(["NESTED"]) // 防抖把两个句柄各自报的重复事件合并成一次
+    await w.close()
+  })
 })
