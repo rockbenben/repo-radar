@@ -47,6 +47,26 @@ ext3 / HFS+ / 部分 SMB 的 1 秒时间戳精度下，同一秒内的外部 ref
 **12. 若干小项。**
 `rel.startsWith("..")` 会误判名为 `..foo` 的文件；`targets` 按裸字符串去重，两个只差大小写/分隔符风格的 root 会挂两个句柄；`watcher.ts` 未归属分支仍用裸字符串匹配（与已修好的归属分支不对称）；`routes.ts` 的 `rescanFresh ?? rescan` 会让只注入 `rescan` 的宿主静默降级；`structure.stop()` 现在是永久的（今天无 start-after-stop 路径，但未来加了会得到一个静默死掉的通道）；`store-freshen.test.ts` 用全局 mock `existsSync` 恒真、改用真实临时目录会更窄；`manualRepos` 失效提示未写出配置文件的实际路径。
 
+## 工作流评审（xhigh）之后新增的遗留项
+
+**13. 廉价预过滤会吞掉「新仓库出现」这个确定信号。**
+`RepoWatcher.handle` 在未归属分支上先跑 `shouldIgnorePath(file, this.roots)`，再跑 `isStructuralPath`。于是一个位于 `IGNORED_DIRS` 同名目录之下的新仓库（例如扫描根下有个叫 `build` 的普通目录，里面 clone 了仓库）——它的 `.git` 创建事件会被前者丢弃，尽管 `isStructuralPath` 自己的注释明确写着「末段是 `.git` 时任何深度都要报」。
+
+影响面比初看要窄：一旦该仓库被某轮重扫发现并进入 `byKey`，`findOwner` 就能归属它，此后 `shouldIgnorePath` 只检查**仓库根以下**的段，刷新完全正常。所以真实后果是**发现延迟**——新仓库要等最长 30 分钟的兜底重扫才出现在看板上，而不是秒级；`autoScanMinutes = 0` 时则永不出现。不是静默冻结。
+
+修法方向是让「末段是 `.git`」这个信号先于忽略过滤生效，但那是热路径上的行为变更，需要单独评估它会不会把构建期噪音重新放进来。
+
+**（顺带记录一次被证伪的归因）** 工作流评审曾把这个症状归因于 `shouldIgnorePath` 的 root 探测对卷根（`D:\`、`/`）失配。实施者证明该归因不成立：卷根之上没有任何路径段，所以「匹配失败 → 退化成整条绝对路径」对卷根**不产生行为差异**，新旧实现都返回 `true`。结论对、归因错。root 探测改用 `isUnderPath` 之后修好的是**另一族**真实缺陷：扫描根带尾分隔符、分隔符风格不同、Windows 大小写不一致时整条匹配失败，导致该 root 下的仓库事件被全部丢弃。
+
+**14. `applyRepos` 的补挂条件会被「路径已失效的 manualRepo」永久触发。**
+覆盖不足的判定拿「磁盘上确实存在的仓库数」作分母，而失效的 manualRepo 会一直留在列表里（有意为之，好产出错误卡片），于是每轮重扫都会触发一次注定失败的 `applyWatch`。这与遗留项 3 的 `watchDegraded` 闩住是同一处根因，应当一并修。
+
+**15. `remote -v` 的降级路径没有端到端用例。**
+`getRepoHeavy` 的降级判定对 `remote -v` 是无条件的、没有分支，所以覆盖上是充分的；但实测无法用真实 git 让 `remote -v` 在 `status` 仍成功的前提下失败（缺 `url` 时它照样 rc=0），要补只能 mock `spawn`，那会把「真实 git 行为」这层保证换成一份手写假 spawn。判断为不划算，记录在案。
+
+**16. `CACHE_VERSION` 的升版条件。**
+本轮确认**不需要**升：`repo-cache.json` 从未随任何 release 出过门（`git merge-base --is-ancestor d4972c3 v1.2.0` 为否），且作者机器的 `~/.repo-radar/` 里不存在该文件，磁盘上不可能有被降级结果投毒的条目。**今后 `RepoHeavy` 的形状每变一次，`CACHE_VERSION` 必须 +1**（`repo-cache.ts` 顶部已钉住这条规则）。
+
 ## 计划本身的一处错
 
 [实施计划](../plans/2026-07-28-watch-perf-and-identity.md) 的 Task 3 在论证「保留 `getRepoStatus` 作为薄包装」时，引用了 `routes.ts`、`scaffold.ts` 里的调用方——**那些调用方从不存在**。改造前它只被 `store.ts` 的两处调用，如今零生产调用方，仅由测试维持存活。要么删掉，要么显式标注为 test-only。
