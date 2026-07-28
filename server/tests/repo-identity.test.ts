@@ -26,7 +26,11 @@ afterAll(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 3 })
 })
 
-const cand = (dev: number, ino: number, rootCommit: string | null = null): ClaimCandidate => ({ dev, ino, rootCommit })
+// dev/ino 在落盘 schema 里是字符串（Windows 文件 ID 超 2^53，转 double 会串号）。
+// 这两个构造器让用例照旧写数字，读起来仍是「ino 100」而不是一片引号噪音
+const cand = (dev: number | string, ino: number | string, rootCommit: string | null = null): ClaimCandidate =>
+  ({ dev: String(dev), ino: String(ino), rootCommit })
+const st = (dev: number | string, ino: number | string) => ({ dev: String(dev), ino: String(ino) })
 const noRootCommit = async () => null
 
 describe("matchClaims", () => {
@@ -50,6 +54,14 @@ describe("matchClaims", () => {
     expect(matchClaims(lost, found)).toEqual(new Map())
   })
 
+  // 上面那条其实是被「判据值重复」守卫顺带挡住的（四个候选全 key 成 "1:0"，两侧都被污染），
+  // 删掉 ino 守卫它照样绿。这条是唯一能真正打到 ino 守卫的形状：两边各一条，不触发重复守卫
+  it("ino 为 0 且两侧各只有一条 → 仍不得认领（打的是 ino 守卫本身）", () => {
+    const lost = new Map([["a", cand(1, 0)]])
+    const found = new Map([["D:/x", cand(1, 0)]])
+    expect(matchClaims(lost, found)).toEqual(new Map())
+  })
+
   it("ino 为 0 但有根提交 → 按根提交认领", () => {
     const lost = new Map([["a", cand(1, 0, "rootA")]])
     const found = new Map([["D:/x", cand(1, 0, "rootA")]])
@@ -59,8 +71,9 @@ describe("matchClaims", () => {
   // 空串是 ino===0 的同类陷阱：一个哨兵值让两个无关仓库「相等」。
   // rootCommitOf 在空仓库 / git 读失败时很容易返回 ""，老版本或被改坏的账本条目里也可能是 ""
   it("根提交为空串（空仓库 / 读失败的返回值）→ 该判据作废，不得互相认领", () => {
-    const lost = new Map([["a", cand(1, 0, "")]])
-    const found = new Map([["D:/x", cand(1, 0, "")]])
+    // ino 故意取两个不相等的真值，好让这条只打根提交守卫，不蹭 ino 守卫的覆盖
+    const lost = new Map([["a", cand(1, 100, "")]])
+    const found = new Map([["D:/x", cand(2, 300, "")]])
     expect(matchClaims(lost, found)).toEqual(new Map())
   })
 
@@ -77,6 +90,15 @@ describe("matchClaims", () => {
     expect(matchClaims(lost, found)).toEqual(new Map([["D:/x", "a"], ["D:/y", "b"]]))
   })
 
+  // Windows 文件 ID 常常超过 2^53：这两个值 Number() 之后是同一个 double。
+  // 判据键一旦退回数字，两个无关仓库就会凑出一个「干净的一一对应」错误认领
+  it("ino 相差 1 但超出 double 精度 → 仍是两个仓库，不得认领", () => {
+    expect(Number("50946970787919009")).toBe(Number("50946970787919010")) // 前提：转 double 后确实撞了
+    const lost = new Map([["a", cand(1, "50946970787919009")]])
+    const found = new Map([["D:/x", cand(1, "50946970787919010")]])
+    expect(matchClaims(lost, found)).toEqual(new Map())
+  })
+
   it("根提交为 null 的一方不参与根提交匹配", () => {
     const lost = new Map([["a", cand(1, 100, null)]])
     const found = new Map([["D:/x", cand(2, 300, null)]])
@@ -87,6 +109,15 @@ describe("matchClaims", () => {
     const lost = new Map([["a", cand(1, 100, "shared")], ["b", cand(1, 999, "shared")]])
     const found = new Map([["D:/x", cand(1, 100, "shared")]])
     // a 靠 ino 被认领；b 与 D:/x 不该再因为 rootCommit 相同而二次配对
+    expect(matchClaims(lost, found)).toEqual(new Map([["D:/x", "a"]]))
+  })
+
+  // 上面那条同样是被「判据值重复」守卫挡住的（"shared" 在 lost 侧出现两次），删掉轮间扣除照样绿。
+  // 换成两个不同的根提交，扣除逻辑就成了唯一防线：没有它，判据②会拿 b 覆盖掉①认定的 a——
+  // 那是一个错误认领，也正是本模块最高危的失败模式
+  it("ino 已配对的不再参与根提交匹配（根提交各不相同，打的是轮间扣除本身）", () => {
+    const lost = new Map([["a", cand(1, 100, "rootA")], ["b", cand(1, 999, "rootB")]])
+    const found = new Map([["D:/x", cand(1, 100, "rootB")]])
     expect(matchClaims(lost, found)).toEqual(new Map([["D:/x", "a"]]))
   })
 
@@ -105,9 +136,45 @@ describe("matchClaims", () => {
   })
 })
 
+// normalizePath 是本模块唯一按 process.platform 分叉的地方，而 CI 跑 ubuntu + windows 两条腿
+// （.github/workflows/ci.yml）。把平台钉死在断言里会让另一条腿必然红，所以这里在**调用现场**
+// 临时改写 process.platform，两个分支在两个平台上都被完整验证。
+// 只包住一次纯函数调用（无 I/O、无 import），finally 里按原描述符还原——不会污染其它用例
+function withPlatform<T>(platform: string, fn: () => T): T {
+  const desc = Object.getOwnPropertyDescriptor(process, "platform")!
+  Object.defineProperty(process, "platform", { ...desc, value: platform })
+  try {
+    return fn()
+  } finally {
+    Object.defineProperty(process, "platform", desc)
+  }
+}
+
 describe("normalizePath", () => {
-  it("统一分隔符与大小写", () => {
-    expect(normalizePath("D:\\Repo\\A")).toBe(normalizePath("d:/repo/a"))
+  // 分隔符折叠是无条件的，两个平台上都成立
+  it("统一分隔符", () => {
+    expect(normalizePath("D:\\Repo\\A")).toBe(normalizePath("D:/Repo/A"))
+  })
+
+  it("Windows 上大小写也归一化（同一目录换个壳不该变成两个仓库）", () => {
+    withPlatform("win32", () => {
+      expect(normalizePath("D:\\Repo\\A")).toBe(normalizePath("d:/repo/a"))
+    })
+  })
+
+  // 非 Windows 上大小写有意义：/home/Repo 与 /home/repo 是两个真实目录，
+  // 归一化到一起会让它们在账本里互相顶替
+  it("非 Windows 上保留大小写", () => {
+    withPlatform("linux", () => {
+      expect(normalizePath("/home/Repo")).not.toBe(normalizePath("/home/repo"))
+      expect(normalizePath("/home/a\\b")).toBe("/home/a/b") // 分隔符仍然折
+    })
+  })
+
+  it("改写后如实还原（探针不会污染其它用例）", () => {
+    const real = process.platform
+    withPlatform("linux", () => undefined)
+    expect(process.platform).toBe(real)
   })
 })
 
@@ -115,7 +182,7 @@ describe("IdentityLedger", () => {
   it("首次见到的路径按 repoId(path) 铸造 —— 与现有 config.json 里的 id 完全一致", async () => {
     const led = makeLedger(tmpFile())
     const p = join("D:", "projects", "demo")
-    const ids = await led.resolve([p], noRootCommit, () => ({ dev: 1, ino: 10 }))
+    const ids = await led.resolve([p], noRootCommit, () => st(1, 10))
     expect(ids.get(p)).toBe(repoId(p))
   })
 
@@ -123,9 +190,9 @@ describe("IdentityLedger", () => {
     const file = tmpFile()
     const p = join("D:", "projects", "demo")
     const led = makeLedger(file)
-    const first = await led.resolve([p], noRootCommit, () => ({ dev: 1, ino: 10 }))
+    const first = await led.resolve([p], noRootCommit, () => st(1, 10))
     led.flush() // 防抖 1s：不 flush 的话第二个实例读到的是空文件
-    const second = await makeLedger(file).resolve([p], noRootCommit, () => ({ dev: 1, ino: 10 }))
+    const second = await makeLedger(file).resolve([p], noRootCommit, () => st(1, 10))
     expect(second.get(p)).toBe(first.get(p))
   })
 
@@ -134,8 +201,8 @@ describe("IdentityLedger", () => {
     const oldP = join("D:", "projects", "demo")
     const newP = join("D:", "projects", "demo-renamed")
     const led = makeLedger(file)
-    const before = (await led.resolve([oldP], noRootCommit, () => ({ dev: 1, ino: 42 }))).get(oldP)
-    const after = (await led.resolve([newP], noRootCommit, () => ({ dev: 1, ino: 42 }))).get(newP)
+    const before = (await led.resolve([oldP], noRootCommit, () => st(1, 42))).get(oldP)
+    const after = (await led.resolve([newP], noRootCommit, () => st(1, 42))).get(newP)
     expect(after).toBe(before)
   })
 
@@ -145,9 +212,9 @@ describe("IdentityLedger", () => {
     const oldP = join("D:", "projects", "restart")
     const newP = join("D:", "projects", "restart-renamed")
     const led = makeLedger(file)
-    const before = (await led.resolve([oldP], noRootCommit, () => ({ dev: 1, ino: 42 }))).get(oldP)
+    const before = (await led.resolve([oldP], noRootCommit, () => st(1, 42))).get(oldP)
     led.flush()
-    const after = (await makeLedger(file).resolve([newP], noRootCommit, () => ({ dev: 1, ino: 42 }))).get(newP)
+    const after = (await makeLedger(file).resolve([newP], noRootCommit, () => st(1, 42))).get(newP)
     expect(after).toBe(before)
     expect(after).toBe(repoId(oldP))
   })
@@ -156,8 +223,8 @@ describe("IdentityLedger", () => {
     const led = makeLedger(tmpFile())
     const a = join("D:", "p", "a")
     const b = join("D:", "p", "b")
-    await led.resolve([a], noRootCommit, () => ({ dev: 1, ino: 1 }))
-    const ids = await led.resolve([a, b], noRootCommit, (p) => ({ dev: 1, ino: p === a ? 1 : 2 }))
+    await led.resolve([a], noRootCommit, () => st(1, 1))
+    const ids = await led.resolve([a, b], noRootCommit, (p) => st(1, p === a ? 1 : 2))
     expect(ids.get(b)).toBe(repoId(b))
     expect(ids.get(b)).not.toBe(ids.get(a))
   })
@@ -169,9 +236,9 @@ describe("IdentityLedger", () => {
     const file = tmpFile()
     const p = join("D:", "p", "same-name")
     const led = makeLedger(file)
-    const before = (await led.resolve([p], noRootCommit, () => ({ dev: 1, ino: 1 }))).get(p)
+    const before = (await led.resolve([p], noRootCommit, () => st(1, 1))).get(p)
     // 路径没变但 ino 变了：这条路径在账本里已知，直接命中——根本不进认领流程
-    const after = (await led.resolve([p], noRootCommit, () => ({ dev: 1, ino: 2 }))).get(p)
+    const after = (await led.resolve([p], noRootCommit, () => st(1, 2))).get(p)
     expect(after).toBe(before)
   })
 
@@ -183,12 +250,40 @@ describe("IdentityLedger", () => {
     const oldP = join("D:", "p", "proj")
     const newP = join("D:", "p", "proj-2026")
     const led = makeLedger(file)
-    await led.resolve([oldP], noRootCommit, () => ({ dev: 1, ino: 7 }))
-    const renamed = (await led.resolve([newP], noRootCommit, () => ({ dev: 1, ino: 7 }))).get(newP)
+    await led.resolve([oldP], noRootCommit, () => st(1, 7))
+    const renamed = (await led.resolve([newP], noRootCommit, () => st(1, 7))).get(newP)
     expect(renamed).toBe(repoId(oldP))
-    const ids = await led.resolve([newP, oldP], noRootCommit, (p) => ({ dev: 1, ino: p === newP ? 7 : 8 }))
+    const ids = await led.resolve([newP, oldP], noRootCommit, (p) => st(1, p === newP ? 7 : 8))
     expect(ids.get(newP)).toBe(renamed)
     expect(ids.get(oldP)).not.toBe(renamed)
+  })
+
+  // 同一个洞的「屏幕外」版本：改名后的 newP 这一轮压根没被扫到（删了 / 移动硬盘拔了 /
+  // 没扫到），于是「本轮已分配的 id」是空集，只有账本知道 repoId(oldP) 名花有主。
+  // 认错的后果是新仓库继承老仓库的标签，而老仓库回来时什么都不剩
+  it("改名后 newP 本轮不在扫描范围内，原路径又新建仓库 → 仍不得铸造成老 id", async () => {
+    const file = tmpFile()
+    const oldP = join("D:", "p", "off-screen")
+    const newP = join("D:", "p", "off-screen-renamed")
+    const led = makeLedger(file)
+    await led.resolve([oldP], noRootCommit, () => st(1, 7))
+    const renamed = (await led.resolve([newP], noRootCommit, () => st(1, 7))).get(newP)
+    expect(renamed).toBe(repoId(oldP))
+    // 本轮只扫到 oldP，且它是个全新的无关仓库（ino 变了，认领必然失败）
+    const ids = await led.resolve([oldP], noRootCommit, () => st(1, 9))
+    expect(ids.get(oldP)).not.toBe(renamed)
+  })
+
+  // 去重前置：同一仓库以两种拼写出现在同一轮时，两条会算出同一个 repoId，
+  // 后一条被撞车守卫改成合成 id 又赢下归一化键，真 id 就成了孤儿——标签全丢
+  it("同一路径以两种拼写出现在同一轮 → 去重，真 id 不被合成 id 顶掉", async () => {
+    const file = tmpFile()
+    const led = makeLedger(file)
+    const p = join("D:", "p", "dup")
+    const ids = await led.resolve([p, p.replace(/\\/g, "/")], noRootCommit, () => st(1, 5))
+    expect([...new Set(ids.values())]).toEqual([repoId(p)])
+    // 下一轮必须还认得它：合成 id 一旦赢下 byPath，这里返回的就是那个孤儿
+    expect((await led.resolve([p], noRootCommit, () => st(1, 5))).get(p)).toBe(repoId(p))
   })
 
   it("stat 失败（仓库不可读）不影响其它仓库的解析", async () => {
@@ -198,13 +293,42 @@ describe("IdentityLedger", () => {
     expect(ids.get(a)).toBe(repoId(a))
   })
 
+  // 杀软锁住 .git、硬盘刚休眠都会让 stat 瞬时失败。把好记录清成 "0" 会废掉判据①，
+  // 而它是目前唯一真正在工作的判据——下一轮这个仓库改名就再也认不回来了
+  it("stat 瞬时失败不清掉已记录的 dev/ino，改名仍能认领", async () => {
+    const file = tmpFile()
+    const p = join("D:", "p", "flaky")
+    const renamed = join("D:", "p", "flaky-renamed")
+    const led = makeLedger(file)
+    const before = (await led.resolve([p], noRootCommit, () => st(1, 77))).get(p)
+    await led.resolve([p], noRootCommit, () => null) // 这一轮 stat 挂了
+    expect((await led.resolve([renamed], noRootCommit, () => st(1, 77))).get(renamed)).toBe(before)
+  })
+
+  // 判据②今天是关闭的：lost 一侧的 rootCommit 恒为 null，再去 spawn git 算 found 一侧
+  // 必然认不上。那批进程是确定无收益的，不该付
+  it("lost 一侧没有根提交时不调用 rootCommitOf（不付确定无收益的 git 进程）", async () => {
+    const file = tmpFile()
+    const led = makeLedger(file)
+    const oldP = join("D:", "p", "gone")
+    const newP = join("D:", "p", "fresh")
+    await led.resolve([oldP], noRootCommit, () => st(1, 3))
+    let calls = 0
+    const counting = async () => {
+      calls++
+      return null
+    }
+    await led.resolve([newP], counting, () => st(2, 4)) // ino 认不上，会走到判据②的入口
+    expect(calls).toBe(0)
+  })
+
   it("prune 带年龄护栏：刚见过的条目不剪", async () => {
     const file = tmpFile()
     const led = makeLedger(file)
     const p = join("D:", "p", "a")
-    const id = (await led.resolve([p], noRootCommit, () => ({ dev: 1, ino: 1 }))).get(p)!
+    const id = (await led.resolve([p], noRootCommit, () => st(1, 1))).get(p)!
     led.prune(new Set())
-    expect((await led.resolve([p], noRootCommit, () => ({ dev: 1, ino: 1 }))).get(p)).toBe(id)
+    expect((await led.resolve([p], noRootCommit, () => st(1, 1))).get(p)).toBe(id)
   })
 
   it("账本损坏 → 当空账本，按路径重新铸造（退化成改造前行为）", async () => {
@@ -214,6 +338,6 @@ describe("IdentityLedger", () => {
     mkdirSync(join(file, ".."), { recursive: true })
     writeFileSync(file, "{{{broken")
     const p = join("D:", "p", "a")
-    expect((await makeLedger(file).resolve([p], noRootCommit, () => ({ dev: 1, ino: 1 }))).get(p)).toBe(repoId(p))
+    expect((await makeLedger(file).resolve([p], noRootCommit, () => st(1, 1))).get(p)).toBe(repoId(p))
   })
 })

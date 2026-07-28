@@ -16,34 +16,56 @@ import { JsonStore } from "./json-store"
  */
 export interface IdentityEntry {
   path: string
-  dev: number
-  ino: number
+  /** dev/ino 存字符串而不是 number：Windows 文件 ID 常常超过 2^53，转 double 会静默串号。
+   *  这是要落到用户磁盘的 schema，字段类型必须一次定对——详见 statDotGit 的注释 */
+  dev: string
+  ino: string
   rootCommit: string | null
   seenAt: string // ISO 8601，prune 的年龄护栏用
 }
 
 export interface ClaimCandidate {
-  dev: number
-  ino: number
+  dev: string
+  ino: string
   rootCommit: string | null
 }
 
 const isIdentityEntry = (v: unknown): v is IdentityEntry =>
   typeof v === "object" && v !== null &&
   typeof (v as IdentityEntry).path === "string" &&
-  typeof (v as IdentityEntry).dev === "number" &&
-  typeof (v as IdentityEntry).ino === "number" &&
+  typeof (v as IdentityEntry).dev === "string" &&
+  typeof (v as IdentityEntry).ino === "string" &&
   // rootCommit 是认领判据②，必须逐条校验类型：类型错的值（被改坏的账本、老版本字段）
   // 会被当成合法判据参与匹配，而判据一旦失真就是认错身份。缺字段允许（老条目没有它）
   ((v as IdentityEntry).rootCommit === undefined || (v as IdentityEntry).rootCommit === null || typeof (v as IdentityEntry).rootCommit === "string") &&
   typeof (v as IdentityEntry).seenAt === "string"
 
 /** 路径键的归一化。Windows 路径大小写不敏感，且同一目录可能以不同大小写出现，
- *  不归一化会让「D:\Repo」和「d:\repo」在账本里变成两个仓库 */
+ *  不归一化会让「D:\Repo」和「d:\repo」在账本里变成两个仓库。
+ *  非 Windows 上大小写是有意义的（同名不同壳是两个真实目录），只折分隔符 */
 export function normalizePath(p: string): string {
   const slashed = p.replace(/\\/g, "/")
   return process.platform === "win32" ? slashed.toLowerCase() : slashed
 }
+
+/**
+ * 判据①的键：dev + ino。
+ * ino 为 "0" = 文件系统不提供稳定 id（FAT32 / exFAT / 部分网络共享），拿它参与匹配会让
+ * 所有仓库互相「相等」，把身份认串——必须整体作废该判据。空串、非字符串同理：
+ * 用一个哨兵值让两个无关仓库「相等」，是本模块最危险的一类输入。
+ */
+const inoKey = (c: ClaimCandidate): string | null => {
+  if (typeof c.dev !== "string" || typeof c.ino !== "string") return null
+  if (c.dev === "" || c.ino === "" || c.ino === "0") return null
+  return `${c.dev}:${c.ino}`
+}
+
+/**
+ * 判据②的键：根提交 hash。空串是 ino==="0" 的同类陷阱——rootCommitOf 在空仓库 / git
+ * 读失败时很容易返回 ""，被改坏或老版本写的账本条目里也可能是 ""。
+ */
+const rootKey = (c: ClaimCandidate): string | null =>
+  typeof c.rootCommit === "string" && c.rootCommit !== "" ? c.rootCommit : null
 
 /** 只出现一次的判据值才可用于认领。出现多次说明无法区分，宁可不认 */
 function uniqueByKey<V>(items: Iterable<[string, V]>, keyOf: (v: V) => string | null): Map<string, string> {
@@ -65,9 +87,15 @@ function uniqueByKey<V>(items: Iterable<[string, V]>, keyOf: (v: V) => string | 
  *  ① dev + ino——同卷改名/移动必中，零成本（stat 本来就要做）
  *  ② 根提交 hash——跨卷移动、从备份恢复、以及 ino 不可用的文件系统
  *
- * 一一对应这条约束同时挡掉了「同一仓库的多个 clone 根提交相同」的撞车风险。
  * 认错身份产生的是**错误数据**（A 的标签跑到 B 头上），比不认（退回改造前的丢数据行为）
- * 严重得多，所以每一步都取保守侧。
+ * 严重得多，所以每一步都取保守侧：判据值重复即全部放弃，已被①配对的两边都退出②。
+ *
+ * **判据②的已知限制**：一一对应**挡不住**同一 upstream 的多个 clone。它只在两个 clone
+ * 落在匹配的同一侧时才起作用；若 clone C1 在线（是已知路径，根本不进候选池）、C2 在拔掉的
+ * 移动硬盘上（→ lost）、用户又新 clone 出 C3（→ found），两侧就各自唯一，而判据②**不比较
+ * dev**，于是 C3 认领 C2 的 id。收紧办法（要求「丢失」与「出现」发生在同一轮扫描等）涉及
+ * 设计变更，留待判据②真正通电（Task 6 持久化根提交）之前定夺。今天判据②实际处于关闭
+ * 状态：lost 一侧的 rootCommit 恒为 null，resolve 会因此整轮跳过它。
  */
 export function matchClaims(
   lost: Map<string, ClaimCandidate>,
@@ -86,18 +114,14 @@ export function matchClaims(
       const foundPath = foundByKey.get(k)
       if (foundPath === undefined) continue
       claims.set(foundPath, lostId)
+      // 轮间扣除：①配对成功的两边都退出，否则②会拿另一个 lost 覆盖掉①的正确结论
       remainingLost.delete(lostId)
       remainingFound.delete(foundPath)
     }
   }
 
-  // ino 为 0 = 文件系统不提供稳定 id（FAT32 / exFAT / 部分网络共享）。
-  // 拿 0 参与匹配会让所有仓库互相「相等」，把身份认串——必须整体作废该判据
-  round((c) => (c.ino === 0 ? null : `${c.dev}:${c.ino}`))
-  // 空串是 ino===0 的同类陷阱：rootCommitOf 在空仓库 / git 读失败时很容易返回 ""，
-  // 被改坏或老版本写的账本条目里也可能是 ""。一个哨兵值让两个无关仓库「相等」，
-  // 同样必须作废。typeof 兜住的是账本里混进来的非字符串值
-  round((c) => (typeof c.rootCommit === "string" && c.rootCommit !== "" ? c.rootCommit : null))
+  round(inoKey)
+  round(rootKey)
   return claims
 }
 
@@ -116,10 +140,15 @@ export class IdentityLedger {
   }
 
   /** 默认的 stat 实现：`.git` 的 dev+ino。测试可注入替身 */
-  private static statDotGit(path: string): { dev: number; ino: number } | null {
+  private static statDotGit(path: string): { dev: string; ino: string } | null {
     try {
-      const s = statSync(join(path, ".git"))
-      return { dev: Number(s.dev), ino: Number(s.ino) }
+      // bigint:true + 存字符串，而不是 Number(s.ino)：Windows 文件 ID 是
+      // (sequence << 48) | mftRecord，本机实测 29 个 .git 里 14 个超过 2^53、7 个转 double
+      // 后已与精确值不符。1e17 量级 double 的 ULP 是 16，于是 sequence 相同、MFT 记录相差
+      // 8 以内的两个 .git（背靠背 clone 出来的仓库很常见）会舍入成同一个数，凑出一个
+      // 「干净的一一对应」错误认领——最难查的那种错误数据。字符串比较无损。
+      const s = statSync(join(path, ".git"), { bigint: true })
+      return { dev: String(s.dev), ino: String(s.ino) }
     } catch {
       return null
     }
@@ -128,19 +157,30 @@ export class IdentityLedger {
   /**
    * 把本轮扫描到的路径解析成 id。
    *
-   * rootCommitOf 只会在**确实有仓库消失**时被调用（先按 dev+ino 认一遍，还有剩才算），
-   * 所以日常这里是零 git 进程。
+   * rootCommitOf 只会在**确实有仓库消失、判据①没认完、且 lost 一侧确实存着根提交**时
+   * 才被调用，所以日常这里是零 git 进程。
    */
   async resolve(
     paths: string[],
     rootCommitOf: (path: string) => Promise<string | null>,
-    statOf: (path: string) => { dev: number; ino: number } | null = IdentityLedger.statDotGit,
+    statOf: (path: string) => { dev: string; ino: string } | null = IdentityLedger.statDotGit,
   ): Promise<Map<string, string>> {
+    // 先按归一化路径去重。同一仓库以两种拼写（大小写/分隔符）出现在同一轮时，两条会算出
+    // 同一个 repoId，后一条被下面的撞车守卫改成合成 id，又在 reindex 时**赢下**那个共享的
+    // 归一化键——用户 config.json 里那个真 id 就成了孤儿，标签全丢。去重同时把这条隐含
+    // 前置条件从公开契约里消掉（调用方不必保证 paths 已去重）
+    const livePaths = new Set<string>()
+    const uniquePaths: string[] = []
+    for (const p of paths) {
+      const key = normalizePath(p)
+      if (livePaths.has(key)) continue
+      livePaths.add(key)
+      uniquePaths.push(p)
+    }
+
     const out = new Map<string, string>()
     const unknown: string[] = []
-    const livePaths = new Set(paths.map(normalizePath))
-
-    for (const p of paths) {
+    for (const p of uniquePaths) {
       const known = this.byPath.get(normalizePath(p))
       if (known !== undefined) out.set(p, known)
       else unknown.push(p)
@@ -152,8 +192,10 @@ export class IdentityLedger {
       if (!livePaths.has(normalizePath(e.path))) lostIds.push(id)
     }
 
+    const computedRoot = new Map<string, string | null>() // 本轮为认领算出的根提交，回写账本时复用
+
     if (unknown.length > 0 && lostIds.length > 0) {
-      const foundStats = new Map<string, { dev: number; ino: number } | null>()
+      const foundStats = new Map<string, { dev: string; ino: string } | null>()
       for (const p of unknown) foundStats.set(p, statOf(p))
 
       // 先只用 dev+ino 认一轮；能全认完就完全不必算根提交
@@ -165,33 +207,42 @@ export class IdentityLedger {
       const foundCands = new Map<string, ClaimCandidate>()
       for (const p of unknown) {
         const s = foundStats.get(p) ?? null
-        foundCands.set(p, { dev: s?.dev ?? 0, ino: s?.ino ?? 0, rootCommit: null })
+        foundCands.set(p, { dev: s?.dev ?? "0", ino: s?.ino ?? "0", rootCommit: null })
       }
       let claims = matchClaims(lostCands, foundCands)
 
       // 还有认不下的，才付根提交的代价（每边各一个 git 进程）
       if (claims.size < Math.min(unknown.length, lostIds.length)) {
         for (const [id, c] of lostCands) c.rootCommit = this.store.get(id)?.rootCommit ?? null
-        for (const p of unknown) {
-          if (claims.has(p)) continue
-          foundCands.get(p)!.rootCommit = await rootCommitOf(p)
+        // lost 一侧一个可用根提交都没有时，found 一侧再怎么算也**必然**配不上——那一批
+        // git 进程是确定无收益的。Task 6 把根提交持久化之后这里会自动重新启用
+        if ([...lostCands.values()].some((c) => rootKey(c) !== null)) {
+          for (const p of unknown) {
+            if (claims.has(p)) continue
+            const rc = await rootCommitOf(p)
+            computedRoot.set(p, rc) // 算都算了就存下来，零额外 git 进程
+            foundCands.get(p)!.rootCommit = rc
+          }
+          claims = matchClaims(lostCands, foundCands)
         }
-        claims = matchClaims(lostCands, foundCands)
       }
 
       for (const [p, id] of claims) out.set(p, id)
     }
 
     // 认领不到的新路径：按路径铸造。这条路径也正是现有用户首次升级时全体走的路径。
-    // 铸造时要避开本轮已被其它路径占用的 id：仓库 A 改名成 B 后 B 继续用着 repoId(A)，
-    // 用户此时又在原路径 A 新建一个无关仓库，repoId(A) 就与 B 正在用的 id 相撞——
-    // 两条活路径共用一个 id 会让 A 直接继承 B 的标签/归档，属于「产生错误数据」。
-    // 账本为空时 out 也是空的，撞不上，铸造结果仍然精确等于 repoId(path)
+    // 铸造时必须同时避开**本轮已分配**和**账本里已存在**的 id：仓库 A 改名成 B 后 B 用着
+    // repoId(A)，用户此时又在原路径 A 新建一个无关仓库——无论 B 是否还在本轮扫描范围内
+    // （被删了、移动硬盘拔了、没扫到），repoId(A) 都是别人的 id，铸给 A 就是让 A 继承
+    // B 的标签/归档，属于「产生错误数据」。
+    // 跳过账本里已存在的 id 可证明安全：p 是未知路径，若 store 里存在 repoId(p) 这一条，
+    // 它的 path 归一化后必然 ≠ normalizePath(p)（否则 byPath 早就命中、根本走不到这里）。
+    // 而账本为空时一条都不会跳过，「铸造结果 === repoId(path)」这条地基纹丝不动
     const used = new Set(out.values())
     for (const p of unknown) {
       if (out.has(p)) continue
       let id = repoId(p)
-      for (let n = 2; used.has(id); n++) id = repoId(`${p}#${n}`)
+      for (let n = 2; used.has(id) || this.store.get(id) !== undefined; n++) id = repoId(`${p}#${n}`)
       used.add(id)
       out.set(p, id)
     }
@@ -202,9 +253,11 @@ export class IdentityLedger {
       const prev = this.store.get(id)
       this.store.set(id, {
         path: p,
-        dev: s?.dev ?? 0,
-        ino: s?.ino ?? 0,
-        rootCommit: prev?.rootCommit ?? null,
+        // stat 瞬时失败（杀软锁住 .git、硬盘刚休眠）时保留上一轮的值，不要清成 "0"——
+        // 清零会废掉判据①，而它是目前唯一真正在工作的判据
+        dev: s?.dev ?? prev?.dev ?? "0",
+        ino: s?.ino ?? prev?.ino ?? "0",
+        rootCommit: computedRoot.get(p) ?? prev?.rootCommit ?? null,
         seenAt: new Date().toISOString(),
       })
     }
