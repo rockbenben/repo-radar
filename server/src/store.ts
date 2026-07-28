@@ -3,6 +3,7 @@ import type { Config } from "./config"
 import { checkHealth } from "./health"
 import { composeStatus, getRepoCore, getRepoHeavy, repoId, rootCommit } from "./git"
 import { gitFingerprint } from "./fingerprint"
+import { mapLimit } from "./map-limit"
 import type { RepoCache } from "./repo-cache"
 import type { IdentityLedger } from "./repo-identity"
 import { githubRemoteUrl } from "./github"
@@ -10,19 +11,6 @@ import { scan } from "./scanner"
 import type { GithubInbox, RepoStatus } from "./types"
 
 const CONCURRENCY = 8
-
-export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length)
-  let next = 0
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++
-      results[i] = await fn(items[i])
-    }
-  })
-  await Promise.all(workers)
-  return results
-}
 
 export function deriveGroup(repoPath: string, roots: string[]): string {
   for (const root of roots) {
@@ -87,6 +75,10 @@ export class RepoStore {
     this.freshened.clear() // 上一轮若中途抛错可能有残留，本轮只认本轮的
     const cfg = this.getConfig()
     const paths = [...new Set([...scan(cfg.roots, cfg.excludes), ...cfg.manualRepos])]
+    // 先报一次 0/总数：解析 id 这一步在现有用户首次升级时要为每个仓库算一次根提交
+    // （见 IdentityLedger.resolve 的播种段），已经限并发到 8，但仍在真正开扫之前。
+    // 不先报的话，界面上是一条连总数都没有的空进度条，看起来就是卡死
+    onProgress?.(0, paths.length)
     // 路径 → id。账本负责在仓库改名时把新路径认回老 id，从而让 config.json 里
     // 按 id 存的标签/收藏/归档/便签/分组一个字节都不用改
     const idByPath = this.identity

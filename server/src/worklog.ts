@@ -1,5 +1,5 @@
 import { runGit, splitLines } from "./git"
-import { mapLimit } from "./store"
+import { mapLimit } from "./map-limit"
 
 export interface WorklogCommit {
   repoId: string

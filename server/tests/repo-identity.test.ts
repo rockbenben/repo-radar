@@ -404,6 +404,29 @@ describe("判据②的播种与同轮次约束", () => {
     expect(newId).not.toBe(goneId) // 隔了太久，不认
   })
 
+  // 首次升级那一轮，**所有**仓库都要铸造、都要播种根提交，而 rev-list 是 O(历史长度)、
+  // runGit 的上限是 30 秒。串行 await 就是「仓库数 × 单次耗时」的一段死等，而且发生在
+  // store 开始报进度之前——界面上是一条一动不动的进度条。这条钉住并发，否则下次重构
+  // 很容易悄悄改回逐个 await（结果照样正确，只是慢，测不出来）
+  it("首轮播种是并发的，且有上限", async () => {
+    const led = makeLedger(tmpFile())
+    const n = 20
+    const paths = Array.from({ length: n }, (_, i) => `D:\\p\\seed-${i}`)
+    let inFlight = 0
+    let peak = 0
+    const tracking = async () => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 1)) // 让出事件循环，串行实现在这里必然排队
+      inFlight--
+      return "rootSEED"
+    }
+    const ids = await led.resolve(paths, tracking, (p) => st(1, paths.indexOf(p) + 1))
+    expect(ids.size).toBe(n) // 结果仍然完整
+    expect(peak).toBeGreaterThan(1) // 串行实现下恒为 1
+    expect(peak).toBeLessThan(n) // 也不能放开成「一次 spawn 几百个 git」
+  })
+
   // 约束 C：返回的 Map 对每个输入路径都要有条目
   it("重复拼写的路径都能取到同一个 id", async () => {
     const led = makeLedger(tmpFile())

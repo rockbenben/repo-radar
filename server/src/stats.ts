@@ -1,5 +1,5 @@
 import { runGit } from "./git"
-import { mapLimit } from "./store"
+import { mapLimit } from "./map-limit"
 import type { ActivityItem, HeatmapDay, RepoStatus } from "./types"
 
 const TTL_MS = 5 * 60_000

@@ -2,6 +2,11 @@ import { statSync } from "node:fs"
 import { join } from "node:path"
 import { repoId } from "./git"
 import { JsonStore } from "./json-store"
+import { mapLimit } from "./map-limit"
+
+/** 播种根提交时的并发上限，与 store 扫描仓库的并发保持一致（都是 spawn git，受同一批
+ *  资源约束）。不要放开成无上限：首次升级时一次 spawn 几百个 git 进程会把机器打满 */
+const SEED_CONCURRENCY = 8
 
 /**
  * 仓库身份账本。解决的问题：repoId 是路径的 sha1（git.ts:77），因此仓库改个名就等于
@@ -263,18 +268,28 @@ export class IdentityLedger {
     // 它的 path 归一化后必然 ≠ normalizePath(p)（否则 byPath 早就命中、根本走不到这里）。
     // 而账本为空时一条都不会跳过，「铸造结果 === repoId(path)」这条地基纹丝不动
     const used = new Set(out.values())
+    const minted: string[] = []
     for (const p of unknown) {
       if (out.has(p)) continue
       let id = repoId(p)
       for (let n = 2; used.has(id) || this.store.get(id) !== undefined; n++) id = repoId(`${p}#${n}`)
       used.add(id)
       out.set(p, id)
-      // 判据②的播种，只能在这一刻做：认领发生时旧路径已经不存在了，那时**算不出**它的
-      // 根提交。不播种的话 lost 一侧的 rootCommit 恒为 null，上面那道闸恒假，判据②就是
-      // 一段永远跑不到的死代码，跨卷移动/从备份恢复/ino 不可用的文件系统全部认不回来。
-      // 代价是每个新发现的仓库一生一次一个 git 进程；认领轮次已经算过的直接复用
-      if (!computedRoot.has(p)) computedRoot.set(p, await rootCommitOf(p))
+      if (!computedRoot.has(p)) minted.push(p)
     }
+
+    // 判据②的播种，只能在铸造这一刻做：认领发生时旧路径已经不存在了，那时**算不出**它的
+    // 根提交。不播种的话 lost 一侧的 rootCommit 恒为 null，上面那道闸恒假，判据②就是
+    // 一段永远跑不到的死代码，跨卷移动/从备份恢复/ino 不可用的文件系统全部认不回来。
+    // 认领轮次已经算过的不重复付钱（minted 只收 computedRoot 里没有的）。
+    //
+    // 必须限并发而不是逐个 await：现有用户首次升级时**所有**仓库都是新铸造的，而
+    // `git rev-list --max-parents=0 HEAD` 是 O(历史长度)（runGit 的上限是 30 秒），
+    // 串行起来就是几百上千毫秒 × 仓库数的一段死等——而且它发生在 store 开始报扫描进度
+    // 之前，界面上是一条一动不动的进度条。上限取 8，与 store 扫描仓库的并发一致
+    await mapLimit(minted, SEED_CONCURRENCY, async (p) => {
+      computedRoot.set(p, await rootCommitOf(p))
+    })
 
     // 回写账本：路径、判据、seenAt、代一律刷新
     for (const [p, id] of out) {
