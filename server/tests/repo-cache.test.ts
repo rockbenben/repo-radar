@@ -1,0 +1,73 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterAll, describe, expect, it } from "vitest"
+import { RepoCache } from "../src/repo-cache"
+import type { RepoHeavy } from "../src/git"
+
+const dirs: string[] = []
+function tmpFile(): string {
+  const d = mkdtempSync(join(tmpdir(), "rr-cache-"))
+  dirs.push(d)
+  return join(d, "repo-cache.json")
+}
+afterAll(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
+const heavy: RepoHeavy = {
+  stashCount: 2, stashOldest: "2026-01-01T00:00:00Z", release: null, remotes: [],
+  lastCommit: null, mergedBranches: [], displayName: "x", description: null, language: "TypeScript",
+}
+
+describe("RepoCache", () => {
+  it("指纹相同 → 命中", () => {
+    const c = new RepoCache(tmpFile())
+    c.set("id1", "fp-a", heavy)
+    expect(c.get("id1", "fp-a")).toEqual(heavy)
+  })
+
+  it("指纹不同 → 未命中", () => {
+    const c = new RepoCache(tmpFile())
+    c.set("id1", "fp-a", heavy)
+    expect(c.get("id1", "fp-b")).toBeNull()
+  })
+
+  // gitFingerprint 对 worktree/submodule 返回 null，表示「不可缓存」
+  it("指纹为 null → 永远未命中", () => {
+    const c = new RepoCache(tmpFile())
+    c.set("id1", "fp-a", heavy)
+    expect(c.get("id1", null)).toBeNull()
+  })
+
+  it("落盘后新实例能读回", () => {
+    const file = tmpFile()
+    const c = new RepoCache(file)
+    c.set("id1", "fp-a", heavy)
+    c.flush() // debounceMs 1000：不 flush 的话新实例读到的还是还没落盘的旧内容
+    expect(new RepoCache(file).get("id1", "fp-a")).toEqual(heavy)
+  })
+
+  it("坏文件当作空缓存，不抛", () => {
+    const file = tmpFile()
+    writeFileSync(file, "}}}not json")
+    expect(new RepoCache(file).get("id1", "fp-a")).toBeNull()
+  })
+
+  // 年龄护栏：网络盘瞬时掉线会让一整批仓库在某轮扫描里消失，立即剪会永久抹掉它们的缓存
+  it("prune 保留仍在扫描里的条目", () => {
+    const c = new RepoCache(tmpFile())
+    c.set("keep", "fp", heavy)
+    c.set("drop", "fp", heavy)
+    c.prune(new Set(["keep"]), 0) // maxAgeMs=0：立刻过筛，测剪枝本身
+    expect(c.get("keep", "fp")).toEqual(heavy)
+    expect(c.get("drop", "fp")).toBeNull()
+  })
+
+  it("prune 的年龄护栏：刚写入的条目即使不在扫描里也不剪", () => {
+    const c = new RepoCache(tmpFile())
+    c.set("gone", "fp", heavy)
+    c.prune(new Set(), 30 * 86_400_000)
+    expect(c.get("gone", "fp")).toEqual(heavy)
+  })
+})

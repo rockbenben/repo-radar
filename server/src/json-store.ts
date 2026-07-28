@@ -93,6 +93,9 @@ export class JsonStore<T> {
    * timestampOf 让各使用者指定自己的时间戳字段（fetchedAt / seenAt）。非法时间戳按已过期
    * 处理——否则 NaN 比较恒为 false，坏条目会永久赖着不走。
    *
+   * 用 >= 而非 >：maxAgeMs=0（调用方要「零宽限、立刻过筛」）时，刚 set() 的条目的
+   * age 在同一毫秒内可能恰好是 0——严格 > 会让这类条目怎么剪都剪不掉，是个隐蔽的边界 bug。
+   *
    * 不逐条调用公开的 delete()：debounceMs === 0（如 DescCache）时 delete() 会同步落盘一次，
    * 逐条调用就是剪 N 条条目做 N 次全量 JSON.stringify + writeFileSync。而剪枝恰好在
    * 「网络盘根目录瞬时掉线、一整批条目同时过期」时删得最多——那正是磁盘最慢、最不该做
@@ -104,7 +107,7 @@ export class JsonStore<T> {
     for (const [key, v] of this.map) {
       if (keepIds.has(key)) continue
       const at = new Date(timestampOf(v)).getTime()
-      if (Number.isNaN(at) || now - at > maxAgeMs) {
+      if (Number.isNaN(at) || now - at >= maxAgeMs) {
         this.map.delete(key)
         changed = true
       }

@@ -12,6 +12,7 @@ import { InboxCache } from "./inbox-cache"
 import { isPortUnavailable, PORT, portCandidates } from "./port"
 import { forgetRememberedPort, loadRememberedPort, saveRememberedPort } from "./port-state"
 import { drainRepoLocks, pendingRepoOps, withRepoLock } from "./queue"
+import { RepoCache } from "./repo-cache"
 import { type ApiExtras, createApi, originAllowed } from "./routes"
 import { createSerialQueue } from "./serial"
 import { createShutdown } from "./shutdown"
@@ -115,10 +116,12 @@ export function createBackend(options: BackendOptions): Backend {
 
   const descCache = new DescCache(join(dirname(configFile), "github-desc.json"))
   const inboxCache = new InboxCache(join(dirname(configFile), "github-inbox.json"))
+  const repoCache = new RepoCache(join(dirname(configFile), "repo-cache.json"))
   const store = new RepoStore(
     () => loadConfig(configFile),
     (id, url) => descCache.get(id, url),
     (id, url) => inboxCache.get(id, url),
+    repoCache,
   )
   const hub = new WsHub()
 
@@ -229,6 +232,7 @@ export function createBackend(options: BackendOptions): Backend {
     const ids = new Set(repos.map((r) => r.id)) // 剪掉已不存在仓库的缓存条目，避免落盘缓存无界增长
     descCache.prune(ids)
     inboxCache.prune(ids)
+    repoCache.prune(ids)
     // 扫描完成时刻：界面据此显示「上次扫描 …」。只在全量扫描后更新——文件监听的单仓库
     // refreshOne 不算「扫描」，把它算进来会让这个时间永远显示「刚刚」，等于没有信息量。
     // 放在 applyWatch 之后：那一步抛错时整轮扫描算失败（POST /api/scan 返回 500，界面弹
@@ -383,7 +387,10 @@ export function createBackend(options: BackendOptions): Backend {
     drainOps: () => drainRepoLocks(DRAIN_TIMEOUT_MS),
     pendingOps: pendingRepoOps,
     closeWatcher: () => watcher.close(),
-    flushCaches: () => inboxCache.flush(),
+    flushCaches: () => {
+      inboxCache.flush()
+      repoCache.flush() // 防抖窗口 1s：硬退会丢最后一轮缓存写入，下次启动白白付一轮全价
+    },
     closeConnections: () => (server as { closeAllConnections?: () => void } | null)?.closeAllConnections?.(),
     log: (m) => console.log(m),
   })

@@ -1,7 +1,9 @@
 import { basename, relative, sep } from "node:path"
 import type { Config } from "./config"
 import { checkHealth } from "./health"
-import { getRepoStatus, repoId } from "./git"
+import { composeStatus, getRepoCore, getRepoHeavy, repoId } from "./git"
+import { gitFingerprint } from "./fingerprint"
+import type { RepoCache } from "./repo-cache"
 import { githubRemoteUrl } from "./github"
 import { scan } from "./scanner"
 import type { GithubInbox, RepoStatus } from "./types"
@@ -49,6 +51,9 @@ export class RepoStore {
     private readonly getGithubDesc?: (id: string, url: string | undefined) => string | null,
     // 可选：返回某仓库缓存的 GitHub「等我的」（PR/issue/CI）；同样按 origin url 校验，后台轮询写缓存后 redecorate 生效
     private readonly getGithubInbox?: (id: string, url: string | undefined) => GithubInbox | null,
+    // 可选：heavy 字段的指纹缓存。不传时完全退化成「每轮全价刷新」（旧行为），
+    // 测试与嵌入式用法据此免去落盘依赖
+    private readonly cache?: RepoCache,
   ) {}
 
   refreshAll(onProgress?: (scanned: number, total: number) => void): Promise<RepoStatus[]> {
@@ -59,6 +64,22 @@ export class RepoStore {
     return this.inFlight
   }
 
+  /**
+   * 一个仓库的完整刷新，但 heavy 那 6 个 git 进程按 `.git` 指纹跳过。
+   *
+   * 顺序很关键：先跑 core 拿到 oid，再算指纹。oid 是 status 顺带给的（不额外 spawn），
+   * 而它能识别出「mtime 因触碰而变、内容其实没变」以及反过来的情况。
+   */
+  private async refreshRepo(path: string, id: string): Promise<RepoStatus> {
+    const core = await getRepoCore(path)
+    const fp = gitFingerprint(path, core.oid)
+    const cached = this.cache?.get(id, fp) ?? null
+    if (cached) return composeStatus(path, id, core, cached)
+    const heavy = await getRepoHeavy(path, core.branch)
+    if (fp !== null) this.cache?.set(id, fp, heavy)
+    return composeStatus(path, id, core, heavy)
+  }
+
   private async doRefreshAll(onProgress?: (scanned: number, total: number) => void): Promise<RepoStatus[]> {
     this.freshened.clear() // 上一轮若中途抛错可能有残留，本轮只认本轮的
     const cfg = this.getConfig()
@@ -67,7 +88,7 @@ export class RepoStore {
     const statuses = await mapLimit(paths, CONCURRENCY, async (p) => {
       let status: RepoStatus
       try {
-        const fresh = await getRepoStatus(p)
+        const fresh = await this.refreshRepo(p, repoId(p))
         this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
         status = this.decorate(fresh, cfg)
       } catch (err) {
@@ -102,7 +123,7 @@ export class RepoStore {
     const cfg = this.getConfig()
     let next: RepoStatus
     try {
-      const fresh = await getRepoStatus(existing.path)
+      const fresh = await this.refreshRepo(existing.path, id)
       this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
       next = this.decorate(fresh, cfg)
     } catch (err) {
