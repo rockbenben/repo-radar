@@ -291,13 +291,36 @@ export function createBackend(options: BackendOptions): Backend {
   // 落盘文件损坏时的日志。四个文件都能「当空继续跑」，但绝不能静默：打包之后日志是唯一的
   // 诊断面，而账本损坏的表现是「所有改过名的仓库标签一夜之间全没了」——没有这行的话，
   // 用户和维护者都无从判断到底发生了什么，只能怀疑应用把数据搞丢了
+  const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
   const onCorrupt = (file: string) => (err: unknown) =>
-    console.error(`[repo-radar] ${file} 已损坏，本次按空文件继续 / corrupt, continuing as empty: ${err instanceof Error ? err.message : String(err)}`)
-  const descCache = new DescCache(join(dirname(configFile), "github-desc.json"), onCorrupt("github-desc.json"))
-  const inboxCache = new InboxCache(join(dirname(configFile), "github-inbox.json"), onCorrupt("github-inbox.json"))
-  const repoCache = new RepoCache(join(dirname(configFile), "repo-cache.json"), onCorrupt("repo-cache.json"))
+    console.error(`[repo-radar] ${file} 已损坏，本次按空文件继续 / corrupt, continuing as empty: ${errText(err)}`)
+  // 落盘失败时的日志。缺了它，症状会**推迟到下次启动**才出现：本进程内存里的内容仍然正确，
+  // 界面上一切正常、日志里一个字都没有；重启之后才发现写了半天全没落到磁盘上。
+  // consequence 是给用户的那半句「所以会怎样」——四个文件的后果不是一个量级，账本那条是
+  // 用户数据丢失（改过名的仓库全部丢标签/收藏/归档/便签），另外三条只是下轮重算
+  const onWriteError = (file: string, consequence: string) => (err: unknown) =>
+    console.error(`[repo-radar] ${file} 写盘失败 / write failed（${consequence}）: ${errText(err)}`)
+  const descCache = new DescCache(
+    join(dirname(configFile), "github-desc.json"),
+    onCorrupt("github-desc.json"),
+    onWriteError("github-desc.json", "重启后需重新联网拉取 GitHub 描述"),
+  )
+  const inboxCache = new InboxCache(
+    join(dirname(configFile), "github-inbox.json"),
+    onCorrupt("github-inbox.json"),
+    onWriteError("github-inbox.json", "重启后需重新联网拉取 PR/CI"),
+  )
+  const repoCache = new RepoCache(
+    join(dirname(configFile), "repo-cache.json"),
+    onCorrupt("repo-cache.json"),
+    onWriteError("repo-cache.json", "重启后首轮重扫要付全价，功能不受影响"),
+  )
   // 身份账本：仓库改名/移动后继续用老 id，config.json 里按 id 存的标签/收藏/归档/便签不受影响
-  const identity = new IdentityLedger(join(dirname(configFile), "repo-identity.json"), onCorrupt("repo-identity.json"))
+  const identity = new IdentityLedger(
+    join(dirname(configFile), "repo-identity.json"),
+    onCorrupt("repo-identity.json"),
+    onWriteError("repo-identity.json", "本次运行期间改名/移动过的仓库，重启后会丢失标签/收藏/归档/便签"),
+  )
   const store = new RepoStore(
     () => loadConfig(configFile),
     (id, url) => descCache.get(id, url),

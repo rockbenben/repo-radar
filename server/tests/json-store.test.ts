@@ -171,9 +171,70 @@ describe("JsonStore", () => {
     expect(existsSync(`${file}.tmp`)).toBe(false) // rename 之后临时文件不该留下
   })
 
-  // 写盘失败静默：缓存只是加速，不能因为磁盘满/只读就让功能挂掉
+  // 写盘失败不抛：缓存只是加速，不能因为磁盘满/只读就让功能挂掉
   it("写盘失败不抛出", () => {
     const s = new JsonStore<Entry>({ file: join("\0invalid", "x.json"), isValid: isEntry })
     expect(() => s.set("k", { v: 1 })).not.toThrow()
+  })
+
+  // 「不抛」曾经被写成「静默」，而这个底座现在还托着 repo-identity.json——那是用户数据。
+  // 失效链是：write 静默返回 → 本会话内存里的 id 全对、界面零症状、日志零字节 →
+  // 用户这一会话里改名了几个仓库 → 下次启动账本读到旧版本 → 每个改过名的仓库铸新 id →
+  // 标签/收藏/归档/便签全部对不上。零诊断面地复现了这个功能本该消灭的那个症状
+  it("写盘失败时 onWriteError 被调用（不再静默吞掉）", () => {
+    const file = tmpFile()
+    const seen: unknown[] = []
+    const s = new JsonStore<Entry>({ file, isValid: isEntry, onWriteError: (err) => void seen.push(err) })
+    vi.mocked(writeFileSync).mockImplementationOnce(() => {
+      throw new Error("ENOSPC: no space left on device")
+    })
+    expect(() => s.set("k", { v: 1 })).not.toThrow()
+    expect(seen.length).toBe(1)
+    expect((seen[0] as Error).message).toContain("ENOSPC")
+    expect(s.get("k")).toEqual({ v: 1 }) // 内存里照常服务——正是「界面上零症状」的由来
+  })
+
+  // 落盘成功时不该报：否则日志里天天有「写盘失败」，真出事时反而没人信
+  it("写盘成功时不调 onWriteError", () => {
+    const s = new JsonStore<Entry>({ file: tmpFile(), isValid: isEntry, onWriteError: () => expect.unreachable("不该报") })
+    s.set("k", { v: 1 })
+  })
+
+  // 一段连续失败只报一行：repo-cache 在监听触发的刷新下最快每秒写一次，磁盘满时逐次记日志
+  // 会把日志本身刷爆，而日志是打包后唯一的诊断面。恢复之后再失败必须能再报一行
+  it("连续失败只报一次；写盘恢复后再失败会再报一次", () => {
+    const file = tmpFile()
+    let calls = 0
+    const s = new JsonStore<Entry>({ file, isValid: isEntry, onWriteError: () => void calls++ })
+    const boom = () => {
+      throw new Error("EACCES")
+    }
+    vi.mocked(writeFileSync).mockImplementationOnce(boom).mockImplementationOnce(boom)
+    s.set("a", { v: 1 })
+    s.set("b", { v: 2 })
+    expect(calls).toBe(1) // 两次失败，一行日志
+
+    s.set("c", { v: 3 }) // 这次真的写进去了
+    expect(calls).toBe(1)
+    // 失败期间 dirty 必须保留，否则 a/b 会被永久丢掉——恢复后的这一次写要把三条都带上
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ a: { v: 1 }, b: { v: 2 }, c: { v: 3 } })
+
+    vi.mocked(writeFileSync).mockImplementationOnce(boom)
+    s.set("d", { v: 4 })
+    expect(calls).toBe(2) // 恢复过一次，新的一段失败重新报
+  })
+
+  // 退出路径上的 flush() 走的是同一个 write()，同样不能静默——账本丢的正是「本次会话里
+  // 改名/移动过的仓库」那一批，也就是账本唯一存在的理由
+  it("flush 落盘失败同样调 onWriteError", () => {
+    const file = tmpFile()
+    const seen: unknown[] = []
+    const s = new JsonStore<Entry>({ file, isValid: isEntry, debounceMs: 1000, onWriteError: (err) => void seen.push(err) })
+    s.set("k", { v: 1 }) // 防抖窗口内，还没落盘
+    vi.mocked(writeFileSync).mockImplementationOnce(() => {
+      throw new Error("EPERM")
+    })
+    expect(() => s.flush()).not.toThrow()
+    expect(seen.length).toBe(1)
   })
 })

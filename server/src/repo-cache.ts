@@ -38,9 +38,9 @@ const isCacheEntry = (v: unknown): v is CacheEntry =>
 export class RepoCache {
   private store: JsonStore<CacheEntry>
 
-  constructor(file: string, onCorrupt?: (err: unknown) => void) {
+  constructor(file: string, onCorrupt?: (err: unknown) => void, onWriteError?: (err: unknown) => void) {
     // 防抖 1s：一轮全量扫描会连着 set 几十上百次
-    this.store = new JsonStore({ file, isValid: isCacheEntry, debounceMs: 1000, onCorrupt })
+    this.store = new JsonStore({ file, isValid: isCacheEntry, debounceMs: 1000, onCorrupt, onWriteError })
   }
 
   /**

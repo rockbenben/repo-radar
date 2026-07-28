@@ -17,25 +17,45 @@ export interface JsonStoreOptions<T> {
    * 之间的差别，而打包之后日志是唯一的诊断面。
    */
   onCorrupt?: (err: unknown) => void
+  /**
+   * 落盘失败时调用（内存里的内容仍然正确，本进程照常服务）。
+   *
+   * 与 onCorrupt 同等必要，而且更隐蔽。「缓存丢了只是慢一轮」这条策略是为
+   * github-desc / github-inbox 写的，但这个底座现在还托着 `repo-identity.json`——
+   * 那是**用户数据，不是缓存**。配置目录变只读 / 卷满 / 杀软锁住 `.tmp` 时的失效链是：
+   * write 静默返回 → 账本整个会话都从内存里正确地服务 id，界面上零症状、日志里零字节 →
+   * 用户在这个会话里改名/移动了几个仓库（账本存在的全部意义）→ 下次启动读到的是最后一次
+   * 成功写入的版本或干脆没有 → 每个改过名的仓库按新路径铸造全新 id → 它的标签/收藏/
+   * 归档/便签留在 config.json 里、挂在一个它已经不再拥有的 id 下。
+   *
+   * 也就是说：**用户看到的正是这个功能本该消灭的那个症状**。不报出来的话，用户和维护者
+   * 都只能怀疑「应用把数据搞丢了」，而打包之后日志是唯一的诊断面。
+   */
+  onWriteError?: (err: unknown) => void
 }
 
 /**
  * 落盘 Map 的共用底座。github-desc / github-inbox / repo-cache / repo-identity 四个文件
- * 形状完全相同（load 时逐条校验、写盘失败静默、坏文件当空），各写一遍必然逐渐走样。
+ * 形状完全相同（load 时逐条校验、坏文件当空、写盘失败不中断），各写一遍必然逐渐走样。
  *
- * 落盘失败一律静默：这四个文件都是「丢了最多是慢一轮或退化成旧行为」的性质，
- * 让磁盘满/只读把整个应用带崩是不划算的。**文件坏了则必须让调用方知道**，见 onCorrupt。
+ * 失败一律不抛：这四个文件都是「丢了最多是慢一轮或退化成旧行为」的性质，让磁盘满/只读
+ * 把整个应用带崩是不划算的。**但不抛 ≠ 不说**——读坏了走 onCorrupt，写失败走 onWriteError，
+ * 两条路径都必须留下痕迹。
  */
 export class JsonStore<T> {
   private map = new Map<string, T>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private dirty = false
+  /** 上一次落盘是不是失败的。用于「一段连续失败只报一行」，理由见 write() */
+  private writeFailed = false
   private readonly file: string
   private readonly debounceMs: number
+  private readonly onWriteError?: (err: unknown) => void
 
   constructor(opts: JsonStoreOptions<T>) {
     this.file = opts.file
     this.debounceMs = opts.debounceMs ?? 0
+    this.onWriteError = opts.onWriteError
     this.load(opts.isValid, opts.onCorrupt)
   }
 
@@ -63,8 +83,18 @@ export class JsonStore<T> {
       writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.map), null, 2), "utf8")
       renameSync(tmp, this.file)
       this.dirty = false
-    } catch {
-      /* 写盘失败静默 */
+      this.writeFailed = false // 恢复了：下一段失败要重新报一行
+    } catch (err) {
+      // 不抛（磁盘满不该让应用挂掉），但必须报——理由见 onWriteError。
+      // dirty 刻意留在 true：下一次 set/flush 会重试，一次瞬时失败不会永久丢掉这批写入。
+      //
+      // 一段连续失败只报第一行：repo-cache 在文件监听触发的刷新下最快每秒写一次，
+      // 磁盘满时逐次记日志会把日志本身刷爆——而日志正是打包之后唯一的诊断面，
+      // 把它淹掉等于又回到零诊断面。恢复之后再失败还会再报一行，够定位了
+      if (!this.writeFailed) {
+        this.writeFailed = true
+        this.onWriteError?.(err)
+      }
     }
   }
 
