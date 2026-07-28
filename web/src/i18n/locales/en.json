@@ -50,6 +50,7 @@
   "settings.watchLimit": "Watch limit",
   "settings.watchLimitHint": "Repos watched for file changes",
   "settings.watchLimitCapped": "Watching {watched} of {total} — the rest rely on the rescan",
+  "settings.watchLimitCappedNoRescan": "Watching {watched} of {total} — the rest won't refresh automatically (rescan is off)",
   "settings.watchLive": "Watching all {n} repos live",
   "settings.scanEvery": "Fallback rescan",
   "settings.scanEveryHint": "Full rescan on a timer",

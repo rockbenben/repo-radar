@@ -1184,7 +1184,11 @@ export default function App({
                     {t("settings.watchLimit")}
                     <span className={`hint${watchCov.total > watchCov.watched ? " warn" : ""}`}>
                       {watchCov.total > watchCov.watched
-                        ? t("settings.watchLimitCapped", { watched: watchCov.watched, total: watchCov.total })
+                        ? // "其余靠兜底重扫" 这句只有兜底重扫开着才成立——autoScanMinutes 为 0 时
+                          // 没被监听覆盖的仓库根本没有任何自动刷新途径，说"靠重扫"是在撒谎
+                          autoScanMin > 0
+                          ? t("settings.watchLimitCapped", { watched: watchCov.watched, total: watchCov.total })
+                          : t("settings.watchLimitCappedNoRescan", { watched: watchCov.watched, total: watchCov.total })
                         : watchCov.total > 0
                           ? t("settings.watchLive", { n: watchCov.total })
                           : t("settings.watchLimitHint")}

@@ -50,6 +50,7 @@
   "settings.watchLimit": "监听上限",
   "settings.watchLimitHint": "实时监听文件变化的仓库数",
   "settings.watchLimitCapped": "{total} 个中监听 {watched} 个，其余靠兜底重扫",
+  "settings.watchLimitCappedNoRescan": "{total} 个中监听 {watched} 个，其余不会自动刷新（兜底重扫已关闭）",
   "settings.watchLive": "正在实时监听全部 {n} 个仓库",
   "settings.scanEvery": "兜底重扫",
   "settings.scanEveryHint": "定时全量扫一遍",
