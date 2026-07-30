@@ -55,8 +55,20 @@ export interface WatchStrategy {
  */
 export class RecursiveRootStrategy implements WatchStrategy {
   private watchers: NodeWatcher[] = []
+  /**
+   * 这一批句柄的世代号。**`close()` 不保证事件立刻停**：macOS 的 FSEvents 有延迟缓冲，
+   * 关闭之后仍可能把已经在途的那一批交上来（在 macOS CI 上实测到：stop() 之后写一个文件，
+   * 回调照样进来）。转手出去的后果是关掉监听/退出流程里还在刷新仓库、还在报结构变化，
+   * 而调用方已经认定「监听已经停了」。
+   *
+   * 用世代号而不是布尔量：`RepoWatcher.setRoots` 是在**同一个策略实例**上先 stop 再 start，
+   * 布尔量得靠 start 里重新置位，一旦顺序错了就是「重建之后再也收不到任何事件」——
+   * 比现在这个 bug 严重得多，且同样没有任何症状能把它暴露出来。
+   */
+  private gen = 0
 
   async start(roots: readonly string[], repos: readonly WatchedRepo[], h: StrategyHandlers): Promise<string[]> {
+    const gen = ++this.gen
     const ok: string[] = []
     // roots 之外的 manualRepos 也要各挂一个（数量本就很少）。归档仓库不建目标（见 WatchedRepo.archived）
     const outside = repos
@@ -88,6 +100,7 @@ export class RecursiveRootStrategy implements WatchStrategy {
         const real = realpathSync.native(target)
         graded.push(real)
         const w = fsWatch(real, { recursive: true }, (_event, name) => {
+          if (gen !== this.gen) return // 这批句柄已被 stop()／下一轮 start() 取代，见 gen
           // name 为 null = 内核缓冲区溢出，这一批事件已经丢了，必须靠重扫补票
           if (name === null) {
             h.onOverflow(`recursive watch overflow at ${target}`, false) // 缓冲区溢出：句柄仍在，别拆建
@@ -96,6 +109,7 @@ export class RecursiveRootStrategy implements WatchStrategy {
           h.onEvent(reportedPath(target, real, name.toString()))
         })
         w.on("error", (err) => {
+          if (gen !== this.gen) return // 同上：关掉之后迟到的错误不该再触发重建
           const e = err as NodeJS.ErrnoException
           // 溢出在部分平台走 error 通道，root 被删/改名/网络盘掉线也走这里。不按错误码白名单
           // 分流：Node 在 emit error 之前就把句柄关了，无论什么码，这棵树从此不再有任何事件，
@@ -116,6 +130,7 @@ export class RecursiveRootStrategy implements WatchStrategy {
   }
 
   async stop(): Promise<void> {
+    this.gen++ // 先作废世代再关：close() 之后迟到的那一批就被上面两处守卫挡掉了
     for (const w of this.watchers.splice(0)) {
       try {
         w.close()
@@ -185,6 +200,10 @@ export class PerRepoStrategy implements WatchStrategy {
       ignored: (p) => shouldIgnorePath(p, roots),
     })
     this.watcher = w
+    // 这条腿**不需要**递归策略那样的世代守卫（RecursiveRootStrategy.gen）：chokidar 的
+    // close() 在同步段里就把监听器摘干净了（实测：close() 调用之后、await 之前，
+    // listenerCount 已经是 0），关掉之后根本没有回调可言。而 macOS 的 fs.watch 关了还会
+    // 继续送——两条腿的差别是量出来的，不是漏改的
     w.on("all", (_event, file) => h.onEvent(needsRemap ? toOriginal(live, file) : file))
     w.on("error", (err) => {
       const e = err as NodeJS.ErrnoException

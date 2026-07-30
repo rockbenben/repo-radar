@@ -31,6 +31,28 @@ function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
   })
 }
 
+/**
+ * 等事件流真正安静下来再开始测量。
+ *
+ * 固定 `sleep(300)` 不够：macOS 的 FSEvents 有延迟缓冲，建立监听前后产生的事件（mkdtemp、
+ * 建目录、git init）会晚得多才送达。在 macOS CI 上实测到过——用例先写 repoA 的文件，
+ * 断言「只有 A 刷新了」，结果 B 也在里面，来源是 setUp 阶段建 `repoB/.git` 的那条迟到事件。
+ * 报出来的失败长得像归属算错了，其实归属完全正确，只是测量起点不干净。
+ */
+async function quiesce(count: () => number, quietMs = 500, timeoutMs = 8000): Promise<void> {
+  const start = Date.now()
+  let last = count()
+  let lastChangeAt = Date.now()
+  while (Date.now() - lastChangeAt < quietMs && Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 50))
+    const now = count()
+    if (now !== last) {
+      last = now
+      lastChangeAt = Date.now()
+    }
+  }
+}
+
 describe("RepoWatcher", () => {
   it("fires once (debounced) for workdir changes and attributes the right repo", async () => {
     const repoA = makeRepo()
@@ -746,6 +768,10 @@ describe("RepoWatcher + RecursiveRootStrategy — 真实文件系统端到端", 
     expect(w.watchedRoots()).toEqual([root]) // 两个仓库一个句柄
     expect(w.coveredRepoCount()).toBe(2)
     await new Promise((r) => setTimeout(r, 300)) // 递归监听建立缓冲
+    // 建目录阶段的事件全部落定再清零，测量起点才干净（见 quiesce 的注释）
+    await quiesce(() => fired.length + structural.length)
+    fired.length = 0
+    structural.length = 0
 
     writeFileSync(join(repoA, "src", "deep.txt"), "x") // 深层工作区文件
     await waitFor(() => fired.length > 0)
@@ -799,6 +825,9 @@ describe("RepoWatcher + RecursiveRootStrategy — 真实文件系统端到端", 
     expect(w.watchedRoots().slice().sort()).toEqual([rootA, rootB].slice().sort()) // 各自一个句柄，都挂上了
     expect(w.coveredRepoCount()).toBe(2)
     await new Promise((r) => setTimeout(r, 300)) // Windows 上递归监听建立后需要一点缓冲
+    await quiesce(() => fired.length + structural.length) // macOS 上建目录的事件会迟到，见 quiesce
+    fired.length = 0
+    structural.length = 0
 
     writeFileSync(join(repoA, ".git", "index"), "x")
     await waitFor(() => fired.length > 0)
@@ -831,6 +860,8 @@ describe("RepoWatcher + RecursiveRootStrategy — 真实文件系统端到端", 
       expect(spy).toHaveBeenCalled() // 失守必须留痕迹：onError 被调用了，不是被当噪音悄悄吞掉
 
       await new Promise((r) => setTimeout(r, 300))
+      await quiesce(() => fired.length) // 同上
+      fired.length = 0
       writeFileSync(join(repoGood, ".git", "index"), "x")
       await waitFor(() => fired.length > 0)
       expect(fired).toEqual(["GOOD"]) // 好的 root 完全不受坏 root 拖累
@@ -875,6 +906,8 @@ describe("RepoWatcher + RecursiveRootStrategy — 真实文件系统端到端", 
     expect(w.watchedRoots().slice().sort()).toEqual([rootA, rootB].slice().sort()) // 两个 target 都真的各自挂上
     expect(w.coveredRepoCount()).toBe(1) // 按仓库过滤，不是按 root 累加求和
     await new Promise((r) => setTimeout(r, 300))
+    await quiesce(() => fired.length) // 同上
+    fired.length = 0
 
     writeFileSync(join(repo, ".git", "index"), "x") // 同一次写入会被两个句柄各报一次
     await waitFor(() => fired.length > 0)

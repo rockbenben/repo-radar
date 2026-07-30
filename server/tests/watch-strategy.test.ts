@@ -89,10 +89,54 @@ describe("RecursiveRootStrategy", () => {
     const s = new RecursiveRootStrategy()
     await s.start([root], [], noopHandlers(events))
     await new Promise((r) => setTimeout(r, 200))
+    // 停之前先清空：这条用例钉的是「stop 之后」，建立监听期间收到什么与它无关。
+    // 不清的话，macOS 上 mkdtemp/建立监听阶段迟到的事件会把它染红，而失败信息指向的是
+    // 一个它根本没在测的东西
+    events.length = 0
     await s.stop()
     writeFileSync(join(root, "after.txt"), "x")
     await new Promise((r) => setTimeout(r, 400))
     expect(events).toEqual([])
+  })
+
+  // macOS CI 上真实发生过：stop() 之后写文件，回调照样进来（FSEvents 的延迟缓冲把已经在途
+  // 的那一批交了上来）。这里不依赖某个平台的时序去复现，直接把「关掉之后内核又送来一条」
+  // 这个事实摆出来——它在三个平台上都必须被挡住
+  it("句柄关掉之后迟到的事件不转手（macOS 的 FSEvents 会这么干）", async () => {
+    const root = tmpRoot()
+    const events: string[] = []
+    const overflows: string[] = []
+    const errors: string[] = []
+    const s = new RecursiveRootStrategy()
+    await s.start([root], [], {
+      onEvent: (p) => events.push(p),
+      onOverflow: (r) => overflows.push(r),
+      onError: (e) => errors.push(e.code ?? e.message),
+    })
+    // 关之前抓住句柄：stop() 会把 watchers 清空，之后就没有别的入口了
+    const w = (s as unknown as { watchers: { emit(ev: string, ...a: unknown[]): void }[] }).watchers[0]
+    await s.stop()
+    w.emit("change", "rename", "late.txt") // 迟到的普通事件
+    w.emit("change", "rename", null) // 迟到的缓冲区溢出
+    w.emit("error", Object.assign(new Error("late"), { code: "EIO", path: realpathSync.native(root) }))
+    expect(events).toEqual([])
+    expect(overflows).toEqual([]) // 关掉之后不该再要求重扫，更不该要求重建
+    expect(errors).toEqual([])
+  })
+
+  // 反面：世代号用布尔量实现时最容易踩的坑——同一个实例先 stop 再 start（setRoots 就是
+  // 这么走的），第二批句柄必须照常工作，否则「改了扫描目录之后再也不刷新」
+  it("stop 之后重新 start，新一批句柄照常报事件", async () => {
+    const root = tmpRoot()
+    const events: string[] = []
+    const s = new RecursiveRootStrategy()
+    await s.start([root], [], noopHandlers(events))
+    await s.stop()
+    await s.start([root], [], noopHandlers(events))
+    await new Promise((r) => setTimeout(r, 200))
+    writeFileSync(join(root, "again.txt"), "x")
+    await waitFor(() => events.length > 0)
+    await s.stop()
   })
 
   // watcherErrorIsNoise 靠「出事的路径是不是监听目标本身」决定能不能咽掉这条错误。
@@ -182,10 +226,26 @@ describe("PerRepoStrategy", () => {
     const s = new PerRepoStrategy()
     await s.start([], [{ id: "R", path: repo }], noopHandlers(events))
     await new Promise((r) => setTimeout(r, 300))
+    events.length = 0 // 同递归那条：钉的是「stop 之后」，建立期间收到什么与它无关
     await s.stop()
     writeFileSync(join(repo, "after.txt"), "x")
     await new Promise((r) => setTimeout(r, 600))
     expect(events).toEqual([])
+  })
+
+  // 递归策略那边要靠世代号挡住关掉之后迟到的事件；这条腿不需要，理由不是"大概不会发生"，
+  // 而是 chokidar 的 close() 在同步段里就把监听器摘掉了——这里把它钉住，免得哪天有人
+  // 照着递归那条给这里也补一个永远走不到的守卫，或者反过来把递归那条删掉
+  it("chokidar 的 close() 同步摘掉监听器，关掉之后根本没有回调可言", async () => {
+    const repo = makeRepo()
+    const s = new PerRepoStrategy()
+    await s.start([], [{ id: "R", path: repo }], noopHandlers([]))
+    const w = (s as unknown as { watcher: { listenerCount(ev: string): number } | null }).watcher!
+    expect(w.listenerCount("all")).toBe(1)
+    const stopping = s.stop() // 故意不 await：摘监听器发生在 close() 的同步段，不在 await 之后
+    expect(w.listenerCount("all")).toBe(0)
+    expect(w.listenerCount("error")).toBe(0)
+    await stopping
   })
 
   // 这条腿上**一个** FSWatcher 管着所有仓库，start 却无条件返回全部仓库，

@@ -1,5 +1,8 @@
 # push / PR 门禁：双 typecheck + server/web 全部测试 + 构建。
-# 跑 Linux + Windows 两个平台——server 测试直接驱动真实 git，Windows 的路径/CRLF 行为值得单独验证。
+# 三个平台都跑——server 测试直接驱动真实 git 和真实的文件监听 API，而这三者的行为差得很远：
+# Windows 的路径/CRLF、macOS 的 FSEvents（关掉句柄之后还会送事件、事件延迟到达）、
+# Linux 的 inotify + chokidar。macOS 原先只在 release 工作流里跑，代价是两条 mac 专属的
+# 失败一直攒到打 tag 那一刻才现形，且现形时挡住的是发布本身。
 name: ci
 
 on:
@@ -12,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
