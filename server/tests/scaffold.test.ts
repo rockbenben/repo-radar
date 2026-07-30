@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { basename, join } from "node:path"
+import { basename, join, parse } from "node:path"
 import { afterAll, describe, expect, it, vi } from "vitest"
 import { CLONE_TMP_PREFIX, cloneRepo, createProject } from "../src/scaffold"
 import { cleanupFixtures, makeRepo } from "./fixtures"
@@ -56,6 +56,16 @@ describe("createProject", () => {
     const r = root()
     const other = root()
     expect((await createProject(other, "x", [r])).ok).toBe(false)
+  })
+
+  // 卷根（Windows 的 `D:\`、POSIX 的 `/`）是唯一被 resolve 之后仍带尾分隔符的路径，手写的
+  // `startsWith(root + sep)` 会退化成找 `D:\\`，于是整个盘之下一个目录都匹配不上：看板照常
+  // 出仓库、分组也对，唯独新建/克隆 100% 报「父目录必须在已配置的扫描根目录之内」
+  it("accepts a parent under a volume root", async () => {
+    const r = root()
+    const vol = parse(r).root // win32: "D:\"，posix: "/"
+    const res = await createProject(r, "029-under-volume-root", [vol])
+    expect(res).toEqual({ ok: true, path: join(r, "029-under-volume-root") })
   })
 
   it("rejects when the target already exists", async () => {

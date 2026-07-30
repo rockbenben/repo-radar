@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { isAbsolute, join, resolve, sep } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { GitError, runGit } from "./git"
+import { isUnderPath } from "./watch-filter"
 
 export interface ScaffoldResult {
   ok: boolean
@@ -38,13 +39,13 @@ const NAME_RE = /^[\w.-]+$/
  */
 export const CLONE_TMP_PREFIX = ".repo-radar-clone-"
 
-function underRoot(parent: string, roots: string[]): boolean {
-  const p = resolve(parent).toLowerCase()
-  return roots.some((r) => {
-    const root = resolve(r).toLowerCase()
-    return p === root || p.startsWith(root + sep)
-  })
-}
+// 「在某个扫描根之内」只有一份实现，见 watch-filter.ts 的 isUnderPath。这里曾经手写过
+// 第二份（`p === root || p.startsWith(root + sep)`），恰好踩中 isUnderPath 注释里点名的
+// 两个坑：盘符根 `D:\` 被 resolve 之后仍带尾分隔符，`root + sep` 成了 `D:\\`，谁都匹配
+// 不上——把整个盘配成扫描根的用户，看板和分组都正常，唯独新建/克隆永远报「父目录必须在
+// 已配置的扫描根目录之内」；另一个坑是无条件 toLowerCase，POSIX 上会把 /home/me/Code
+// 判进 /home/me/code，项目建到扫描根之外还回 ok，卡片永远不出现。
+const underRoot = (parent: string, roots: string[]): boolean => roots.some((r) => isUnderPath(parent, r))
 
 /**
  * 新建一个空项目：mkdir + git init + 一个 README。父目录必须在已配置的扫描根之内。
