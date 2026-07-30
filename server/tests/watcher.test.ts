@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join, sep } from "node:path"
 import { afterAll, describe, expect, it, vi } from "vitest"
 import { PerRepoStrategy, RecursiveRootStrategy, type StrategyHandlers, type WatchStrategy } from "../src/watch-strategy"
-import { isStructuralPath, RepoWatcher, shouldIgnorePath, watcherErrorIsNoise } from "../src/watcher"
+import { isExcludedPath, isStructuralPath, isStructuralSignal, RepoWatcher, shouldIgnorePath, watcherErrorIsNoise } from "../src/watcher"
 import { cleanupFixtures, git, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
@@ -272,6 +272,106 @@ describe("isStructuralPath — 未归属事件值不值得当成目录结构变�
   })
 })
 
+// 口径必须与 scanner.ts 逐字一致。两种错配都没有任何提示：扫描器排除了、监听器没排除 →
+// 那棵子树成为一个永不关闭的水龙头；反过来 → 那棵子树里新出现的仓库要等 30 分钟兜底重扫
+describe("isExcludedPath — 与 scanner 同一口径的 excludes 判定", () => {
+  const root = join("D:", "code")
+  const ex = (...names: string[]) => new Set(names)
+
+  it("按目录名匹配，任何深度都算（scanner 是逐层 readdir 时按 entry.name 过滤）", () => {
+    expect(isExcludedPath(join(root, "archive", "old-repo", ".git"), [root], ex("archive"))).toBe(true)
+    expect(isExcludedPath(join(root, "a", "b", "archive", "x.ts"), [root], ex("archive"))).toBe(true)
+    expect(isExcludedPath(join(root, "a", "b", "x.ts"), [root], ex("archive"))).toBe(false)
+  })
+
+  it("不做子串匹配：名字里含排除项的目录不受牵连", () => {
+    expect(isExcludedPath(join(root, "archived-stuff", "repo", "a.ts"), [root], ex("archive"))).toBe(false)
+  })
+
+  // scanner 的 walk(root, 0) 从不检查 root 自己的目录名——把整个扫描根当成「被自己排除」
+  // 的话，那个 root 下的一切结构信号都没了，新仓库永远只能靠兜底重扫发现
+  it("root 自身的目录名不参与判断", () => {
+    const inside = join("D:", "archive")
+    expect(isExcludedPath(join(inside, "repo", ".git"), [inside], ex("archive"))).toBe(false)
+  })
+
+  it("不在任何扫描根之下 → 不排除（excludes 只作用于扫描根之下，manualRepo 不受它管）", () => {
+    expect(isExcludedPath(join("E:", "manual", "archive", "repo"), [root], ex("archive"))).toBe(false)
+    expect(isExcludedPath(join(root, "archive", "repo"), [], ex("archive"))).toBe(false)
+  })
+
+  // scan() 对每个 root 独立向下走：只要有一个 root 能不踩到 excludes 地走到它，
+  // 这个仓库就会被扫到、就会进归属表。按「第一个匹配上的 root」判会把它误排除
+  it("嵌套 root：只要有一个 root 能不踩排除项地走到它，就不算被排除", () => {
+    const roots = [root, join(root, "build", "sub")]
+    expect(isExcludedPath(join(root, "build", "sub", "repo", ".git"), roots, ex("build"))).toBe(false)
+    expect(isExcludedPath(join(root, "build", "other", "repo", ".git"), roots, ex("build"))).toBe(true)
+  })
+
+  it("excludes 为空时永远为假（默认参数，热路径上不做无谓的字符串切分）", () => {
+    expect(isExcludedPath(join(root, "archive", "x"), [root])).toBe(false)
+  })
+})
+
+/**
+ * 未归属事件的最终判据。三道判断的顺序本身就是行为：
+ * ① excludes 关掉水龙头；② 末段是 `.git` 的信号优先于忽略过滤；③ 其余走忽略目录 + 扫描深度。
+ */
+describe("isStructuralSignal — 未归属事件的最终判据", () => {
+  const root = join("D:", "code")
+
+  // 被 excludes 排除的仓库不进 scan()，因此永远不在归属表里，它的每一次写入都落在这条分支上。
+  // 不关掉的话就是一个永不关闭的水龙头：按 60 秒冷却无限触发 force=true 的全量重扫 + 完整拆建
+  it("被 excludes 排除的目录里的写入一律不报（含它自己的 .git）", () => {
+    const excludes = new Set(["archive"])
+    expect(isStructuralSignal(join(root, "archive", "repo", ".git"), [root], excludes)).toBe(false)
+    expect(isStructuralSignal(join(root, "archive", "repo", ".git", "index"), [root], excludes)).toBe(false)
+    expect(isStructuralSignal(join(root, "archive", "newrepo"), [root], excludes)).toBe(false)
+    // 同一条路径，没配 excludes 时必须照报——否则这条用例只是在测「什么都不报」
+    expect(isStructuralSignal(join(root, "archive", "repo", ".git"), [root])).toBe(true)
+  })
+
+  // 扫描根下有个普通目录叫 build，用户在里面 clone 了仓库。放在忽略过滤之后的话这条事件
+  // 被整段丢掉，新仓库要等最长 30 分钟的兜底重扫才出现（autoScanMinutes = 0 时永不出现）
+  it("构建产物目录里的 .git 照报（那是新仓库出现的确定信号，优先于忽略过滤）", () => {
+    for (const seg of ["build", "dist", "out", "obj", "bin", "target", ".next"]) {
+      expect(isStructuralSignal(join(root, seg, "newrepo", ".git"), [root])).toBe(true)
+    }
+  })
+
+  // 反向：包管理器的目录里确实会出现真正的 git 克隆（npm 的 git 依赖、composer --prefer-source、
+  // pip install -e git+…）。放行的话一次 npm ci 就连发几十条 force=true 的全量重扫
+  it("依赖目录深处的 .git 不报（那是依赖自带的，不是新仓库）", () => {
+    for (const seg of ["node_modules", "vendor", ".venv", "venv", ".gradle"]) {
+      expect(isStructuralSignal(join(root, "proj", seg, "pkg", ".git"), [root])).toBe(false)
+      expect(isStructuralSignal(join(root, "proj", seg, "pkg", ".git", "HEAD"), [root])).toBe(false)
+    }
+  })
+
+  it("构建产物目录里的普通写入仍然不报（只有 .git 这个确定信号被放行）", () => {
+    expect(isStructuralSignal(join(root, "build", "bundle.js"), [root])).toBe(false)
+    expect(isStructuralSignal(join(root, "proj", "node_modules", "pkg", "index.js"), [root])).toBe(false)
+  })
+
+  it("其余仍走原来的深度判据", () => {
+    expect(isStructuralSignal(join(root, "newrepo"), [root])).toBe(true)
+    expect(isStructuralSignal(join(root, "a", "b", "c", "d", "e", "f", "g"), [root])).toBe(false)
+  })
+
+  // 未归属分支与归属分支必须用同一套 root 归属口径。归属分支拿的是查表匹配上的祖先目录
+  //（一定是事件路径的字符前缀），这条分支拿的是**配置里原样的** roots——尾分隔符与正斜杠
+  // 写法在 Windows 上都合法且常见。裸字符串比较对不上就退化成拿整条绝对路径去匹配段名，
+  // 于是这个 root 下的结构信号会因为 root **自身**路径里有一段叫 build 而被全部丢弃：
+  // 那棵树里新出现的仓库永远只能靠兜底重扫发现，autoScanMinutes = 0 时永不出现
+  it("root 的尾分隔符 / 正斜杠写法都要认得出来（root 自身含 build 段时退化会咬人）", () => {
+    const build = join("D:", "build", "code")
+    const event = join(build, "newrepo")
+    expect(isStructuralSignal(event, [build])).toBe(true) // 基准形式
+    expect(isStructuralSignal(event, [`${build}${sep}`])).toBe(true) // 尾分隔符
+    expect(isStructuralSignal(event, ["D:/build/code"])).toBe(true) // 正斜杠写法
+  })
+})
+
 // 绑定成功后的监听期错误分两类：EBUSY/EPERM/ENOENT 是「文件正被别人锁着 / 刚被删掉」的
 // 日常噪音，对仓库状态没有任何信息量；其余的（比如 EMFILE 句柄耗尽）是真问题，必须留在日志里
 describe("watcherErrorIsNoise — 监听期错误分级", () => {
@@ -445,6 +545,66 @@ describe("RepoWatcher — 归属映射", () => {
     await w.close()
   })
 
+  /**
+   * A1：被 `config.excludes` 排除的仓库不进 `scan()`，因此永远不在归属表里——它的每一次
+   * 写入都走未归属分支。watcher 不知道 excludes 的话，那是一个**永不关闭的水龙头**：
+   * 按 60 秒冷却无限触发 force=true 的全量重扫 + 完整 applyWatch 拆建。冷却只是限速。
+   */
+  it("被 excludes 排除的目录里的持续写入不再报结构变化（同一路径不配 excludes 时必须报）", async () => {
+    const root = join("D:", "work")
+    const fake = { async start() { return [root] }, async stop() {} }
+    const excluded: string[] = []
+    const we = new RepoWatcher(() => {}, (r) => excluded.push(r), 10, 0, fake)
+    await we.setRoots([root], [{ id: "R", path: join(root, "repo") }], ["archive"])
+    we.handleEventForTest(join(root, "archive", "old-repo", ".git", "index"))
+    we.handleEventForTest(join(root, "archive", "old-repo", "src", "a.ts"))
+    we.handleEventForTest(join(root, "archive", "brand-new", ".git"))
+    expect(excluded).toEqual([])
+    await we.close()
+
+    // 对照组：完全相同的三条事件，只是没把 archive 放进 excludes
+    const reported: string[] = []
+    const wo = new RepoWatcher(() => {}, (r) => reported.push(r), 10, 0, fake)
+    await wo.setRoots([root], [{ id: "R", path: join(root, "repo") }])
+    wo.handleEventForTest(join(root, "archive", "old-repo", ".git", "index"))
+    wo.handleEventForTest(join(root, "archive", "brand-new", ".git"))
+    expect(reported.length).toBe(2)
+    await wo.close()
+  })
+
+  // excludes 不该让**已归属**的仓库静音：能同时满足「在仓库列表里」和「落在被排除目录下」
+  // 的只有显式写进 manualRepos 的仓库，那是用户「我就是要看这个」的表态。静音掉的结果是
+  // 它不刷新、不报错、界面上停在过期状态，而用户以为自己已经把它加回来了
+  it("excludes 不影响已归属仓库的刷新（manualRepo 可以合法地待在被排除目录下）", async () => {
+    const root = join("D:", "work")
+    const fired: string[] = []
+    const fake = { async start() { return [root] }, async stop() {} }
+    const w = new RepoWatcher((id) => fired.push(id), () => {}, 10, 0, fake)
+    await w.setRoots([root], [{ id: "M", path: join(root, "archive", "manual") }], ["archive"])
+    w.handleEventForTest(join(root, "archive", "manual", "src", "a.ts"))
+    await new Promise((r) => setTimeout(r, 60))
+    expect(fired).toEqual(["M"])
+    await w.close()
+  })
+
+  // A4：位于 IGNORED_DIRS 同名目录之下的**新仓库**——扫描根下有个普通目录叫 build，
+  // 里面 clone 了仓库。它的 .git 创建事件此前被 shouldIgnorePath 先一步丢掉，于是这个仓库
+  // 要等最长 30 分钟的兜底重扫才出现在看板上（autoScanMinutes = 0 时永不出现）
+  it("构建产物同名目录里新出现的 .git 要报结构变化，node_modules 深处的不报", async () => {
+    const root = join("D:", "work")
+    const reasons: string[] = []
+    const fake = { async start() { return [root] }, async stop() {} }
+    const w = new RepoWatcher(() => {}, (r) => reasons.push(r), 10, 0, fake)
+    await w.setRoots([root], [{ id: "R", path: join(root, "repo") }])
+    w.handleEventForTest(join(root, "build", "cloned-repo", ".git"))
+    expect(reasons.length).toBe(1)
+    // 反向：依赖里自带的 .git（npm 的 git 依赖）不该触发一轮 force=true 的全量重扫
+    w.handleEventForTest(join(root, "repo2", "node_modules", "pkg", ".git"))
+    w.handleEventForTest(join(root, "repo2", "vendor", "pkg", ".git"))
+    expect(reasons.length).toBe(1)
+    await w.close()
+  })
+
   it("被忽略目录里的事件既不刷新也不报结构变化", async () => {
     const repo = join("D:", "work", "repo")
     const fired: string[] = []
@@ -522,13 +682,19 @@ describe("RepoWatcher — 归属映射", () => {
   })
 
   // 缓冲区溢出意味着这一批事件已经永久丢了。不接到重扫上的话，那些仓库会静默停在过期状态
-  it("监听溢出 → 报告结构变化（丢掉的事件只能靠重扫补票）", async () => {
-    const reasons: string[] = []
+  it("监听溢出 → 报告结构变化，且如实带上 rebuild（丢掉的事件只能靠重扫补票）", async () => {
+    const seen: Array<[string, boolean]> = []
     const cap = captureStrategy()
-    const w = new RepoWatcher(() => {}, (reason) => reasons.push(reason), 10, 0, cap.strategy)
+    const w = new RepoWatcher(() => {}, (reason, rebuild) => seen.push([reason, rebuild]), 10, 0, cap.strategy)
     await w.setRoots([join("D:", "work")], [])
-    cap.handlers().onOverflow("recursive watch overflow at D:\work")
-    expect(reasons).toEqual(["recursive watch overflow at D:\work"])
+    // 两种信号必须原样透传：缓冲区溢出（句柄还活着，重建纯属白干）与目标丢失（句柄已死，
+    // 不重建那棵树永久静默）。共用一个 rebuild=true 是此前每分钟拆建一整套句柄的根因
+    cap.handlers().onOverflow("recursive watch overflow at D:\work", false)
+    cap.handlers().onOverflow("recursive watch lost at D:\work: EIO", true)
+    expect(seen).toEqual([
+      ["recursive watch overflow at D:\work", false],
+      ["recursive watch lost at D:\work: EIO", true],
+    ])
     await w.close()
   })
 

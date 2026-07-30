@@ -1,9 +1,17 @@
+import { EventEmitter } from "node:events"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, sep } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
-import { watchTargetLost } from "../src/watch-filter"
-import { PerRepoStrategy, RecursiveRootStrategy, defaultStrategy, usesPerRepoWatching } from "../src/watch-strategy"
+import { pathKey, watchTargetLost } from "../src/watch-filter"
+import {
+  PerRepoStrategy,
+  RecursiveRootStrategy,
+  defaultStrategy,
+  reportedPath,
+  usesPerRepoWatching,
+  waitForReady,
+} from "../src/watch-strategy"
 import { cleanupFixtures, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
@@ -119,6 +127,21 @@ describe("RecursiveRootStrategy", () => {
     await s.stop()
   })
 
+  /**
+   * 同一棵树被挂两个递归句柄 = 句柄、内核缓冲区、每条事件的 JS 处理成本全部翻倍，而多出来的
+   * 那份一条新信息都不带（防抖会把重复事件合并掉）——没有任何症状会把它暴露出来，只能靠
+   * 这条用例。尾分隔符与 `sub/..` 这种写法在两个平台上都是合法且不同的裸字符串
+   */
+  it("只差写法的 root 只挂一个句柄（按归一化口径去重，不是裸字符串）", async () => {
+    const root = tmpRoot()
+    const s = new RecursiveRootStrategy()
+    const ok = await s.start([root, `${root}${sep}`, join(root, "sub", "..")], [], noopHandlers([]))
+    expect(ok).toEqual([root]) // 保留第一次出现的原始形式：事件要按调用方给的形式报回去
+    const watchers = (s as unknown as { watchers: unknown[] }).watchers
+    expect(watchers).toHaveLength(1) // 三种写法，一个句柄
+    await s.stop()
+  })
+
   // 归档仓库要进 RepoWatcher 的归属映射（否则它的写入会被当成目录结构变化，见 watcher.test.ts），
   // 但**不该为它建句柄**：它不上看板，挂了也只是白占资源
   it("归档仓库不建立监听目标（它只该进归属映射，不该占一个句柄）", async () => {
@@ -177,6 +200,55 @@ describe("PerRepoStrategy", () => {
     await s.stop()
   })
 
+  /**
+   * A3：start 原先返回的是「路径存在的」而不是「chokidar 真正挂上的」——它从不 await `ready`。
+   * inotify 耗尽（ENOSPC，73+ 仓库时是真实场景）或 EMFILE 时所有路径都存在，于是设置面板
+   * 显示**全覆盖**而实际一个仓库都收不到事件，用户看到卡片不动时唯一的诊断面在说「一切正常」。
+   *
+   * 手法：不 await start（它在第一个 await 之前是同步跑完的，`this.watcher` 已经赋值），
+   * 趁 ready 之前把内核会给我们的那条错误直接投进实例。内核错误没法在测试里稳定复现
+   * （要真把 inotify 上限打满），测的是我们的分流而不是 chokidar 的行为。
+   * 这同时钉住了「start 确实等了 ready」：不等的话返回值在我们 emit 之前就已经算完了
+   */
+  describe("PerRepoStrategy 的建立期失守 → coverage 如实变低", () => {
+    const emitError = (s: PerRepoStrategy, err: NodeJS.ErrnoException): void => {
+      const w = (s as unknown as { watcher: { emit: (ev: string, e: unknown) => void } }).watcher
+      w.emit("error", err)
+    }
+
+    it("ENOSPC 路径不明 → 一个仓库都不算覆盖（说不清打掉了谁，只能按整个实例算）", async () => {
+      const a = makeRepo()
+      const b = makeRepo()
+      const s = new PerRepoStrategy()
+      const started = s.start([], [{ id: "A", path: a }, { id: "B", path: b }], noopHandlers([]))
+      emitError(s, Object.assign(new Error("no space"), { code: "ENOSPC" }))
+      expect(await started).toEqual([])
+      await s.stop()
+    })
+
+    it("失守打在某个仓库的目标上 → 只有它掉出覆盖，其它仓库照常", async () => {
+      const a = makeRepo()
+      const b = makeRepo()
+      const s = new PerRepoStrategy()
+      const started = s.start([], [{ id: "A", path: a }, { id: "B", path: b }], noopHandlers([]))
+      emitError(s, Object.assign(new Error("no space"), { code: "ENOSPC", path: join(realpathSync.native(a), ".git", "refs") }))
+      expect(await started).toEqual([b])
+      await s.stop()
+    })
+
+    // 首轮遍历撞上一个刚被删掉/正被锁着的临时文件是本地开发的日常噪音（EBUSY/EPERM/ENOENT
+    // 打在目标**底下**的单个文件上）。把它算成失守的话，覆盖数会因为一次 npm install 的
+    // 残骸凭空掉下去，automation 随即每轮重扫补一次注定白跑的 applyWatch
+    it("目标底下单个文件的日常噪音不影响覆盖", async () => {
+      const a = makeRepo()
+      const s = new PerRepoStrategy()
+      const started = s.start([], [{ id: "A", path: a }], noopHandlers([]))
+      emitError(s, Object.assign(new Error("busy"), { code: "EBUSY", path: join(realpathSync.native(a), "obj", "x.tmp") }))
+      expect(await started).toEqual([a])
+      await s.stop()
+    })
+  })
+
   // 这条腿上每个仓库要挂好几个 inotify watch，为不上看板的归档仓库挂等于白占
   // fs.inotify.max_user_watches 的名额
   it("归档仓库不进 chokidar 的目标列表，也不算进覆盖", async () => {
@@ -231,6 +303,81 @@ describe("PerRepoStrategy", () => {
       expect(errors.length).toBe(1)
       await s.stop()
     })
+  })
+})
+
+/**
+ * `ready` 要等所有目标的首轮 readdir 结束，网络盘 / 巨大仓库上可能很久甚至走不完，而这条
+ * promise 挂在 RepoWatcher.setRoots 里——没有上限的话一次慢盘就能让整轮重扫、以及退出流程里
+ * 的 drainRescans 永远挂住（托盘退出/关机路径上直接表现为「点了退出没反应」）。
+ * 用真 watcher 造不出「永远不 ready」，所以直接喂一个不发 ready 的 EventEmitter
+ */
+describe("waitForReady — 等不到 ready 不能永远挂住", () => {
+  const fake = () => new EventEmitter() as unknown as { once(e: "ready", f: () => void): unknown }
+
+  it("超时返回 false，而不是把调用方挂死", async () => {
+    const hung = Symbol("hung")
+    const raced = await Promise.race([
+      waitForReady(fake(), 50),
+      new Promise((r) => setTimeout(() => r(hung), 500)),
+    ])
+    expect(raced).toBe(false) // 拿到 hung 就说明超时兜底没了
+  })
+
+  it("ready 到了就立刻返回 true", async () => {
+    const em = new EventEmitter()
+    const p = waitForReady(em as unknown as { once(e: "ready", f: () => void): unknown }, 5000)
+    em.emit("ready")
+    expect(await p).toBe(true)
+  })
+})
+
+/**
+ * 事件路径必须回到**调用方给的坐标系**：监听挂在 realpath 上（8.3 短名会触发 libuv 断言，
+ * 整个进程 abort），归属表里却是 scanner 从配置 root 拼出来的原始形式。两者对不上时，
+ * 所有仓库静默停止刷新，且每条事件都被当成目录结构变化去触发重扫。
+ * 直接喂两个不同的形式进来，不依赖平台是否恰好能造出 8.3 短名或软链
+ */
+describe("reportedPath — 两个坐标系", () => {
+  // 两条腿上都要是**绝对**路径：`isAbsolute(name)` 是这个函数的第一道分叉，
+  // 拿 `D:\…` 当输入的话它在 Linux 上是相对路径，走的就是另一条分支（等于没测到）
+  const vol = process.platform === "win32" ? "D:\\" : "/"
+  const target = join(vol, "t")
+  const real = join(vol, "real", "deep")
+
+  it("real 之下的路径换回调用方的形式", () => {
+    expect(reportedPath(target, real, "a.txt")).toBe(join(target, "a.txt"))
+    expect(reportedPath(target, real, join(real, "src", "a.ts"))).toBe(join(target, "src", "a.ts"))
+    expect(reportedPath(target, real, "")).toBe(target)
+  })
+
+  // 裸 rel.startsWith("..") 会把仓库根下一个名叫 `..foo` 的文件当成「跑到 real 外面去了」，
+  // 于是报 realpath 形式——那条路径在归属表里对不上，这次写入被当成目录结构变化，
+  // 白跑一轮 force=true 的全量重扫（拆了重建全部句柄）
+  it("名字以 .. 开头的普通文件不算「不在 real 之下」", () => {
+    expect(reportedPath(target, real, "..foo")).toBe(join(target, "..foo"))
+    expect(reportedPath(target, real, "...hidden")).toBe(join(target, "...hidden"))
+    expect(reportedPath(target, real, join("sub", "..bar"))).toBe(join(target, "sub", "..bar"))
+  })
+
+  it("真的跑到 real 外面时原样交出绝对路径，不硬拼一个假路径", () => {
+    const outside = join(vol, "real", "sibling", "x.ts")
+    expect(reportedPath(target, real, outside)).toBe(outside)
+  })
+})
+
+// 归属映射与监听目标去重共用这一个键。两处各写一份的话，「同一棵树」在一处是一个、
+// 在另一处是两个，句柄成本翻倍而没有任何症状会把它暴露出来
+describe("pathKey — 归一化口径", () => {
+  it("Windows 上大小写不敏感，其余平台敏感（两个平台都真跑）", () => {
+    withPlatform("win32", () => expect(pathKey(join("D:", "Work"))).toBe(pathKey(join("d:", "work"))))
+    withPlatform("linux", () => expect(pathKey(join("D:", "Work"))).not.toBe(pathKey(join("d:", "work"))))
+  })
+
+  it("尾分隔符与 `sub/..` 这类写法归一到同一个键", () => {
+    const p = join("D:", "code")
+    expect(pathKey(`${p}${sep}`)).toBe(pathKey(p))
+    expect(pathKey(join(p, "sub", ".."))).toBe(pathKey(p))
   })
 })
 
@@ -316,6 +463,35 @@ describe("RecursiveRootStrategy — 失守的分流", () => {
     expect(reasons).toHaveLength(1)
     expect(reasons[0]).toContain(root) // 报调用方的路径形式，日志里能对上配置
     expect(codes).toEqual(["EMFILE"]) // 同时仍然记日志：打包后日志是唯一诊断面
+    await s.stop()
+  })
+
+  /** 把一条 change 事件直接投进真实 watcher；name === null 就是内核缓冲区溢出，
+   *  libuv 以这个形式把它交给回调（塞满 64KB 内核缓冲区无法在测试里稳定复现） */
+  const changeOn = (s: RecursiveRootStrategy, i: number, name: string | null): void => {
+    const watchers = (s as unknown as { watchers: { emit(ev: string, ...a: unknown[]): void }[] }).watchers
+    expect(watchers.length).toBeGreaterThan(i)
+    watchers[i].emit("change", "rename", name)
+  }
+
+  // 溢出与「监听目标本身没了」后果完全不同：前者句柄还活着，只是这一批通知装不下；后者句柄
+  // 已经死了，不重建那棵树从此永久静默。两者曾共用一个信号、都按「重建」处理，于是一棵正忙的
+  // 树上每分钟一次的溢出都要把整套句柄拆了重建（实测 74 个仓库、每 62 秒一次，永不停）——
+  // 纯属白干，还会在拆建窗口里真的丢事件，反过来又给下一轮重扫提供理由
+  it("缓冲区溢出报 rebuild=false（句柄还活着），目标丢失报 rebuild=true", async () => {
+    const root = tmpRoot()
+    const seen: Array<[string, boolean]> = []
+    const s = new RecursiveRootStrategy()
+    await s.start([root], [], {
+      onEvent: () => {},
+      onOverflow: (r, rebuild) => void seen.push([r, rebuild]),
+      onError: () => {},
+    })
+    changeOn(s, 0, null)
+    emitOn(s, 0, Object.assign(new Error("io error"), { code: "EIO", path: realpathSync.native(root) }))
+    expect(seen.map(([, rebuild]) => rebuild)).toEqual([false, true])
+    expect(seen[0][0]).toContain("overflow")
+    expect(seen[1][0]).toContain("lost")
     await s.stop()
   })
 

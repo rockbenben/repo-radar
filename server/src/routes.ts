@@ -4,7 +4,7 @@ import { WsHub } from "./events"
 import { ACTION_ARGS, commitRepo, createBranch, createStash, currentGitIdentity, deleteBranches, discardChanges, dropStashes, getRepoDetail, getRepoDiff, listStashes, stashAction, stashDiff, switchBranch, type RepoAction } from "./git"
 import { openTarget } from "./open"
 import { PORT } from "./port"
-import { withRepoLock } from "./queue"
+import { trackPending, withRepoLock } from "./queue"
 import { getGithubStatus } from "./github"
 import { buildManifest, importManifest, isManifest } from "./manifest"
 import { cloneRepo, createProject } from "./scaffold"
@@ -25,6 +25,17 @@ export interface ApiExtras {
   setAutoFetch?: (minutes: number) => Promise<void> // 设置定时后台 fetch 间隔（分钟，0=关）
   setWatchLimit?: (limit: number) => Promise<void> // 设置同时监听的仓库数上限（0=无上限）
   applyConfig?: (next: Config, prev: Config) => Promise<void> // PUT /api/config 落盘后让监听器/定时器跟上（内部按 prev 逐字段 diff，只重装变了的）
+  /**
+   * 把「当前仓库列表」重新交给监听器（automation.applyRepos）。纯 JS 改映射表，不碰任何句柄。
+   *
+   * 存在的理由：watcher 的静音名单（归档仓库）与 Linux 上的监听名额排序（收藏优先）只在
+   * 全量重扫链（setRoots / setRepos）上重算，而 PATCH meta 只 saveConfig + redecorate + 广播，
+   * 碰不到那条链。少了这一步，**取消归档之后 watcher 仍把这个仓库静音**：它的文件事件在归属
+   * 之后就地丢弃，既不刷新卡片也不报结构变化——其它卡片 1 秒内更新，唯独这张停在取消归档
+   * 那一刻，要等下一轮兜底重扫才恢复（默认 30 分钟，而 autoScanMinutes=0 是设置面板里能选的
+   * 合法配置，那种情况下整个进程生命周期都不刷新）
+   */
+  syncRepos?: () => void
   lastScanAt?: () => string | null // 最近一次全量扫描完成时刻（ISO）；还没扫完过则为 null
   watchCoverage?: () => { watched: number; total: number } // 实际挂上监听的仓库数 / 本该监听的总数
   refreshInbox?: () => Promise<void> // 立即强制重拉各仓库的 GitHub PR/issue/CI（跳过 TTL）
@@ -297,18 +308,22 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       byRepo.set(repoId, arr)
     }
     const results: { repoId: string; name: string; sha: string; ok: boolean; message: string }[] = []
-    for (const [repoId, shas] of byRepo) {
-      const repo = store.get(repoId)
-      if (!repo) {
-        for (const sha of shas) results.push({ repoId, name: repoId, sha, ok: false, message: "repo not found" })
-        continue
+    // 整段循环算一笔待办（见 trackPending）：仓库之间那段 refreshOne 是放了锁的，
+    // 只靠逐次 withRepoLock，退出排空会在这里答「已排空」，而循环随即又去 drop 下一个仓库的 stash
+    await trackPending(async () => {
+      for (const [repoId, shas] of byRepo) {
+        const repo = store.get(repoId)
+        if (!repo) {
+          for (const sha of shas) results.push({ repoId, name: repoId, sha, ok: false, message: "repo not found" })
+          continue
+        }
+        const res = await withRepoLock(repo.id, () => dropStashes(repo.path, shas))
+        const label = repo.displayName ?? repo.name
+        for (const r of res) results.push({ repoId, name: label, ...r })
+        const updated = await store.refreshOne(repo.id, { skipCache: true }) // 刚 drop 过 stash，见 RefreshOptions
+        if (updated) hub.broadcast("repo:updated", { repo: updated })
       }
-      const res = await withRepoLock(repo.id, () => dropStashes(repo.path, shas))
-      const label = repo.displayName ?? repo.name
-      for (const r of res) results.push({ repoId, name: label, ...r })
-      const updated = await store.refreshOne(repo.id, { skipCache: true }) // 刚 drop 过 stash，见 RefreshOptions
-      if (updated) hub.broadcast("repo:updated", { repo: updated })
-    }
+    })
     return c.json({ results })
   })
 
@@ -365,6 +380,11 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       return c.json({ error: "note must be a string or null" }, 400)
 
     const cfg = loadConfig(configFile)
+    // 落盘前记下这两个字段的旧值：它们不只是显示用的标记，还决定 watcher 怎么对待这个仓库
+    // （归档 = 事件就地丢弃；收藏 = Linux 上监听名额不够时优先保留），而那份状态只在重扫链上
+    // 重算。真的翻转时得通知一次，见下面 syncRepos 那段
+    const wasArchived = cfg.archived.includes(repo.id)
+    const wasFavorite = cfg.favorites.includes(repo.id)
     if (body.favorite !== undefined) {
       const set = new Set(cfg.favorites)
       if (body.favorite) set.add(repo.id)
@@ -397,6 +417,12 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
 
     const updated = store.redecorate(repo.id)
     if (!updated) return c.json({ error: "repo not found" }, 404)
+    // 归档/收藏真的翻转了 → 让监听器按新列表重算静音名单与监听名额。必须排在 redecorate
+    // 之后：syncRepos 读的是 store 里的仓库列表，早一步调它读到的还是旧的 archived。
+    // 两个方向都调（归档那一侧其实是良性的：仓库照常刷新，只是不上看板），不为此加分支——
+    // 代价只是一次纯 JS 的 setRepos，而覆盖不够时它自己会补一次 applyWatch，Linux 上正好把
+    // 新解除归档的仓库挂回监听名额
+    if (cfg.archived.includes(repo.id) !== wasArchived || cfg.favorites.includes(repo.id) !== wasFavorite) extras.syncRepos?.()
     hub.broadcast("repo:updated", { repo: updated })
     return c.json(updated)
   })

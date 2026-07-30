@@ -1,6 +1,6 @@
 import { runCommand } from "./exec"
 import { runRepoAction, type RepoAction } from "./git"
-import { withRepoLock } from "./queue"
+import { trackPending, withRepoLock } from "./queue"
 import { mapLimit } from "./map-limit"
 import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
 
@@ -27,7 +27,8 @@ export function startBatch(action: RepoAction, repoIds: string[], deps: BatchDep
   }
 
   progress(null, false)
-  void mapLimit(repoIds, BATCH_CONCURRENCY, async (id) => {
+  // 整批算一笔待办（见 trackPending）：finished 广播也包在里面，退出排空要等到前端收到收摊信号
+  void trackPending(() => mapLimit(repoIds, BATCH_CONCURRENCY, async (id) => {
     let repo: RepoStatus | undefined
     let pushed = false
     try {
@@ -49,7 +50,7 @@ export function startBatch(action: RepoAction, repoIds: string[], deps: BatchDep
       if (!pushed) results.push({ repoId: id, name: repo?.name ?? id, ok: false, message: String(err) })
       progress(null, false)
     }
-  }).then(() => progress(null, true), () => progress(null, true))
+  }).then(() => progress(null, true), () => progress(null, true)))
 
   return taskId
 }
@@ -86,7 +87,7 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
     return taskId
   }
 
-  void mapLimit(repoIds, BATCH_CONCURRENCY, async (id) => {
+  void trackPending(() => mapLimit(repoIds, BATCH_CONCURRENCY, async (id) => {
     const repo = deps.getRepo(id)
     if (!repo) {
       results.push({ repoId: id, name: id, ok: false, message: "repo not found" })
@@ -100,10 +101,20 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
     } catch (err) {
       results.push({ repoId: id, name: repo.name, ok: false, message: String(err) })
     }
-    const updated = await deps.refreshOne(id) // 命令可能改动了工作区，刷新状态
-    if (updated) deps.broadcast("repo:updated", { repo: updated })
+    // 刷新单独包一层 try，与 startBatch 里「refreshOne 在 try 内」同一形状。它落在 try 之外的话
+    // 一旦抛出（loadConfig 现在会为非 ENOENT 的读失败抛，见 config.ts），这个 worker 就 reject，
+    // 而 mapLimit 内部是 Promise.all —— 一 reject 立刻整体 reject，下面的
+    // `.then(_, () => progress(null, true))` 会在其余 worker 还在跑时就广播 finished:true：
+    // 前端当场收摊，后面跑完的仓库输出再也不显示，而命令其实还在一个个执行。
+    // 命令自己的结果已经进 results 了，刷新失败只影响这张卡片的新鲜度，不该吞掉整批的进度
+    try {
+      const updated = await deps.refreshOne(id) // 命令可能改动了工作区，刷新状态
+      if (updated) deps.broadcast("repo:updated", { repo: updated })
+    } catch {
+      // 下一轮重扫会把这张卡片刷新回来
+    }
     progress(null, false)
-  }).then(() => progress(null, true), () => progress(null, true))
+  }).then(() => progress(null, true), () => progress(null, true)))
 
   return taskId
 }

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createAutomation, intervalMs } from "../src/automation"
+import { createAutomation, intervalMs, pathGone } from "../src/automation"
 import { DEFAULT_CONFIG, loadConfig, MAX_INTERVAL_MINUTES, saveConfig, type Config } from "../src/config"
 import type { RepoStatus } from "../src/types"
 import type { RepoWatcher, WatchedRepo } from "../src/watcher"
@@ -20,6 +20,17 @@ function configFile(patch: Partial<Config> = {}): string {
   saveConfig(file, { ...structuredClone(DEFAULT_CONFIG), ...patch })
   return file
 }
+
+/**
+ * 覆盖率分母里的「路径失效」判定的测试替身：一律当成还在磁盘上。
+ *
+ * 这批用例的仓库路径都是假的（`/r/a`、`/r/b`），磁盘上并不存在。用真实判定（ENOENT）的话
+ * 它们会被全部判成「已失效」，覆盖率分母被整个抹平，于是降级/补挂的判断永远不成立——
+ * 所有关于 watchLimit 截断、watchDegraded 自愈、新仓库补挂的断言测到的都不再是它们想测的
+ * 东西（会「因为另一个原因」通过或失败）。真实判定由下面「路径失效的仓库不进覆盖率分母」
+ * 那一组用例单独钉住，它们用的是真实临时目录
+ */
+const allPathsAlive = (): boolean => false
 
 const repo = (id: string, opts: { favorite?: boolean; date?: string; archived?: boolean } = {}): RepoStatus =>
   ({
@@ -61,12 +72,14 @@ function fakeWatcher() {
   const watched: string[][] = []
   const entries: WatchedRepo[][] = []
   const rootsCalls: string[][] = []
+  const excludesCalls: (readonly string[])[] = []
   let closes = 0
   let started = false
   let current: WatchedRepo[] = []
   const w = {
-    setRoots: async (roots: string[], list: WatchedRepo[]) => {
+    setRoots: async (roots: string[], list: WatchedRepo[], excludes: readonly string[] = []) => {
       rootsCalls.push([...roots])
+      excludesCalls.push([...excludes])
       current = list
       entries.push(list)
       watched.push(list.map((r) => r.id))
@@ -84,9 +97,10 @@ function fakeWatcher() {
     // 归档仓库不计入，与真实 watcher 一致：它们进这份名单只是为了让事件有归属可认，
     // 本来就不建目标（见 WatchedRepo.archived），算进覆盖数会让 coverage 虚高
     coveredRepoCount: () => (started ? current.filter((r) => !r.archived).length : 0),
+    isCovered: (p: string) => started && current.some((r) => r.path === p && r.archived !== true),
     watchedRoots: () => (started ? ["/fake-root"] : []),
   }
-  return { watcher: w as unknown as RepoWatcher, watched, entries, rootsCalls, closes: () => closes }
+  return { watcher: w as unknown as RepoWatcher, watched, entries, rootsCalls, excludesCalls, closes: () => closes }
 }
 
 /**
@@ -120,6 +134,7 @@ function coverageWatcher(mode: "recursive" | "per-repo", opts: { failFirst?: boo
       started = false
     },
     coveredRepoCount: () => (started ? mapped.filter((r) => !r.archived && covered(r.path)).length : 0),
+    isCovered: (p: string) => started && covered(p),
     watchedRoots: () => [...ok],
   }
   return { watcher: w as unknown as RepoWatcher, rootCalls, calls: () => attempts }
@@ -134,6 +149,7 @@ function make(file: string, repos: RepoStatus[], extra: { rescan?: () => Promise
     listRepos: () => repos,
     rescan: extra.rescan ?? (async () => {}),
     fetchAll: extra.fetchAll ?? (async () => {}),
+    pathGone: allPathsAlive,
     log: (m) => void logs.push(m),
   })
   return { automation, ...fw, logs }
@@ -260,7 +276,9 @@ describe("applyWatch 的上限与取舍", () => {
 describe("setX 落盘并立即生效", () => {
   // watchLimit 只在逐仓库策略（Linux）下截断，钉平台的理由同上面的「applyWatch 的上限与取舍」
   it("setWatchLimit 落盘并重挂监听（否则面板显示的覆盖数和真实监听对不上）", async () => {
-    const file = configFile({ watchLimit: 0 })
+    // autoWatch 显式打开：默认已改成关闭，而这些用例钉的是「重挂监听」，跟着默认值走的话
+    // applyWatch 会直接 return，一次都不会挂上
+    const file = configFile({ watchLimit: 0, autoWatch: true })
     const { automation, watched } = make(file, [repo("a"), repo("b"), repo("c")])
     await withPlatform("linux", () => automation.setWatchLimit(2))
     expect(loadConfig(file).watchLimit).toBe(2)
@@ -288,6 +306,7 @@ describe("setX 落盘并立即生效", () => {
       listRepos: () => [repo("a")],
       rescan: async () => {},
       fetchAll: async () => {},
+      pathGone: allPathsAlive,
       log: (m) => void logs.push(m),
     })
     await expect(automation.setWatchLimit(500)).resolves.toBeUndefined()
@@ -348,7 +367,7 @@ describe("applyConfig 只重装真变了的", () => {
   // 新上限，而 applyWatch 从不被调用——Linux 上超出旧上限的仓库直到进程结束都不被监听，
   // 界面却声称新上限已覆盖全部。钉平台的理由同上：截断只在逐仓库策略下发生
   it("watchLimit 变了也要重挂监听（整份 PUT /api/config 回来时）", async () => {
-    const file = configFile({ watchLimit: 0 })
+    const file = configFile({ watchLimit: 0, autoWatch: true })
     const { automation, watched } = make(file, [repo("a"), repo("b"), repo("c")])
     const prev = loadConfig(file)
     saveConfig(file, { ...prev, watchLimit: 1 }) // 模拟 PUT /api/config 已落盘
@@ -360,7 +379,7 @@ describe("applyConfig 只重装真变了的", () => {
   // roots 变了 → 监听目标本身变了，只有重建能让新 root 生效——递归策略下这是唯一入口，
   // 不像 watchLimit 那样有专属端点兜底
   it("roots 变了要重挂监听，且 watcher.setRoots 收到的是真实的 roots（不是占位的空数组）", async () => {
-    const file = configFile({ roots: ["/old"] })
+    const file = configFile({ roots: ["/old"], autoWatch: true })
     const { automation, watched, rootsCalls } = make(file, [repo("a")])
     const prev = loadConfig(file)
     saveConfig(file, { ...prev, roots: ["/new"] })
@@ -374,7 +393,7 @@ describe("applyConfig 只重装真变了的", () => {
   })
 
   it("manualRepos 变了也要重挂监听", async () => {
-    const file = configFile({ manualRepos: [] })
+    const file = configFile({ manualRepos: [], autoWatch: true })
     const { automation, watched } = make(file, [repo("a")])
     const prev = loadConfig(file)
     saveConfig(file, { ...prev, manualRepos: ["/x"] })
@@ -435,6 +454,7 @@ describe("重扫不重建监听", () => {
       },
       close: async () => {},
       coveredRepoCount: () => 2,
+      isCovered: () => true,
       watchedRoots: () => ["/root"],
     } as unknown as RepoWatcher
 
@@ -444,6 +464,7 @@ describe("重扫不重建监听", () => {
       listRepos: () => [],
       rescan: async () => [],
       fetchAll: async () => {},
+      pathGone: allPathsAlive,
       log: () => {},
     })
 
@@ -465,6 +486,7 @@ describe("重扫不重建监听", () => {
       setRepos: (list: WatchedRepo[]) => void lists.push(list),
       close: async () => {},
       coveredRepoCount: () => 1,
+      isCovered: () => true,
       watchedRoots: () => ["/r"],
     } as unknown as RepoWatcher
     const auto = createAutomation({
@@ -473,6 +495,7 @@ describe("重扫不重建监听", () => {
       listRepos: () => [],
       rescan: async () => [],
       fetchAll: async () => {},
+      pathGone: allPathsAlive,
       log: () => {},
     })
     auto.applyRepos([repo("live"), repo("gone", { archived: true })])
@@ -489,6 +512,7 @@ describe("重扫不重建监听", () => {
       setRepos: () => {},
       close: async () => {},
       coveredRepoCount: () => 20, // 73 个仓库里只有 20 个被覆盖
+      isCovered: () => false,
       watchedRoots: () => [],
     } as unknown as RepoWatcher
 
@@ -498,6 +522,7 @@ describe("重扫不重建监听", () => {
       listRepos: () => Array.from({ length: 73 }, (_, i) => ({ id: String(i), archived: false }) as RepoStatus),
       rescan: async () => [],
       fetchAll: async () => {},
+      pathGone: allPathsAlive,
       log: () => {},
     })
     await auto.applyWatch(true)
@@ -524,6 +549,7 @@ describe("新出现的仓库必须拿到监听句柄（G1）", () => {
       listRepos: () => repos,
       rescan: async () => [],
       fetchAll: async () => {},
+      pathGone: allPathsAlive,
       log: () => {},
     })
 
@@ -590,6 +616,173 @@ describe("新出现的仓库必须拿到监听句柄（G1）", () => {
   })
 })
 
+/**
+ * E1：applyRepos 的两道闸原先只比**数量**（`coveredRepoCount() >= …`），于是在名额已被
+ * watchLimit 占满时 100% 失效——而「名额不够时收藏优先」这条排序**只在名额被截断时才有意义**。
+ * Linux + 201 个仓库 + 上限 200：用户按面板与 config.ts 的承诺给某个不刷新的仓库打 ⭐，
+ * pickWatched 的名单换了人、长度仍是 200，`200 >= 200` 成立 → 直接 return；而 applyWatch 是
+ * **唯一**会重算 pickWatched 的入口，那个仓库在这个进程余生一个监听目标都不会有，界面还零反馈
+ *（coverage 打 ⭐ 前后都是同一个数）。判据必须是「该覆盖的这批路径是不是都真的被覆盖了」。
+ *
+ * 断言必须落在**监听目标名单的内容**上：只断言「applyWatch 被调用了」正是上一轮那条假收益的
+ * 同款错误——调用次数在这个场景里根本不变，那种断言在修好之前之后都是绿的
+ */
+describe("名额占满时打 ⭐ 必须真的换进监听名单（E1）", () => {
+  it("逐仓库策略 + 名额已满：被 ⭐ 的仓库进了监听目标名单", async () => {
+    const cw = coverageWatcher("per-repo")
+    const outside = { favorite: true, date: "2026-05-01T00:00:00Z" }
+    let repos = [
+      repo("a", { date: "2026-07-01T00:00:00Z" }),
+      repo("b", { date: "2026-06-01T00:00:00Z" }),
+      repo("c", { date: "2026-05-01T00:00:00Z" }), // 名额之外的那个：不刷新，用户于是给它打 ⭐
+    ]
+    const a = createAutomation({
+      configFile: configFile({ autoWatch: true, roots: ["/r"], watchLimit: 2 }),
+      watcher: cw.watcher,
+      listRepos: () => repos,
+      rescan: async () => [],
+      fetchAll: async () => {},
+      pathGone: allPathsAlive,
+      log: () => {},
+    })
+    await withPlatform("linux", () => a.applyWatch(true))
+    expect(cw.rootCalls.at(-1)?.map((r) => r.id)).toEqual(["a", "b"])
+    expect(a.coverage()).toEqual({ watched: 2, total: 3 })
+
+    repos = [repos[0], repos[1], repo("c", outside)] // ⭐ 落盘后的下一次 syncRepos / 重扫
+    await withPlatform("linux", async () => {
+      a.applyRepos(repos)
+      await vi.waitFor(() => expect(cw.rootCalls.at(-1)?.map((r) => r.id)).toEqual(["c", "a"]))
+    })
+    expect(a.coverage()).toEqual({ watched: 2, total: 3 }) // 名额仍是 2，但坐在里面的换成了 c 和 a
+  })
+})
+
+/**
+ * E2：存在「路径还在、但就是挂不上」的目标时（inotify ENOSPC——73+ 仓库时是真实场景；
+ * root/仓库 EACCES；网络盘鉴权失败——pathGone 刻意只认 ENOENT，所以它们**留在**分母里），
+ * watchDegraded 永久为真，两道闸全部短路。而 applyRepos 自从接上 PATCH meta 的 syncRepos
+ * 之后是个**高频**入口：不挡的话，用户每点一次 ⭐ / 排除都要 strategy.stop() 后整体重建——
+ * Linux 上那是把唯一那个 chokidar 实例关掉再建，还要 await waitForReady（最长 10 秒），
+ * 那段窗口里所有仓库都收不到任何文件事件，且不补票
+ */
+describe("降级被闩住时不得跟着用户点击反复拆建监听（E2）", () => {
+  /** 「路径还在、但就是挂不上」的目标：pathGone 只认 ENOENT，它留在分母里 → 永久降级 */
+  function stuckWatcher(unmountable: string[]) {
+    let mapped: WatchedRepo[] = []
+    let attempts = 0
+    const w = {
+      setRoots: async (_roots: string[], list: WatchedRepo[]) => {
+        attempts++
+        mapped = list
+      },
+      setRepos: (list: WatchedRepo[]) => void (mapped = list),
+      close: async () => {},
+      coveredRepoCount: () => mapped.filter((r) => !r.archived && !unmountable.includes(r.path)).length,
+      isCovered: (p: string) => !unmountable.includes(p),
+      watchedRoots: () => ["/r"],
+    }
+    return { watcher: w as unknown as RepoWatcher, calls: () => attempts }
+  }
+
+  it("同一份挂不上的名单连点三次，setRoots 只涨一次；名单真变了才再补一次", async () => {
+    const cw = stuckWatcher(["/r/b"])
+    const repos = [repo("a"), repo("b")]
+    const a = createAutomation({
+      configFile: configFile({ autoWatch: true, roots: ["/r"] }),
+      watcher: cw.watcher,
+      listRepos: () => repos,
+      rescan: async () => [],
+      fetchAll: async () => {},
+      pathGone: allPathsAlive, // /r/b 的路径**还在**，只是挂不上——这才是永久降级的形状
+      log: () => {},
+    })
+    await a.applyWatch(true)
+    expect(cw.calls()).toBe(1)
+
+    a.applyRepos(repos) // 用户连点三次 ⭐ / 排除（PATCH meta → syncRepos → applyRepos）
+    a.applyRepos(repos)
+    a.applyRepos(repos)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(cw.calls()).toBe(2) // 自愈只补一次；同一份名单再挂一遍只会得到同样的失败
+
+    // 反向：这道闸不能把真正的自愈一起关掉。名单真的变了（新克隆的仓库）就该照旧补挂
+    a.applyRepos([...repos, repo("c")])
+    await vi.waitFor(() => expect(cw.calls()).toBe(3))
+  })
+})
+
+/**
+ * G2：上面那道闸原先是**永久**的（只记名单、不记时刻），于是用户把底层问题修好之后点「重扫」
+ * 永远没有任何效果——`POST /api/scan` 是 force=false，收尾走 applyRepos，名单一个字没变 →
+ * 直接 return。而挂不上的原因**会消失**：inotify 名额被别的程序吃光（ENOSPC，73+ 仓库时是
+ * 真实场景）之后用户把那个程序关掉 / 调大 `fs.inotify.max_user_watches`，EMFILE 更是本来就会
+ * 自己好。「重扫」恰恰是用户面对「监听没挂上」时的自然动作；闩死的话那批仓库到进程结束都不
+ * 实时刷新，设置面板那行 warn「N 个中监听 M 个」也不恢复，只有重启应用、或去设置里把监听
+ * 开关关掉再打开才好。冷却期的取值理由见 automation.ts 的 HEAL_RETRY_MS
+ */
+describe("底层问题修好之后，重扫必须能把监听救回来（G2）", () => {
+  /** 「路径还在、但就是挂不上」的目标；heal() 模拟用户调大了 inotify 名额 / 关掉了占用的程序 */
+  function healableWatcher(stuck: string) {
+    let mapped: WatchedRepo[] = []
+    let attempts = 0
+    let broken = true
+    const blocked = (p: string): boolean => broken && p === stuck
+    const w = {
+      setRoots: async (_roots: string[], list: WatchedRepo[]) => {
+        attempts++
+        mapped = list
+      },
+      setRepos: (list: WatchedRepo[]) => void (mapped = list),
+      close: async () => {},
+      coveredRepoCount: () => mapped.filter((r) => !r.archived && !blocked(r.path)).length,
+      isCovered: (p: string) => !blocked(p),
+      watchedRoots: () => ["/r"],
+    }
+    return { watcher: w as unknown as RepoWatcher, calls: () => attempts, heal: () => void (broken = false) }
+  }
+
+  it("完整序列：故障期间挂不上 → 故障消失 → 冷却期内重扫不重试 → 冷却期过后重扫救回覆盖", async () => {
+    // 只假造时钟：冷却判据读的是 Date.now()，而用例本身仍要用真实的 setTimeout 等重挂跑完
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-07-28T10:00:00Z"))
+    const cw = healableWatcher("/r/b")
+    const repos = [repo("a"), repo("b")]
+    const a = createAutomation({
+      configFile: configFile({ autoWatch: true, roots: ["/r"] }),
+      watcher: cw.watcher,
+      listRepos: () => repos,
+      rescan: async () => [],
+      fetchAll: async () => {},
+      pathGone: allPathsAlive, // /r/b 的路径**还在**，只是挂不上——这才是永久降级的形状
+      log: () => {},
+    })
+
+    await a.applyWatch(true) // inotify 名额被吃光：/r/b 一个目标都建不成
+    expect(cw.calls()).toBe(1)
+    expect(a.coverage()).toEqual({ watched: 1, total: 2 })
+
+    a.applyRepos(repos) // 自愈补挂一次，仍然失败——这份名单连同时刻被记下
+    await new Promise((r) => setTimeout(r, 50))
+    expect(cw.calls()).toBe(2)
+    expect(a.coverage()).toEqual({ watched: 1, total: 2 })
+
+    cw.heal() // 用户关掉占用 inotify 的程序 / 调大 max_user_watches：故障消失了
+
+    vi.setSystemTime(new Date("2026-07-28T10:00:30Z")) // 半分钟后点「重扫」
+    a.applyRepos(repos)
+    a.applyRepos(repos)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(cw.calls()).toBe(2) // 冷却期内：连点也不拆建，E2 的收益一分不能丢
+
+    vi.setSystemTime(new Date("2026-07-28T10:01:30Z")) // 冷却期过了，用户再点一次「重扫」
+    a.applyRepos(repos)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(cw.calls()).toBe(3) // 永久闩住的话这里到进程结束都是 2
+    expect(a.coverage()).toEqual({ watched: 2, total: 2 }) // 覆盖恢复，那行 warn 才消得掉
+  })
+})
+
 // 评审 I2：applyWatchLogged / PUT /api/config 把监听器的失败咽掉时，原先靠的是「下一轮扫描的
 // applyWatch 会重试」——本任务把周期路径收窄成 applyRepos 之后，那句承诺不再自动成立。
 // 「有目标没建成」（RecursiveRootStrategy 对单个 root 的失败是内部吞掉的，不向上抛异常，只是
@@ -598,16 +791,18 @@ describe("新出现的仓库必须拿到监听句柄（G1）", () => {
 describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）", () => {
   it("applyWatch 有目标没建成时标记降级，下一次 applyRepos 会补一次重挂", async () => {
     let setRootsCalls = 0
-    let covered = 1 // 第一次只建成 1 个，比请求的 2 个少——EMFILE 一类瞬时故障的典型样子
+    let ok: string[] = []
     const watcher = {
       setRoots: async (_roots: string[], list: { id: string; path: string }[]) => {
         setRootsCalls++
-        if (setRootsCalls >= 2) covered = list.length // 重挂这一次假装全部建成
+        // 第一次只建成 1 个，比请求的 2 个少——EMFILE 一类瞬时故障的典型样子；重挂那次全部建成
+        ok = (setRootsCalls >= 2 ? list : list.slice(0, 1)).map((r) => r.path)
       },
       setRepos: () => {},
       close: async () => {},
-      coveredRepoCount: () => covered,
-      watchedRoots: () => [],
+      coveredRepoCount: () => ok.length,
+      isCovered: (p: string) => ok.includes(p),
+      watchedRoots: () => [...ok],
     } as unknown as RepoWatcher
 
     const auto = createAutomation({
@@ -616,6 +811,7 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）",
       listRepos: () => [repo("a"), repo("b")],
       rescan: async () => [],
       fetchAll: async () => {},
+      pathGone: allPathsAlive,
       log: () => {},
     })
 
@@ -637,6 +833,7 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）",
       setRepos: () => {},
       close: async () => {},
       coveredRepoCount: () => 2, // 与请求的名单长度一致——完全建成
+      isCovered: () => true,
       watchedRoots: () => [],
     } as unknown as RepoWatcher
 
@@ -646,6 +843,7 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）",
       listRepos: () => [repo("a"), repo("b")],
       rescan: async () => [],
       fetchAll: async () => {},
+      pathGone: allPathsAlive,
       log: () => {},
     })
 
@@ -668,6 +866,7 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）",
         closes++
       },
       coveredRepoCount: () => 1, // 只建成 1 个，制造降级
+      isCovered: (p: string) => p === "/r/a",
       watchedRoots: () => [],
     } as unknown as RepoWatcher
 
@@ -678,6 +877,7 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）",
       listRepos: () => [repo("a"), repo("b")],
       rescan: async () => [],
       fetchAll: async () => {},
+      pathGone: allPathsAlive,
       log: () => {},
     })
 
@@ -689,5 +889,157 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）",
     await new Promise((r) => setTimeout(r, 50)) // 给可能存在的（不该有的）重挂一点时间冒出来
     expect(setRootsCalls).toBe(1) // 没有因为残留的降级标志被擅自重新打开
     expect(closes).toBe(0)
+  })
+})
+
+/**
+ * A1：`excludes` 只能经由 `setRoots` 进 watcher（那是它唯一的入口）。不交出去的话，被排除的
+ * 仓库不进 `scan()`、因而永远不在归属表里，它的每一次写入都走「未归属 → 结构变化」分支——
+ * 一个**永不关闭的水龙头**：按 60 秒冷却无限触发 force=true 的全量重扫 + 完整 applyWatch 拆建
+ */
+describe("excludes 要交到 watcher 手上（A1）", () => {
+  it("applyWatch 把 cfg.excludes 一并交给 setRoots", async () => {
+    const file = configFile({ roots: ["/r"], excludes: ["node_modules", "archive"] })
+    const { automation, excludesCalls } = make(file, [repo("a")])
+    await automation.applyWatch(true)
+    expect(excludesCalls.at(-1)).toEqual(["node_modules", "archive"])
+  })
+
+  // excludes 只在 applyConfig 这条路上能进 watcher。不跟着重装的话，改完 excludes 得到的是
+  // 两种静默错误之一：新加的排除项不生效（水龙头继续开着），或删掉的排除项不生效
+  //（那棵子树里新出现的仓库要等最长 30 分钟的兜底重扫，autoScanMinutes = 0 时永不出现）
+  it("excludes 变了要重挂监听（整份 PUT /api/config 回来时）", async () => {
+    const file = configFile({ excludes: ["node_modules"], autoWatch: true })
+    const { automation, excludesCalls } = make(file, [repo("a")])
+    const prev = loadConfig(file)
+    const next = { ...prev, excludes: ["node_modules", "archive"] }
+    saveConfig(file, next) // 模拟 PUT /api/config 已落盘
+    await automation.applyConfig(next, prev)
+    expect(excludesCalls).toHaveLength(1)
+    expect(excludesCalls[0]).toEqual(["node_modules", "archive"]) // 而且是**新**值，不是旧的
+  })
+
+  it("excludes 没变就不重挂（与其它字段同一条「只重装真变了的」规则）", async () => {
+    const file = configFile({ excludes: ["node_modules"] })
+    const { automation, excludesCalls } = make(file, [repo("a")])
+    const prev = loadConfig(file)
+    await automation.applyConfig({ ...prev, notes: { x: "hi" } }, prev)
+    expect(excludesCalls).toHaveLength(0)
+  })
+})
+
+/**
+ * A2：路径失效的仓库会一直留在仓库列表里（Task 9 有意为之：不能让卡片静默消失，要产出一张
+ * 「路径已失效」的错误卡片），而任何策略都挂不上一个不存在的路径。把它留在覆盖率的**分母**
+ * 里的后果是 `watchDegraded` 与 applyRepos 的补挂条件被**永久闩住**：每一轮重扫都触发一次
+ * 注定失败的 applyWatch（拆了重建全部句柄）——正是本轮重构要消灭的开销，只是换了个理由回来。
+ */
+describe("已知路径失效的仓库不进覆盖率分母（A2）", () => {
+  /** 路径失效的仓库任何策略都挂不上：逐仓库策略下 chokidar 前的 existsSync 预过滤把它剔掉，
+   *  递归策略下 roots 之外的 manualRepo 各挂一个句柄、realpath ENOENT 时不进 ok 列表 */
+  function watcherMissing(unmountable: string[]) {
+    let mapped: WatchedRepo[] = []
+    let started = false
+    let attempts = 0
+    const w = {
+      setRoots: async (_roots: string[], list: WatchedRepo[]) => {
+        attempts++
+        mapped = list
+        started = true
+      },
+      setRepos: (list: WatchedRepo[]) => void (mapped = list),
+      close: async () => void (started = false),
+      coveredRepoCount: () =>
+        started ? mapped.filter((r) => !r.archived && !unmountable.includes(r.path)).length : 0,
+      isCovered: (p: string) => started && !unmountable.includes(p),
+      watchedRoots: () => ["/r"],
+    }
+    return { watcher: w as unknown as RepoWatcher, calls: () => attempts }
+  }
+
+  const auto = (file: string, cw: ReturnType<typeof watcherMissing>, repos: RepoStatus[], gone: (p: string) => boolean) =>
+    createAutomation({
+      configFile: file,
+      watcher: cw.watcher,
+      listRepos: () => repos,
+      rescan: async () => [],
+      fetchAll: async () => {},
+      pathGone: gone,
+      log: () => {},
+    })
+
+  it("一个死掉的 manualRepo 不再把降级判定闩住：普通重扫一次 setRoots 都不调", async () => {
+    const repos = [repo("a"), repo("b"), repo("dead")]
+    const cw = watcherMissing(["/r/dead"])
+    const a = auto(configFile({ autoWatch: true, roots: ["/r"] }), cw, repos, (p) => p === "/r/dead")
+    await a.applyWatch(true)
+    expect(cw.calls()).toBe(1)
+    expect(a.coverage()).toEqual({ watched: 2, total: 3 }) // total 仍如实含那张错误卡片
+
+    a.applyRepos(repos)
+    a.applyRepos(repos)
+    a.applyRepos(repos)
+    await new Promise((r) => setTimeout(r, 50)) // 给可能存在的（不该有的）重挂时间冒出来
+    expect(cw.calls()).toBe(1)
+  })
+
+  // 反向：别把自愈一起关掉。「挂不上」与「路径没了」是两回事——EACCES/网络盘鉴权失败时
+  // 路径**还在**，那就是真降级，必须照旧补挂，否则这批仓库到进程结束都拿不到监听句柄
+  it("路径还在却没挂上（EACCES 一类）仍算降级，照旧补一次重挂", async () => {
+    const repos = [repo("a"), repo("b")]
+    const cw = watcherMissing(["/r/b"])
+    const a = auto(configFile({ autoWatch: true, roots: ["/r"] }), cw, repos, allPathsAlive)
+    await a.applyWatch(true)
+    expect(cw.calls()).toBe(1)
+    a.applyRepos(repos)
+    await vi.waitFor(() => expect(cw.calls()).toBe(2))
+  })
+
+  // 真实判定的接线：不注入 pathGone，用真实临时目录。上面那批用例全都注入了替身，
+  // 把 automation.ts 里的默认值悄悄改掉（比如换成 existsSync，那会把 EACCES 也判成没了）
+  // 它们一条都不会变红
+  it("默认判定接的是真实文件系统：真目录不算失效，不存在的路径算", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rr-live-"))
+    dirs.push(dir)
+    const alive = { ...repo("alive"), path: dir } as RepoStatus
+    const dead = { ...repo("dead"), path: join(dir, "no-such-repo") } as RepoStatus
+    const cw = watcherMissing([dead.path])
+    const a = createAutomation({
+      configFile: configFile({ autoWatch: true, roots: [dir] }),
+      watcher: cw.watcher,
+      listRepos: () => [alive, dead],
+      rescan: async () => [],
+      fetchAll: async () => {},
+      log: () => {},
+    })
+    await a.applyWatch(true)
+    expect(cw.calls()).toBe(1)
+    expect(a.coverage()).toEqual({ watched: 1, total: 2 })
+
+    a.applyRepos([alive, dead])
+    a.applyRepos([alive, dead])
+    await new Promise((r) => setTimeout(r, 50))
+    expect(cw.calls()).toBe(1) // 死路径不再每轮触发一次注定失败的重挂
+  })
+})
+
+/**
+ * 只有 ENOENT 算「没了」。判反的代价是不对称的：把一个还在磁盘上的仓库判成「没了」，
+ * 它就被排除出分母，于是**真正的降级从此测不出来**（一个网络盘抖动的仓库会让「本该监听却
+ * 没监听」永远显示为正常）；判成「还在」最多是多跑一次注定失败的重挂，下一轮自己会好
+ */
+describe("pathGone — 只有 ENOENT 算没了", () => {
+  it("存在的目录为假，不存在的路径为真", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rr-gone-"))
+    dirs.push(dir)
+    expect(pathGone(dir)).toBe(false)
+    expect(pathGone(join(dir, "no-such-thing"))).toBe(true)
+  })
+
+  // EACCES / EPERM / 网络盘鉴权失败没法在两条 CI 腿上都稳定造出来，用「statSync 会抛的
+  // 另一种错误」代替：钉住的是 catch 分支的取舍——**抛出来的错误一律按「还在」处理**，
+  // 而不是被 catch 顺手当成「没了」
+  it("stat 抛出非 ENOENT 的错误时按「还在」处理", () => {
+    expect(pathGone("bad\u0000path")).toBe(false)
   })
 })

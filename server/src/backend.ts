@@ -12,7 +12,7 @@ import { InboxCache } from "./inbox-cache"
 import { mapLimit } from "./map-limit"
 import { isPortUnavailable, PORT, portCandidates } from "./port"
 import { forgetRememberedPort, loadRememberedPort, saveRememberedPort } from "./port-state"
-import { drainRepoLocks, pendingRepoOps, withRepoLock } from "./queue"
+import { drainRepoLocks, pendingRepoOps, trackPending, withRepoLock } from "./queue"
 import { RepoCache } from "./repo-cache"
 import { IdentityLedger } from "./repo-identity"
 import { type ApiExtras, createApi, originAllowed } from "./routes"
@@ -102,6 +102,14 @@ export function createInboxEmitter(): InboxEmitter {
  *  取 60 秒与 watcher 的每仓库冷却常量一致，且远小于 30 分钟的兜底重扫 */
 const STRUCTURE_COOLDOWN_MS = 60_000
 
+/** 连续触发时冷却的上限。信号源持续不断时，冷却按 2 的幂从 STRUCTURE_COOLDOWN_MS 涨到这里为止。
+ *  取 30 分钟与 autoScanMinutes 的默认值同一量级：退到顶之后，「持续有写入」这件事的成本
+ *  与用户本来就接受的兜底重扫相当，不会再高。
+ *
+ *  不去读 autoScanMinutes 当上限：那要在 setTimeout 回调里 loadConfig，而它现在会对
+ *  非 ENOENT 的读失败抛错——抛在定时器回调里没人接得住，整个进程就没了。 */
+const STRUCTURE_MAX_COOLDOWN_MS = 30 * 60_000
+
 /**
  * 「目录结构变了 / 监听丢了事件」→ 一轮兜底重扫。这是自愈链的最后一环：新仓库出现、老仓库
  * 改名或消失、监听缓冲区溢出（那一批事件已经永久丢了）都汇到这里，接不上的话受影响的仓库
@@ -126,34 +134,51 @@ const STRUCTURE_COOLDOWN_MS = 60_000
  * 一轮 / cooldownMs，却不会漏掉任何一次真实的结构变化。
  */
 export function createStructureRescan(deps: {
-  rescan: () => Promise<unknown>
+  rescan: (rebuild: boolean) => Promise<unknown>
   delayMs?: number
   cooldownMs?: number
+  maxCooldownMs?: number
   log?: (msg: string) => void
   logError?: (msg: string) => void
-}): { onStructureChanged: (reason: string) => void; stop: () => void } {
+}): { onStructureChanged: (reason: string, rebuild: boolean) => void; stop: () => void } {
   const delayMs = deps.delayMs ?? 2000
   const cooldownMs = deps.cooldownMs ?? STRUCTURE_COOLDOWN_MS
+  const maxCooldownMs = deps.maxCooldownMs ?? STRUCTURE_MAX_COOLDOWN_MS
   const log = deps.log ?? ((m: string) => console.log(m))
   const logError = deps.logError ?? ((m: string) => console.error(m))
   let timer: ReturnType<typeof setTimeout> | null = null
+  let armedRebuild = false // 已排上队的那一轮要不要重建句柄：窗口内任意一条 rebuild 信号就够
   let running = false
   let pending: string | null = null // 重扫进行中收到的信号，等这一轮收尾后按冷却重新排
+  let pendingRebuild = false
   let stopped = false
   // 上一轮结构触发的重扫**结束**的时刻。从结束算起而不是从开始算起：重扫本身要跑几秒，
   // 按开始算等于把重扫时长白送给下一轮，冷却就压不住「重扫刚结束又立刻起一轮」
   let lastEndAt = Number.NEGATIVE_INFINITY
+  // 连续触发的次数，冷却按它做指数退避。**缓冲区溢出不是一次性事件**：一棵正忙的树上它
+  // 每分钟都在发生（作者机器实测 74 个仓库、每 62 秒一次，永不停），而固定冷却把稳态速率
+  // 钉在「一轮 / 60 秒」——一整天 1400 轮全量重扫、每轮几十个 git 进程，只为补一批本来就
+  // 会被下一轮兜底重扫捞回来的事件。退避让持续的信号源自己把频率降下去，而真正**偶发**的
+  // 结构变化（安静了一阵之后克隆一个新仓库）仍按基础冷却立刻响应。
+  let consecutive = 0
+  const backoffMs = (): number => Math.min(cooldownMs * 2 ** consecutive, maxCooldownMs)
 
-  function arm(reason: string): void {
-    const wait = Math.max(delayMs, lastEndAt + cooldownMs - Date.now())
+  function arm(reason: string, rebuild: boolean): void {
+    // 安静得比「上一轮的退避冷却 + 一个基础冷却」还久 → 信号源不是持续的，退避归零。
+    // 多加一个基础冷却是留出余量：冷却刚过期就来的那一条，大概率还是同一个持续源的下一拍
+    if (Date.now() - lastEndAt > backoffMs() + cooldownMs) consecutive = 0
+    else consecutive = Math.min(consecutive + 1, 20) // 夹住指数，别让它涨成 Infinity
+    armedRebuild = rebuild
+    const wait = Math.max(delayMs, lastEndAt + backoffMs() - Date.now())
     timer = setTimeout(() => {
       // 先置空再开跑。反过来的话，重扫期间到来的结构变化会被这个已经烧掉的定时器句柄
       // 一直抑制住——「重扫本身要跑一会儿，这期间新克隆了一个仓库」正好是它该管的事
       timer = null
       running = true
+      const rebuild = armedRebuild
       log(`[repo-radar] 目录结构变化，触发重扫：${reason}`)
       void deps
-        .rescan()
+        .rescan(rebuild)
         .catch((err) => {
           logError(`[repo-radar] 结构变化触发的重扫失败：${err instanceof Error ? err.message : String(err)}`)
         })
@@ -161,28 +186,39 @@ export function createStructureRescan(deps: {
           running = false
           lastEndAt = Date.now()
           const next = pending
+          const nextRebuild = pendingRebuild
           pending = null
+          pendingRebuild = false
           // stopped 必须查：stop() 之后这一轮的收尾仍会到达，不查就等于退出后又排了一轮
-          if (!stopped && next !== null) arm(next)
+          if (!stopped && next !== null) arm(next, nextRebuild)
         })
     }, wait)
   }
 
   return {
-    onStructureChanged(reason) {
+    onStructureChanged(reason, rebuild) {
       if (stopped) return
-      if (timer) return // 窗口里已经排着一轮，这条信号并进去
-      if (running) {
-        pending ??= reason // 只记第一条原因，日志里够用；重扫是全局的，不按 root 切分
+      // 窗口里已经排着一轮/正在跑一轮，这条信号并进去。**原因可以合并，rebuild 不能**：
+      // 合并掉的那一条若是「句柄已经死了」，不置位就等于把唯一能救回那棵树的动作扔掉，
+      // 而它下一次连事件都不会有了，也就不会再有第二次机会
+      if (timer) {
+        armedRebuild ||= rebuild
         return
       }
-      arm(reason)
+      if (running) {
+        pending ??= reason // 只记第一条原因，日志里够用；重扫是全局的，不按 root 切分
+        pendingRebuild ||= rebuild
+        return
+      }
+      arm(reason, rebuild)
     },
     stop() {
       stopped = true
       if (timer) clearTimeout(timer)
       timer = null
       pending = null
+      pendingRebuild = false
+      armedRebuild = false
     },
   }
 }
@@ -270,7 +306,8 @@ export function createRescanScheduler<T>(deps: {
   return { trigger, drain }
 }
 
-const INBOX_REFRESH_MS = 12 * 60 * 1000
+// 导出给测试：inbox-cache 的 TTL 必须严格小于它并留出一轮执行时间，重抄一遍常数的话改这里不会有任何测试变红
+export const INBOX_REFRESH_MS = 12 * 60 * 1000
 const DRAIN_TIMEOUT_MS = 10_000
 export function createBackend(options: BackendOptions): Backend {
   const { configFile, staticRoot, version } = options
@@ -324,7 +361,9 @@ export function createBackend(options: BackendOptions): Backend {
   const store = new RepoStore(
     () => loadConfig(configFile),
     (id, url) => descCache.get(id, url),
-    (id, url) => inboxCache.get(id, url),
+    // 前端那份要带上累计新到达数（队列「已处理」水位靠它，见 inbox-cache.ts）；
+    // 下面算通知差值时取的仍是 get()——那条链只该看 GitHub 原样返回的内容
+    (id, url) => inboxCache.getWithArrivals(id, url),
     repoCache,
     identity,
   )
@@ -409,12 +448,15 @@ export function createBackend(options: BackendOptions): Backend {
   }
 
   let lastScanAt: string | null = null // 最近一次全量扫描完成时刻（ISO）；启动扫描跑完才有值
-  // force=true：磁盘刚变过，进行中的那一轮可能在变化写盘前就扫过了目标父目录；同时它也让
-  // doRescanAndWatch 收尾走 applyWatch 而不是 applyRepos——报上来的原因里包含「这棵树已经死了」
-  // 这一类（EMFILE/EIO/FSEvents 失败，见 watch-strategy.ts 的 watchTargetLost），重建监听是
-  // 唯一能救回它的动作。若这里改成 applyRepos，等于把这个信号收下又扔掉：那个 root 下的
-  // 仓库会在进程余下的生命周期里静默冻结，且不受兜底重扫开关保护（用户可能就是关着它）
-  const structure = createStructureRescan({ rescan: () => rescanAndWatch(true) })
+  // force 由信号自己带，不再无条件 true。true 的那一类是「这棵树已经死了」（EMFILE/EIO/
+  // FSEvents 失败、root 被删或改名，见 watch-strategy.ts 的 watchTargetLost）——重建监听是
+  // 唯一能救回它的动作，收下又扔掉的话那个 root 下的仓库会在进程余下的生命周期里静默冻结，
+  // 且不受兜底重扫开关保护（用户可能就是关着它）。
+  // false 的那一类是「事件丢了但句柄还活着」（缓冲区溢出、看见不认识的路径）：目标集合一个
+  // 没变，重扫收尾走 applyRepos 就够——递归 root 的句柄本来就覆盖新出现的仓库，只需要把它
+  // 补进归属表。此前两类共用 true，于是每分钟一次的溢出都要把整套句柄拆了重建，纯属白干，
+  // 还会在拆建窗口里真的丢事件，反过来给下一轮重扫提供理由
+  const structure = createStructureRescan({ rescan: (rebuild) => rescanAndWatch(rebuild) })
   const watcher = new RepoWatcher((id) => {
     evictRepoStats(id) // 仓库有变化，作废其热力图缓存，避免统计落后于实时状态
     void store
@@ -510,7 +552,8 @@ export function createBackend(options: BackendOptions): Backend {
     autoFetchRunning = true
     try {
       const repos = store.list().filter((r) => r.remotes.length > 0 && r.error === null && !r.archived)
-      await mapLimit(repos, 4, async (r) => {
+      // 整轮算一笔待办（见 trackPending）：逐个包 withRepoLock 不足以让退出排空等到这一轮结束
+      await trackPending(() => mapLimit(repos, 4, async (r) => {
         try {
           // 走仓库锁：一是别和用户正在做的 commit/push 在同一个 .git 上撞车，
           // 二是退出时的排空只认锁里的操作——不包进来，定时 fetch 就会被硬切在写 refs 的中途
@@ -520,7 +563,7 @@ export function createBackend(options: BackendOptions): Backend {
         } catch {
           /* 单仓库 fetch 失败不影响其它 */
         }
-      })
+      }))
     } finally {
       autoFetchRunning = false
     }
@@ -541,6 +584,7 @@ export function createBackend(options: BackendOptions): Backend {
     setAutoFetch: automation.setAutoFetch,
     setWatchLimit: automation.setWatchLimit,
     applyConfig: automation.applyConfig,
+    syncRepos: () => automation.applyRepos(store.list()),
     lastScanAt: () => lastScanAt,
     watchCoverage: () => automation.coverage(),
     refreshInbox,

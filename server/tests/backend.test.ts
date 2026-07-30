@@ -264,7 +264,7 @@ describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
 
   // cooldownMs 默认 0：本 describe 钉的是防抖/日志/撤销这一层，速率上限单独有一个
   // 假时钟的 describe 负责，两者混在一起会让每条用例都要多等一个冷却窗口
-  function harness(rescan: () => Promise<unknown>, delayMs = 30, cooldownMs = 0) {
+  function harness(rescan: (rebuild: boolean) => Promise<unknown>, delayMs = 30, cooldownMs = 0) {
     const logs: string[] = []
     const errors: string[] = []
     const s = createStructureRescan({
@@ -280,9 +280,9 @@ describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
   it("窗口内连发多条信号只跑一轮重扫（改一批目录名会连发一串）", async () => {
     let calls = 0
     const h = harness(async () => void calls++)
-    h.onStructureChanged("first reason")
-    h.onStructureChanged("second reason")
-    h.onStructureChanged("third reason")
+    h.onStructureChanged("first reason", false)
+    h.onStructureChanged("second reason", false)
+    h.onStructureChanged("third reason", false)
     expect(calls).toBe(0) // 后沿触发：不是收到就立刻跑
     await sleep(120)
     expect(calls).toBe(1)
@@ -292,7 +292,7 @@ describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
 
   it("重扫抛错只记日志，不产生未处理的 rejection", async () => {
     const h = harness(async () => Promise.reject(new Error("rescan boom")))
-    h.onStructureChanged("boom")
+    h.onStructureChanged("boom", false)
     await sleep(120)
     expect(h.errors.join()).toContain("rescan boom")
     h.stop()
@@ -301,7 +301,7 @@ describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
   it("stop 之后不再触发重扫（退出时排着的那一轮必须撤销）", async () => {
     let calls = 0
     const h = harness(async () => void calls++)
-    h.onStructureChanged("x")
+    h.onStructureChanged("x", false)
     h.stop()
     await sleep(120)
     expect(calls).toBe(0)
@@ -318,10 +318,10 @@ describe("createStructureRescan — 结构变化触发的兜底重扫", () => {
       calls++
       await new Promise<void>((r) => (release = r))
     }, 30, 0)
-    h.onStructureChanged("first")
+    h.onStructureChanged("first", false)
     await sleep(120)
     expect(calls).toBe(1) // 第一轮还没结束
-    h.onStructureChanged("second")
+    h.onStructureChanged("second", false)
     await sleep(120)
     expect(calls).toBe(1) // 上一轮还跑着，绝不能叠一轮上去
     release()
@@ -351,13 +351,14 @@ describe("createStructureRescan — 结构信号的速率上限（C2）", () => 
     })
     try {
       for (let i = 0; i < 100; i++) {
-        s.onStructureChanged(`noise ${i}`)
+        s.onStructureChanged(`noise ${i}`, false)
         await vi.advanceTimersByTimeAsync(100) // 100 × 100ms = 10 秒
       }
       expect(calls).toBe(1)
 
-      // 冷却过去之后，攒着的那条信号如约兑现——限的是速率，不是把信号丢掉
-      await vi.advanceTimersByTimeAsync(60_000)
+      // 冷却过去之后，攒着的那条信号如约兑现——限的是速率，不是把信号丢掉。
+      // 第二轮已经落在退避的第一级（2 × 60 秒），所以要等到那时候
+      await vi.advanceTimersByTimeAsync(120_000)
       expect(calls).toBe(2)
     } finally {
       s.stop()
@@ -377,14 +378,152 @@ describe("createStructureRescan — 结构信号的速率上限（C2）", () => 
       log: () => {},
       logError: () => {},
     })
-    s.onStructureChanged("first")
+    s.onStructureChanged("first", false)
     await vi.advanceTimersByTimeAsync(20)
     expect(calls).toBe(1)
-    s.onStructureChanged("second") // 排进 pending
+    s.onStructureChanged("second", false) // 排进 pending
     s.stop()
     release()
     await vi.advanceTimersByTimeAsync(1000)
     expect(calls).toBe(1)
+  })
+
+  // 缓冲区溢出不是「一串」而是「一直」：一棵正忙的树上它每分钟都在发生（实测 74 个仓库、
+  // 每 62 秒一次，永不停）。固定冷却把稳态速率钉在一轮 / 60 秒 = 一天 1400 轮全量重扫，
+  // 每轮几十个 git 进程，只为补一批下一轮兜底重扫本来也会捞回来的事件。退避让持续的
+  // 信号源自己把频率降下去；坏掉的表现是后台每分钟一次 CPU 尖峰，而功能上看不出任何异常
+  it("连续触发时冷却指数退避，并夹在上限（持续溢出不能永远每分钟一轮）", async () => {
+    const at: number[] = []
+    const t0 = Date.now()
+    const s = createStructureRescan({
+      rescan: async () => void at.push(Date.now() - t0),
+      delayMs: 10,
+      cooldownMs: 1000,
+      maxCooldownMs: 4000,
+      log: () => {},
+      logError: () => {},
+    })
+    try {
+      // 每 100ms 投一条，模拟持续不断的溢出，跑够看到退避封顶
+      for (let i = 0; i < 200; i++) {
+        s.onStructureChanged(`overflow ${i}`, false)
+        await vi.advanceTimersByTimeAsync(100)
+      }
+      // 首轮不受冷却限制（delayMs 后就跑），之后间隔翻倍到上限为止
+      const gaps = at.slice(1).map((v, i) => v - at[i])
+      expect(gaps[0]).toBe(2000)
+      expect(gaps.slice(1)).toEqual(gaps.slice(1).map(() => 4000)) // 夹在 maxCooldownMs
+      // 固定 1000ms 冷却在 20 秒里会跑约 20 轮；退避之下只有个位数
+      expect(at.length).toBeLessThan(10)
+    } finally {
+      s.stop()
+    }
+  })
+
+  it("信号源安静下来之后退避归零（偶发的结构变化仍按基础冷却立刻响应）", async () => {
+    const at: number[] = []
+    const t0 = Date.now()
+    const s = createStructureRescan({
+      rescan: async () => void at.push(Date.now() - t0),
+      delayMs: 10,
+      cooldownMs: 1000,
+      maxCooldownMs: 4000,
+      log: () => {},
+      logError: () => {},
+    })
+    try {
+      for (let i = 0; i < 60; i++) {
+        s.onStructureChanged(`overflow ${i}`, false)
+        await vi.advanceTimersByTimeAsync(100)
+      }
+      // 构建跑完、写入停了。先把排着的那一轮放跑完，之后不再有任何信号
+      await vi.advanceTimersByTimeAsync(60_000)
+      const settled = at.length
+      expect(settled).toBeGreaterThanOrEqual(3) // 6 秒里退避已经把间隔顶到 4000
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(at.length).toBe(settled) // 没有信号就不该有重扫
+
+      // 之后写入又开始了（换了个项目在跑）。断言点是**恢复之后的第二个间隔**：退避归零的话
+      // 它是基础冷却的一档（2000），归不了零就仍然背着安静之前顶到的上限（4000）。
+      // 光看「第一轮多久跑起来」抓不住这条——冷却窗口早就过期了，无论退避到哪一级，
+      // 恢复后的第一轮都是 delayMs 就跑，两种实现在那个点上完全一样
+      for (let i = 0; i < 40; i++) {
+        s.onStructureChanged(`resumed ${i}`, false)
+        await vi.advanceTimersByTimeAsync(100)
+      }
+      const resumed = at.slice(settled)
+      expect(resumed.length).toBeGreaterThanOrEqual(2)
+      expect(resumed[1] - resumed[0]).toBe(2000)
+    } finally {
+      s.stop()
+    }
+  })
+})
+
+// 溢出（句柄还活着）与目标丢失（句柄已死）后果完全不同，却曾共用一个 force=true：
+// 每分钟一次的溢出都要 stop() + start() 整套监听句柄，纯属白干，还会在拆建窗口里真的
+// 丢事件——反过来又给下一轮重扫提供理由。反向的错同样致命：把 rebuild 一律降成 false，
+// 那么「root 被删/改名、网络盘掉线」收下就被扔掉，那棵树下的仓库永久静默冻结
+describe("createStructureRescan — rebuild 语义", () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  function harness() {
+    const rebuilds: boolean[] = []
+    let release: () => void = () => {}
+    let block = false
+    const s = createStructureRescan({
+      rescan: async (rebuild) => {
+        rebuilds.push(rebuild)
+        if (block) await new Promise<void>((r) => (release = r))
+      },
+      delayMs: 10,
+      cooldownMs: 0,
+      log: () => {},
+      logError: () => {},
+    })
+    return { ...s, rebuilds, hold: () => void (block = true), release: () => release() }
+  }
+
+  it("rebuild 原样透传给重扫：溢出不重建，目标丢失重建", async () => {
+    const h = harness()
+    try {
+      h.onStructureChanged("overflow", false)
+      await vi.advanceTimersByTimeAsync(20)
+      h.onStructureChanged("lost", true)
+      await vi.advanceTimersByTimeAsync(20)
+      expect(h.rebuilds).toEqual([false, true])
+    } finally {
+      h.stop()
+    }
+  })
+
+  it("窗口内合并时 rebuild 取或：一条「句柄已死」不能被同窗口的溢出信号淹掉", async () => {
+    const h = harness()
+    try {
+      h.onStructureChanged("overflow", false) // 先排上队
+      h.onStructureChanged("lost", true) // 合并进同一轮——原因可以丢，rebuild 不能
+      await vi.advanceTimersByTimeAsync(20)
+      expect(h.rebuilds).toEqual([true])
+    } finally {
+      h.stop()
+    }
+  })
+
+  it("重扫进行中到来的「句柄已死」信号，在下一轮里仍然是 rebuild", async () => {
+    const h = harness()
+    try {
+      h.hold()
+      h.onStructureChanged("overflow", false)
+      await vi.advanceTimersByTimeAsync(20)
+      expect(h.rebuilds).toEqual([false]) // 第一轮跑着，还没收尾
+      h.onStructureChanged("lost", true) // 落进 pending
+      h.release()
+      await vi.advanceTimersByTimeAsync(20)
+      expect(h.rebuilds).toEqual([false, true])
+    } finally {
+      h.stop()
+    }
   })
 })
 
@@ -405,7 +544,9 @@ describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）",
     const o = opts()
     const root = mkdtempSync(join(tmpdir(), "rr-backend-root-"))
     dirs.push(root)
-    saveConfig(o.configFile, { ...DEFAULT_CONFIG, roots: [root] })
+    // autoWatch 显式打开：默认已改成关闭，而这条用例钉的正是「重建监听句柄」这条路，
+    // 跟着默认值走的话 applyWatch 会直接 return，setRoots 一次都不会被调到
+    saveConfig(o.configFile, { ...DEFAULT_CONFIG, roots: [root], autoWatch: true })
     const b = track(createBackend(o))
     await b.start()
 
@@ -584,7 +725,8 @@ describe("stop() 与在飞重扫的时序", () => {
     const o = opts()
     const root = mkdtempSync(join(tmpdir(), "rr-backend-root-"))
     dirs.push(root)
-    saveConfig(o.configFile, { ...DEFAULT_CONFIG, roots: [root] })
+    // autoWatch 显式打开：默认已改成关闭，而这条用例要卡在 setRoots 上摆时序（见上一处同样的注释）
+    saveConfig(o.configFile, { ...DEFAULT_CONFIG, roots: [root], autoWatch: true })
     const b = track(createBackend(o))
     await b.start()
     // 启动扫描本身就是一轮 force=true 的重扫（会调 setRoots）。不等它落定就装 gate，

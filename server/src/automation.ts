@@ -1,3 +1,4 @@
+import { statSync } from "node:fs"
 import { type Config, loadConfig, MAX_INTERVAL_MINUTES, saveConfig } from "./config"
 import type { RepoStatus } from "./types"
 import { usesPerRepoWatching } from "./watch-strategy"
@@ -18,7 +19,29 @@ export interface AutomationDeps {
   rescan: () => Promise<unknown>
   /** 定时后台 fetch 要跑的动作 */
   fetchAll: () => Promise<void>
+  /** 「这条仓库路径已经确定不在磁盘上了」。默认按 ENOENT 判定（见 pathGone）。
+   *  做成可注入的只有一个理由：测试里的仓库路径大多是假的（`/r/a`），用真实判定会把
+   *  覆盖率分母整个抹平，那样测到的就不是这些用例想测的东西了 */
+  pathGone?: (path: string) => boolean
   log?: (msg: string) => void
+}
+
+/**
+ * 这条路径**确定**已经不在磁盘上了吗。
+ *
+ * 只有 ENOENT 算「没了」——EACCES / EPERM / EBUSY（杀软锁住、网络盘鉴权失败、目录被独占）
+ * 一律当「还在」，与 `repo-identity.ts` 的 pathExists 同一取舍，理由在这里同样是不对称的：
+ * 把一个还在磁盘上的仓库判成「没了」，它就被排除出覆盖率的分母，于是**真正的降级从此测不
+ * 出来**（一个网络盘抖动的仓库会让「本该监听却没监听」永远显示为正常）；判成「还在」最多是
+ * 多跑一次注定失败的重挂，下一轮自己会好。
+ * `throwIfNoEntry: false` 正好把这两类分开：ENOENT 返回 undefined，其它错误照样抛。
+ */
+export function pathGone(path: string): boolean {
+  try {
+    return statSync(path, { throwIfNoEntry: false }) === undefined
+  } catch {
+    return false // 非 ENOENT：无从判断，按「还在」处理（保守侧 = 仍然期待它有监听）
+  }
 }
 
 /**
@@ -93,6 +116,31 @@ function pickWatched(active: RepoStatus[], cfg: Config): RepoStatus[] {
 const toWatched = (repos: readonly RepoStatus[]): WatchedRepo[] =>
   repos.map((r) => ({ id: r.id, path: r.path, archived: r.archived }))
 
+/** 一次重挂请求的指纹：roots + excludes + 真正要建目标的那批路径，也就是 setRoots 的三个入参。
+ *  applyRepos 用它判断「这次要挂的和上次尝试过的是不是同一份」，见 lastHeal */
+const mountKey = (roots: readonly string[], excludes: readonly string[], targets: readonly RepoStatus[]): string =>
+  JSON.stringify([roots, excludes, targets.map((r) => r.path)])
+
+/**
+ * 同一份挂不上的名单，隔多久才允许再挂一次（毫秒）。
+ *
+ * 这道闸必须带时间维度，不能退回「同一份名单永不重试」的布尔闩：挂不上的原因**会消失**——
+ * inotify 名额被别的程序吃光（ENOSPC）后用户把那个程序关掉 / 调大 max_user_watches，EMFILE
+ * 更是本来就会自己好。而用户面对「监听没挂上」的自然动作就是点界面上的「重扫」，它走的正是
+ * applyRepos；永久闩住的话名单一个字没变 → 直接 return，那批仓库到进程结束都不实时刷新，
+ * 设置面板那行 warn「N 个中监听 M 个」也永远不恢复，只有重启应用才好。
+ *
+ * 1 分钟是唯一同时满足两端的量级：
+ *  · 下限（挡住高频入口）：用户连点 ⭐ / 排除的间隔是秒级（每次 PATCH meta → syncRepos →
+ *    applyRepos），1 分钟足以把一串点击压成最多一次重挂。一次重挂在 Linux 上是把唯一那个
+ *    chokidar 实例整个 stop 再建、还要等 waitForReady（最长 10 秒），那段窗口里所有仓库都
+ *    收不到任何文件事件，而且不补票；
+ *  · 上限（放行重扫）：兜底重扫的最小生效间隔就是 1 分钟（intervalMs 的下限夹逼），手动
+ *    「重扫」更是分钟级的人工动作。再长的冷却等于把用户「修好了再点一次重扫」的那次点击
+ *    也吃掉，故障消失了却还要等——那正是这道闸要修的毛病本身
+ */
+const HEAL_RETRY_MS = 60_000
+
 /** 周期定时器：装、拆、按新间隔重装都走这里。两个定时器逐行相同，只有要跑的动作不一样 */
 function createTimer(run: () => void): { apply: (minutes: number) => void } {
   let handle: ReturnType<typeof setInterval> | null = null
@@ -109,6 +157,7 @@ function createTimer(run: () => void): { apply: (minutes: number) => void } {
 
 export function createAutomation(deps: AutomationDeps): Automation {
   const { configFile, watcher, listRepos, rescan, fetchAll } = deps
+  const gone = deps.pathGone ?? pathGone
   const log = deps.log ?? ((m: string) => console.log(m))
   // 本该监听的仓库数（非归档），与 watcher 是否真的挂上无关——即便监听整个关着，
   // 界面也该如实说「0 个中的 N 个」而不是「0 个中的 0 个」，后者会让人以为压根没有仓库
@@ -120,6 +169,26 @@ export function createAutomation(deps: AutomationDeps): Automation {
   // 那句承诺不再自动成立，得由这个标志接手：periodic/手动重扫改走 applyRepos 了，但仍要有人
   // 在「真的降级了」时补一次重挂，否则「配置说开着、监听其实没挂上」会一直装作正常
   let watchDegraded = false
+  // applyRepos 上一次自愈重挂**尝试**过的那份 setRoots 请求（mountKey）+ 尝试的时刻。同一份名单
+  // 在 HEAL_RETRY_MS 的冷却期内不重试：「路径还在、但就是挂不上」的目标（inotify ENOSPC、
+  // root/仓库 EACCES、网络盘鉴权失败——pathGone 只认 ENOENT，所以它们留在分母里）会把
+  // watchDegraded 永久闩住，而 applyRepos 自从接上 PATCH meta 的 syncRepos 之后是个**高频**入口：
+  // 用户每点一次 ⭐ / 排除都会走到这里。不挡的话每次点击都是 strategy.stop() + 重建。
+  // 记时刻而不是只记名单：为什么必须给这道闸留一个出口，见 HEAL_RETRY_MS
+  let lastHeal: { key: string; at: number } | null = null
+
+  /**
+   * 覆盖率的**分母**：这批仓库里，本该真的有监听的有几个。
+   *
+   * 路径已经失效的仓库要减掉。它们会一直留在仓库列表里（Task 9 有意为之：不能让卡片静默
+   * 消失，要产出一张「路径已失效」的错误卡片），而任何策略都挂不上一个不存在的路径，于是
+   * `coveredRepoCount()` 永远小于仓库数——`watchDegraded` 与 applyRepos 的补挂条件被**永久
+   * 闩住**，每一轮重扫都触发一次注定失败的 applyWatch（拆了重建全部句柄），正好是本轮重构
+   * 要消灭的那笔开销，只是换了个理由回来。一个死掉的 manualRepo 就够了。
+   *
+   * 只在快路径没命中之后才调用：它每个仓库要付一次 stat，而绝大多数轮次根本走不到这里
+   */
+  const expectedCoverage = (list: readonly RepoStatus[]): number => list.filter((r) => !gone(r.path)).length
 
   /** 读-改-存单个配置字段。三个开关都是这个形状，抽出来免得落盘口径各写一遍 */
   function persist<K extends keyof Config>(key: K, value: Config[K]): void {
@@ -172,11 +241,14 @@ export function createAutomation(deps: AutomationDeps): Automation {
       )
     }
     // 归档仓库跟在 chosen 后面一起交出去：不建目标，但要进归属映射，否则它们的写入会被
-    // 当成「目录结构变化」而触发一轮又一轮 force=true 的全量重扫（见 WatchedRepo.archived）
-    await watcher.setRoots(cfg.roots, toWatched([...chosen, ...list.filter((r) => r.archived)]))
-    // 比对的是 chosen（截断之后的名单），不是 all——watchLimit 造成的截断是预期内的短缺，
-    // 不该被当成「降级」反复触发重挂；真正的降级信号只能是「连本该建成的这些都没建全」
-    watchDegraded = watcher.coveredRepoCount() < chosen.length
+    // 当成「目录结构变化」而触发一轮又一轮 force=true 的全量重扫（见 WatchedRepo.archived）。
+    // excludes 也一并交出去：被排除的仓库不进 scan()、因而永远不在归属表里，watcher 不知道
+    // 它就会把它的每一次写入当成结构变化——一个永不关闭的水龙头（见 watcher.ts 的 excludes）
+    await watcher.setRoots(cfg.roots, toWatched([...chosen, ...list.filter((r) => r.archived)]), cfg.excludes)
+    // 比对的是 chosen（截断之后的名单）里**路径还在**的那些，不是 all：watchLimit 造成的截断
+    // 是预期内的短缺，路径失效同样是——两者都不该被当成「降级」反复触发重挂；真正的降级信号
+    // 只能是「连本该建成的这些都没建全」
+    watchDegraded = watcher.coveredRepoCount() < expectedCoverage(chosen)
   }
 
   /** 重扫后调用：只更新映射表，不建立/重建任何句柄。传入的是本次扫描到的全量仓库（含归档的、
@@ -186,15 +258,34 @@ export function createAutomation(deps: AutomationDeps): Automation {
     const all = repos.filter((r) => !r.archived)
     lastTotal = all.length
     watcher.setRepos(toWatched(repos))
-    // 快路径：没降级、且每个仓库都已被句柄覆盖。绝大多数周期重扫走这里，连配置文件都不必读——
+    // 两道闸问的都是「**该覆盖的这批路径**是不是都真的被覆盖了」，不是「覆盖的数量够不够」。
+    // 上一版只比数量，在名额被 watchLimit 截满时**必错**：Linux + 201 个仓库 + 上限 200 时，
+    // 用户按面板承诺的「名额不够时收藏优先」给某个不刷新的仓库打 ⭐（或取消排除它），
+    // pickWatched 的名单换了人、但长度仍是 200，`200 >= 200` 成立 → 直接 return。而 applyWatch
+    // 是唯一会重算 pickWatched 的入口，于是那个仓库在这个进程余生一个监听目标都不会有，
+    // 界面还零反馈（coverage 打 ⭐ 前后都一样）——收藏优先排序只在名额被截断时才有意义，
+    // 只比数量等于让它在唯一有意义的场景里 100% 失效。别再改回数量比较
+    //
+    // 快路径：没降级、且每个仓库都已被覆盖。绝大多数周期重扫走这里，连配置文件都不必读——
     // 本任务省下来的那笔「每轮都重建几千个句柄」的开销不会因为下面的自愈又搭进去
-    if (!watchDegraded && watcher.coveredRepoCount() >= all.length) return
+    if (!watchDegraded && all.every((r) => watcher.isCovered(r.path))) return
     const cfg = loadConfig(configFile)
     // 尊重用户当下的开关：这期间可能已经手动关掉了监听，不擅自把它重新打开
     if (!cfg.autoWatch) return
-    // 分母取 pickWatched 而不是 all：watchLimit 截断是预期内的短缺（只发生在逐仓库策略上），
-    // 拿 all 当分母的话，Linux 上任何设了上限的用户都会每轮重扫重挂一次，等于本轮重构白改
-    if (!watchDegraded && watcher.coveredRepoCount() >= pickWatched(all, cfg).length) return
+    // 名单取 pickWatched 而不是 all，且路径已失效的算「不必覆盖」：watchLimit 截断与死掉的
+    // manualRepo 都是预期内的短缺，不是需要补救的降级。拿 all 当名单的话，Linux 上任何设了
+    // 上限的用户、以及任何有一个失效 manualRepo 的用户，都会每轮重扫重挂一次，等于本轮重构白改。
+    // gone 只对**没被覆盖**的那些付 stat（`||` 短路），正常轮次一次 syscall 都不多
+    const chosen = pickWatched(all, cfg)
+    if (!watchDegraded && chosen.every((r) => watcher.isCovered(r.path) || gone(r.path))) return
+    // 同一份 setRoots 请求在冷却期内不重试，见 lastHeal / HEAL_RETRY_MS：降级被闩住时 applyRepos
+    // 是个高频入口，不挡的话用户每点一次 ⭐ / 排除都要把监听句柄整体拆建一遍；但冷却期一过就
+    // 必须放行，否则用户修好 inotify 名额之后点「重扫」永远没有任何效果。真正需要救的场景
+    //（新仓库出现 / 取消归档 / 名额换人 / root 回来了）名单一定变过，一次都不受这道闸影响
+    const key = mountKey(cfg.roots, cfg.excludes, chosen)
+    const now = Date.now()
+    if (lastHeal !== null && lastHeal.key === key && now - lastHeal.at < HEAL_RETRY_MS) return
+    lastHeal = { key, at: now }
     // 到这里只剩两种情况，都必须重挂——setRepos 只改映射表、从不触达 strategy，**没有任何
     // 其它代码路径**会为「上一次 applyWatch 之后才出现的仓库」建立句柄：
     //   ① 上一次 applyWatch 有目标没建成（EMFILE 一类瞬时故障；RecursiveRootStrategy 对单个
@@ -205,7 +296,9 @@ export function createAutomation(deps: AutomationDeps): Automation {
     //      卡片 1 秒内更新，autoScanMinutes=0 时永远不更新。网络盘 root 掉线时挂不上、盘回来
     //      之后重扫列出其下仓库，也落在这一条（那一刻 root 下还没有仓库，watchDegraded 恰好
     //      是 false，救不了）。递归策略下新仓库落在 root 句柄之下、本来就计入覆盖，不会进这里
-    // 失败了只记日志、留到下一轮再试，不抛出去打断这轮重扫
+    // 失败了只记日志，不抛出去打断这轮重扫。重试留给「名单变了」或「冷却期过后的下一次重扫」
+    // ——同一份名单立刻再挂一遍只会得到同样的失败，而那批仓库的数据仍由兜底重扫按时刷新，
+    // 不至于停在过期状态
     void applyWatch(true, repos).catch((err) => {
       log(`[repo-radar] 兜底重挂监听失败（有监听目标没建成或还没建）：${err instanceof Error ? err.message : String(err)}`)
     })
@@ -257,8 +350,13 @@ export function createAutomation(deps: AutomationDeps): Automation {
       if (next.autoFetchMinutes !== prev.autoFetchMinutes) fetchTimer.apply(next.autoFetchMinutes)
       const rootsChanged = JSON.stringify(next.roots) !== JSON.stringify(prev.roots)
       const manualReposChanged = JSON.stringify(next.manualRepos) !== JSON.stringify(prev.manualRepos)
+      // excludes 只在这条路上能进 watcher（setRoots 是它唯一的入口，见 watcher.setRoots 的
+      // 注释）。不跟着重装的话，改完 excludes 得到的是两种静默错误之一：新加的排除项不生效
+      // ——那棵子树继续按 60 秒冷却无限触发全量重扫；删掉的排除项也不生效——那棵子树里新
+      // 出现的仓库要等最长 30 分钟的兜底重扫（`autoScanMinutes = 0` 时永不出现）
+      const excludesChanged = JSON.stringify(next.excludes) !== JSON.stringify(prev.excludes)
       const watchChanged = next.autoWatch !== prev.autoWatch || next.watchLimit !== prev.watchLimit
-      if (watchChanged || rootsChanged || manualReposChanged) await applyWatch(next.autoWatch)
+      if (watchChanged || rootsChanged || manualReposChanged || excludesChanged) await applyWatch(next.autoWatch)
     },
 
     start(cfg) {

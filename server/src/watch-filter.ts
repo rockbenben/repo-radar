@@ -29,23 +29,55 @@ const IGNORED_DIRS = new Set([
 ])
 
 /**
+ * `IGNORED_DIRS` 里由**包管理器**掌管的那几个。它们与其余构建产物目录只差一件事，而那件事
+ * 决定了「末段是 `.git`」这个信号能不能越过忽略过滤（见 isStructuralSignal）：
+ *
+ * 这几个目录里会出现**真正的 git 克隆**——npm 装 git 依赖、composer `--prefer-source`、
+ * `pip install -e git+…` 落在 venv 的 src/ 下、gradle 的 vcsWorkingDirs。于是这里的 `.git`
+ * 创建事件**不是**「用户新建了一个仓库」，一次 `npm ci` 就能连发几十条，每条都会触发一轮
+ * force=true 的全量重扫（refreshAll + 全部监听句柄拆建）——正是本轮重构要消灭的开销。
+ *
+ * 其余的（obj/bin/target/dist/build/out/.next/…）是构建产物目录：构建工具从不创建 `.git`，
+ * 放行这个信号不会引入任何噪音，却能救回一类真实场景——扫描根下有个普通目录恰好叫
+ * `build`，用户在里面 clone 了仓库。
+ */
+const DEPENDENCY_DIRS = new Set(["node_modules", "vendor", "venv", ".venv", ".gradle"])
+
+/** 「没有 excludes」的默认值。共用一个冻结实例，免得每次调用都新建一个 Set */
+const EMPTY_SET: ReadonlySet<string> = new Set<string>()
+
+/**
+ * 路径相对于「它所属的那个 root」的各段；说不清在哪棵树下时退化成整条绝对路径的各段。
+ *
+ * root 归属与相对段都交给 `isUnderPath` / `relative` 算，不自己写前缀比较：手写那份是裸
+ * 字符串比较，尾分隔符（`D:\code\`）、分隔符风格（`D:/code`）、Windows 大小写只要差一点就
+ * 整条匹配不上，于是**退化成拿绝对路径整条去比**——那个 root 下的所有仓库会因为路径里恰好
+ * 有一段 build/vendor 被整个静默忽略，界面上它们永远停在过期状态。卷根（`D:\`、`/`）也只有
+ * `isUnderPath` 处理对（它为「b 已以分隔符结尾」特判过），同一个边界不该有第二份实现。
+ */
+function segmentsBelowRoot(p: string, roots: readonly string[]): string[] {
+  const root = roots.find((r) => isUnderPath(p, r))
+  const rest = root === undefined ? p : relative(resolve(root), resolve(p))
+  return rest.split(/[\\/]/)
+}
+
+/**
  * 按**路径段**判断，不做子串匹配：`p.includes("node_modules")` 会让「仓库恰好放在名字含
  * node_modules 的目录下」时整个仓库被静默忽略——看板永远不刷新，且没有任何提示。
  *
  * 只看仓库根目录**以下**的段。仓库自己或它的上级目录叫 build/vendor/dist 完全合法
  * （`D:\vendor\myrepo`、`D:\projects\build`），拿绝对路径整条去匹配的话这些仓库会被整个
  * 忽略掉——同样是「静默不刷新」，比噪音严重得多。roots 为空时退化成整条路径匹配。
- *
- * root 归属与相对段都交给 `isUnderPath` / `relative` 算，不再自己写一份前缀比较：手写那份
- * 是裸字符串比较，尾分隔符（`D:\code\`）、分隔符风格（`D:/code`）、Windows 大小写只要差一点
- * 就整条匹配不上，于是**退化成拿绝对路径整条去比**——那个 root 下的所有仓库会因为路径里
- * 恰好有一段 build/vendor 被整个静默忽略，界面上它们永远停在过期状态。卷根（`D:\`、`/`）
- * 也只有 `isUnderPath` 处理对（它为「b 已以分隔符结尾」特判过），同一个边界不该有第二份实现。
  */
 export function shouldIgnorePath(p: string, roots: readonly string[] = []): boolean {
-  const root = roots.find((r) => isUnderPath(p, r))
-  const rest = root === undefined ? p : relative(resolve(root), resolve(p))
-  return rest.split(/[\\/]/).some((seg) => IGNORED_DIRS.has(seg))
+  return segmentsBelowRoot(p, roots).some((seg) => IGNORED_DIRS.has(seg))
+}
+
+/** 路径的比较键：Windows 大小写不敏感，且同一目录可能以不同大小写/分隔符风格回报。
+ *  归属映射、监听目标去重都按它算——两处各写一份的话，「同一棵树」在一处是一个、
+ *  在另一处是两个，句柄成本翻倍而没有任何人会发现 */
+export function pathKey(p: string): string {
+  return foldCase(resolve(p))
 }
 
 /**
@@ -140,4 +172,59 @@ export function isStructuralPath(p: string, roots: readonly string[] = []): bool
   const rel = relative(resolve(root), abs)
   if (rel === "") return true
   return rel.split(/[\\/]/).length <= SCAN_MAX_DEPTH
+}
+
+/**
+ * 这条路径是否被 `config.excludes` 排除在扫描之外。
+ *
+ * 口径必须与 `scanner.ts` 逐字一致，否则会出现两种错配，且都没有任何提示：
+ * - 扫描器排除了、监听器没排除 → 那棵子树是一个**永不关闭的水龙头**（见 isStructuralSignal）；
+ * - 监听器排除了、扫描器没排除 → 那棵子树里新出现的仓库要等最长 30 分钟的兜底重扫。
+ * 因此这里照抄 scanner 的三条：①按**目录名**匹配而非路径前缀；②大小写敏感（`Set.has`
+ * 的裸相等，Windows 上也一样）；③只看 root **以下**的段，root 自己的目录名不参与。
+ *
+ * 「所有能到达它的 root 都排除它」才算排除：`scan()` 对每个 root 独立向下走，只要有一个
+ * root 能不踩到 excludes 地走到它，这个仓库就会被扫到、就会进归属表。嵌套 root
+ * （`D:\code` 与 `D:\code\build\sub` 同时是扫描根、excludes 含 `build`）正是这种情况。
+ */
+export function isExcludedPath(
+  p: string,
+  roots: readonly string[] = [],
+  excludes: ReadonlySet<string> = EMPTY_SET,
+): boolean {
+  if (excludes.size === 0) return false
+  const abs = resolve(p)
+  const owning = roots.filter((r) => isUnderPath(abs, r))
+  // 不在任何扫描根之下（manualRepo、或说不清在哪棵树下）：excludes 只作用于扫描根之下，
+  // 这里按「没被排除」处理——判反会把 root 之外真实的结构信号整片丢掉
+  if (owning.length === 0) return false
+  return owning.every((r) => relative(resolve(r), abs).split(/[\\/]/).some((seg) => excludes.has(seg)))
+}
+
+/**
+ * 一条**不属于任何已知仓库**的事件路径，值不值得触发一轮结构重扫（force=true 的全量重扫 +
+ * 全部监听句柄拆建）。三道判断的**顺序本身就是行为**：
+ *
+ * ① `excludes`：被排除的目录里可以有仓库在持续写入——它不进 `scan()`，因此永远不在归属表
+ *    里，它的每一条事件都落在未归属分支上。不在这里关掉的话，那就是一个**永不关闭的
+ *    水龙头**：按 60 秒冷却无限触发全量重扫 + 完整拆建，冷却只是给它限了速。
+ *    这一道必须排在最前面：下面那道会放行任何深度的 `.git`，而被排除的仓库自己就有 `.git`。
+ * ② 末段是 `.git`：新仓库出现的**确定信号**，优先于忽略过滤。放在忽略过滤之后的话，扫描根下
+ *    有个普通目录叫 `build`、用户在里面 clone 了仓库，这条事件会被整段丢掉，新仓库要等最长
+ *    30 分钟的兜底重扫才出现（`autoScanMinutes = 0` 时永不出现）。唯独包管理器的目录例外，
+ *    见 DEPENDENCY_DIRS——那里的 `.git` 是依赖自带的，放行等于把 `npm ci` 的噪音接进重扫。
+ * ③ 其余按原来的两道走：忽略目录 + 扫描深度（见 shouldIgnorePath / isStructuralPath）。
+ */
+export function isStructuralSignal(
+  p: string,
+  roots: readonly string[] = [],
+  excludes: ReadonlySet<string> = EMPTY_SET,
+): boolean {
+  const abs = resolve(p)
+  if (isExcludedPath(abs, roots, excludes)) return false
+  if (abs.split(/[\\/]/).pop() === ".git") {
+    return !segmentsBelowRoot(abs, roots).some((seg) => DEPENDENCY_DIRS.has(seg))
+  }
+  if (shouldIgnorePath(abs, roots)) return false
+  return isStructuralPath(abs, roots)
 }
