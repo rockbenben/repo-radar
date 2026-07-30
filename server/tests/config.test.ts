@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { afterAll, describe, expect, it } from "vitest"
+import { dirname, join } from "node:path"
+import { afterAll, describe, expect, it, vi } from "vitest"
 import { Config, DEFAULT_CONFIG, loadConfig, MAX_INTERVAL_MINUTES, mergeConfig, saveConfig, validateConfigPatch } from "../src/config"
 
 const dir = mkdtempSync(join(tmpdir(), "rr-config-"))
@@ -29,6 +29,80 @@ describe("config", () => {
     const cfg = loadConfig(file)
     expect(cfg.roots).toEqual(["X:\\a"])
     expect(cfg.health.staleDays).toBe(90)
+  })
+})
+
+/**
+ * config.json 装的是**全部用户数据**（tags/favorites/archived/notes/roots/groupOverrides/
+ * lastOpened），而写它的路径有四条，其中 lastOpened 每点一次「在编辑器打开」就写一次。
+ * 落盘与读取这两端的失效后果都是「用户数据全没了」，不是「慢一轮」。
+ */
+describe("config.json 的抗损坏", () => {
+  it("saveConfig 用 tmp + rename 原子替换，不存在截断窗口", () => {
+    const file = join(dir, "atomic", "config.json")
+    saveConfig(file, { ...DEFAULT_CONFIG, roots: ["A:\\1"] })
+    const first = statSync(file).ino
+    saveConfig(file, { ...DEFAULT_CONFIG, roots: ["A:\\2"] })
+    // rename 原子替换必然换一个新的文件身份；裸 writeFileSync 是「先截断再写同一个文件」，
+    // ino 不变——而那个截断窗口正是断电时把全部用户数据变成半截 JSON 的地方
+    expect(statSync(file).ino).not.toBe(first)
+    expect(existsSync(`${file}.tmp`)).toBe(false) // 临时文件不留痕
+    expect(loadConfig(file).roots).toEqual(["A:\\2"])
+  })
+
+  it("配置损坏时保住坏文件、按默认值继续，且后续写入不会盖掉它", () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    const file = join(dir, "corrupt", "config.json")
+    saveConfig(file, { ...DEFAULT_CONFIG, favorites: ["keep-me"], tags: { r1: ["重要"] } })
+    const truncated = readFileSync(file, "utf8").slice(0, 40) // 断电落在截断窗口里留下的半截 JSON
+    writeFileSync(file, truncated)
+
+    // 不抛：抛的话 RepoStore.getConfig 每轮都抛，看板永久 500
+    const cfg = loadConfig(file)
+    expect(cfg).toEqual(DEFAULT_CONFIG)
+    expect(err).toHaveBeenCalled() // 打包之后日志是唯一的诊断面，静默恢复等于零诊断
+    const backups = readdirSync(dirname(file)).filter((f) => f.startsWith("config.json.corrupt-"))
+    expect(backups).toHaveLength(1)
+    expect(readFileSync(join(dirname(file), backups[0]), "utf8")).toBe(truncated)
+
+    // 「坏了当空」的致命之处在这一步：下一次 saveConfig（点一次「在编辑器打开」就会发生）
+    // 会把默认配置整份写回去。备份必须原封不动，用户的标签/收藏才还有救回来的机会
+    saveConfig(file, cfg)
+    expect(readdirSync(dirname(file)).filter((f) => f.startsWith("config.json.corrupt-"))).toEqual(backups)
+    expect(readFileSync(join(dirname(file), backups[0]), "utf8")).toBe(truncated)
+    err.mockRestore()
+  })
+
+  /**
+   * 「读不出来」不等于「文件坏了」。任何非 ENOENT 的读失败——EACCES / EPERM / EBUSY / EIO /
+   * EMFILE，杀软或备份进程短暂占住，REPO_RADAR_CONFIG 指向网络盘 / OneDrive 时的瞬时抖动——
+   * 都必须原样抛出。当成损坏处理的话：一份**字节完好**的 config.json 被改名成
+   * config.json.corrupt-<时间戳>，返回默认配置，下一次 saveConfig（点一次「在编辑器打开」写
+   * lastOpened 就触发）把默认值整份落盘，用户的标签/收藏/归档/便签就此没了；日志还说「解析
+   * 失败」，把人引去检查一份语法完全正确的 JSON。
+   * 上一版依赖的前提「读不出来 ⇒ 也挪不动 ⇒ 自然走那条响亮的 500」是假的：Windows 上只拒
+   * FILE_READ_DATA 时 DELETE 权限仍在，rename 照常成功；POSIX 上 rename 只看父目录的 w+x，
+   * 从不看文件自身的读权限。
+   *
+   * EACCES 在两条 CI 腿上都造不稳（容器里常以 root 跑，Windows 要 icacls），这里用
+   * 「readFileSync 会抛的另一种非 ENOENT 错误」代替——钉住的是 catch 分支的取舍本身，
+   * 与 automation.test.ts 用 statSync 的另一种错误钉 pathGone 是同一手法
+   */
+  it("非 ENOENT 的读失败原样抛出，字节完好的配置一个字节都不许被挪走", () => {
+    const file = join(dir, "unreadable", "config.json")
+    mkdirSync(file, { recursive: true }) // 占住这个路径：readFileSync 得到 EISDIR，不是 ENOENT
+    writeFileSync(join(file, "sentinel"), "still here")
+
+    expect(() => loadConfig(file)).toThrow() // 而不是「悄悄隔离掉再返回默认值」
+    expect(readFileSync(join(file, "sentinel"), "utf8")).toBe("still here")
+    expect(readdirSync(dirname(file))).toEqual(["config.json"]) // 没有多出任何 .corrupt- 备份
+  })
+
+  // 反向：真正的解析失败仍要 quarantine（上面那条用例），而「文件不存在」仍要静静返回默认值
+  // ——这条路径原先靠 existsSync 预判，现在由 readFileSync 的 ENOENT 接手。existsSync 不能留：
+  // 它内部吞掉一切错误，EACCES 同样返回 false，「不存在」与「读不了」又会被合成同一个答案
+  it("父目录都不存在时仍然静静返回默认值（ENOENT 是唯一不抛的读失败）", () => {
+    expect(loadConfig(join(dir, "no-such-dir", "config.json"))).toEqual(DEFAULT_CONFIG)
   })
 })
 
@@ -79,20 +153,23 @@ describe("loadConfig deep merge", () => {
   })
 })
 
-// 自动扫描是纯本地的文件监听：不走网络、不弹通知，关着只会让看板显示过期状态——
-// 默认开启才是「打开就是对的」。相对地，定时拉取会发网络请求，保持默认关闭。
+// 文件监听默认**关闭**。它不走网络也不弹通知，但常驻成本与收益不成比例：几个项目同时在跑
+// 构建时，递归监听看得见 scan root 下的一切写入，内核缓冲区持续溢出（实测 74 个仓库、每
+// 62 秒一次，永不停），每次溢出都要补一轮全量重扫。而这个工具的用途是「看一眼各仓库什么
+// 状态」，秒级实时不值那笔开销——默认走兜底定时重扫 + 手动重扫，需要实时的人自己打开。
 describe("autoWatch 字段", () => {
-  it("默认开启——纯本地、无打扰，关着反而让看板过期", () => {
-    expect(DEFAULT_CONFIG.autoWatch).toBe(true)
+  it("默认关闭——常驻监听的开销与「看一眼状态」这个用途不成比例", () => {
+    expect(DEFAULT_CONFIG.autoWatch).toBe(false)
   })
 
-  // 不做「历史默认值 → 新默认值」的迁移：saveConfig 整份落盘，盘上的 false 分不清是
-  // 历史默认还是用户主动关的，宁可让新默认值只对全新安装生效，也不重开用户明确关掉的
-  // 行为——升级前就因为监听有害（网络盘/OneDrive/EMFILE）关掉它的人首当其冲
-  it("盘上已有 autoWatch: false 时原样保留，不被新默认值覆盖", () => {
+  // 不做「历史默认值 → 新默认值」的迁移：saveConfig 整份落盘，盘上的值分不清是历史默认还是
+  // 用户主动设的，宁可让新默认值只对全新安装生效，也不擅自改掉用户明确选过的行为。
+  // 这里钉的是 true 那一侧：老配置文件里几乎都写着 true（旧版默认值就落盘了），
+  // 若被新默认值盖掉，升级后所有老用户的实时刷新会一起消失，而界面上只是「卡片不动」
+  it("盘上已有 autoWatch: true 时原样保留，不被新默认值覆盖", () => {
     const file = join(dir, "existing-autowatch.json")
-    writeFileSync(file, JSON.stringify({ roots: ["X:\\a"], autoWatch: false }))
-    expect(loadConfig(file).autoWatch).toBe(false)
+    writeFileSync(file, JSON.stringify({ roots: ["X:\\a"], autoWatch: true }))
+    expect(loadConfig(file).autoWatch).toBe(true)
     expect(loadConfig(file).roots).toEqual(["X:\\a"])
   })
 

@@ -87,6 +87,28 @@ describe("RepoCache", () => {
     expect(c.get("future", "fp-a")).toBeNull()
   })
 
+  // 语义变更同样要升版本，否则修好的算法对**受影响最深的那批用户根本不生效**：
+  // v:1 时代的 mergedBranches 混进了游离 HEAD 的伪条目（`(HEAD detached at v1)`），
+  // 而缓存只按 .git 指纹失效——算错的恰恰是那个长期没人动的仓库（bisect / rebase 残局），
+  // 指纹逐字节相同就一直命中，getRepoHeavy 一次都不跑，脏值原样留在界面上；
+  // 它还一直在 keepIds 里，30 天年龄护栏也剪不掉，持续时间没有上界
+  it("上一个版本（v:2）写入的条目不再被采信，即使指纹完全相同", () => {
+    const file = tmpFile()
+    writeFileSync(
+      file,
+      JSON.stringify({
+        stale: {
+          v: 2,
+          fingerprint: "fp-a",
+          // v:2 时代的脏值：游离 HEAD 停在 feature 尖端时，那条分支本身进了「可清理分支」
+          heavy: { ...heavy, mergedBranches: ["feature"] },
+          seenAt: new Date().toISOString(),
+        },
+      }),
+    )
+    expect(new RepoCache(file).get("stale", "fp-a")).toBeNull()
+  })
+
   it("本版本自己写的条目当然读得回来（版本守卫不能把正常路径一起挡掉）", () => {
     const file = tmpFile()
     const c = new RepoCache(file)

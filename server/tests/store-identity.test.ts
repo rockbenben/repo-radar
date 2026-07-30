@@ -144,6 +144,46 @@ describe("RepoStore + 身份账本", () => {
     expect(fresh.archived).toBe(false)
   })
 
+  /**
+   * E3：`POST /api/new-project` 在 createProject 之后**立刻** rescanFresh，而 createProject
+   * 只做 `git init` + 写 README、**不提交**——铸造那一刻仓库必然零提交，播种只能写下 null。
+   * 此后这条路径每轮都走「路径命中」，永远不进 computedRoot，回写又是
+   * `computedRoot.get(p) ?? prev?.rootCommit ?? null`：于是**经「+ 新建」创建的每一个项目**，
+   * 账本里的根提交终身为 null（自己在扫描根里 git init 同理，watcher 2 秒内触发结构重扫）。
+   * 判据②对它们等于不存在，而 `ino === "0"` 的文件系统上判据①也被整体作废——两条判据都没有，
+   * 一次普通改名就丢标签/收藏/归档/便签。「ino 不可用时靠补算出来的根提交认回老 id」那条
+   * 验收在 repo-identity.test.ts（那里才能把 ino 摁成 "0"），这里钉的是 store 这一侧的接线
+   */
+  it("新建的空仓库提交第一个 commit 后，账本补上根提交（E3）", async () => {
+    const parent = isolatedDir("rr-root-")
+    const repo = join(parent, "brand-new")
+    // 与 createProject 一模一样：mkdir + git init + 写 README，**不提交**
+    execFileSync("git", ["init", "-b", "main", repo])
+    writeFileSync(join(repo, "README.md"), "# brand-new\n")
+    const cfg = configWithRoot(parent)
+    const led = makeLedger()
+    const store = new RepoStore(() => cfg, undefined, undefined, undefined, led)
+
+    const id = (await store.refreshAll()).find((r) => r.path === repo)!.id
+    expect(led.get(id)!.rootCommit).toBeNull() // 铸造那一刻确实一个提交都没有
+    await store.refreshAll() // 还是空仓库的那些轮次：补不出东西，也不该白付 git 进程
+    await store.refreshAll()
+    expect(led.get(id)!.rootCommit).toBeNull()
+
+    execFileSync("git", ["config", "user.email", "t@t.local"], { cwd: repo })
+    execFileSync("git", ["config", "user.name", "t"], { cwd: repo })
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: repo })
+    execFileSync("git", ["add", "-A"], { cwd: repo })
+    execFileSync("git", ["commit", "-m", "c0"], { cwd: repo })
+    const expected = execFileSync("git", ["rev-list", "--max-parents=0", "HEAD"], { cwd: repo, encoding: "utf8" }).trim()
+
+    // 提交之后的轮次：refreshRepo 从 core.oid（status 顺带给的）看出它有提交了，补算一次
+    await store.refreshAll()
+    expect(led.get(id)!.rootCommit).toBe(expected)
+    await store.refreshAll() // 补上之后就不再进补算分支了
+    expect(led.get(id)!.rootCommit).toBe(expected)
+  })
+
   it("新增一个仓库不影响已有仓库的 id", async () => {
     const [parent, a] = repoInOwnRoot("a")
     const cfg = configWithRoot(parent)

@@ -453,6 +453,41 @@ export class IdentityLedger {
     return out
   }
 
+  /**
+   * 补算判据②：铸造那一刻算不出根提交（rootCommit 为 null）的条目，等仓库**长出第一个提交**
+   * 之后补一次。调用方必须先确认「这个仓库现在真的有提交」，见下面的成本段。
+   *
+   * 为什么非补不可：`POST /api/new-project` 创建完仓库**立刻**触发重扫（routes.ts 里
+   * createProject 之后那句 rescanFresh），而 createProject 只做 `git init` + 写 README、
+   * 不提交——那一刻仓库必然零提交，播种只能写下 null。此后这条路径每轮都走「路径命中」，
+   * 根本不进 `computedRoot`，回写又是 `computedRoot.get(p) ?? prev?.rootCommit ?? null`，
+   * 于是**经产品自己那个「+ 新建」按钮创建的每一个项目**，账本里的根提交终身为 null
+   *（用户自己在扫描根里 `git init` 同理：watcher 2 秒内就触发结构重扫）。
+   * 「dev+ino 本来就够用」这条辩护在 `ino === "0"` 的文件系统上不成立——inoKey 对它**整体
+   * 作废判据①**，exFAT / FAT32 / 部分 SMB 共享上的这类仓库两条判据都没有，一次普通改名
+   *（账本的旗舰用例）就丢标签/收藏/归档/便签。
+   *
+   * 成本刻意压成「每个仓库一辈子最多一次额外的 git 进程」，两道闸各挡一半：
+   *  · 空仓库一次都不付——调用方拿 `core.oid`（`git status --porcelain=v2 --branch` 顺带
+   *    给的，不额外 spawn）判断有没有提交，没有就根本不调这里；
+   *  · 算不出唯一根提交时写**空串**而不是留 null。空串在 rootKey 里与 null 同样作废，
+   *    但它是「已经算过」的记号：留 null 的话，多根提交的仓库（`merge --allow-unrelated-
+   *    histories` 之后就是）会在**每一次** refreshOne（文件监听触发，最快每分钟一次）重跑
+   *    `git rev-list --max-parents=0 HEAD`，而那是 O(历史长度) 的命令。代价是一次瞬时失败
+   *    会让这个仓库的判据②永久不可用——那恰好是修改前的现状，不比现状更差
+   */
+  async backfillRootCommit(id: string, path: string, rootCommitOf: (path: string) => Promise<string | null>): Promise<void> {
+    const entry = this.store.get(id)
+    // `?? null` 把老版本写的「缺字段」条目一并算进来：它们的判据②同样是空的，同样该补
+    if (entry === undefined || (entry.rootCommit ?? null) !== null) return
+    const rc = await rootCommitOf(path)
+    // 重读一遍再写：这次 await 期间可能刚跑完一轮 resolve，把这条改写了（认领、搬家、代刷新）。
+    // 拿 await 之前那份 entry 整个覆盖回去，会把那一轮的结论连同 path/dev/ino/gen 一起打回旧值
+    const now = this.store.get(id)
+    if (now === undefined || (now.rootCommit ?? null) !== null) return
+    this.store.set(id, { ...now, rootCommit: rc ?? "" })
+  }
+
   /** 某个 id 的账本条目（只读查看：上次见到的路径、判据值、代） */
   get(id: string): IdentityEntry | undefined {
     return this.store.get(id)

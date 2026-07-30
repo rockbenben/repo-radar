@@ -493,6 +493,88 @@ describe("判据②的播种与同轮次约束", () => {
   })
 })
 
+/**
+ * E3：铸造那一刻算不出根提交的仓库（空仓库）必须有机会补算。
+ *
+ * 这不是「clone 中途」那类偶发——`POST /api/new-project` 在 createProject 之后**立刻**重扫，
+ * 而 createProject 只做 `git init` + 写 README、不提交，那一刻仓库必然零提交。此后这条路径
+ * 每轮都走「路径命中」，永远不进 computedRoot，于是**经「+ 新建」创建的每一个项目**账本里的
+ * 根提交终身为 null。「dev+ino 本来就够用」在 `ino === "0"` 的文件系统（exFAT / FAT32 /
+ * 部分 SMB 共享）上不成立——inoKey 对它**整体作废判据①**，两条判据都没有，一次普通改名
+ *（账本的旗舰用例）就丢标签/收藏/归档/便签
+ */
+describe("空仓库长出提交后补算根提交（E3）", () => {
+  const statZero = () => st(1, 0) // exFAT / FAT32 / 部分 SMB 共享：ino 恒为 0，判据①整体作废
+
+  it("ino 不可用时，新建 → 提交 → 改名靠补算出来的根提交认回老 id（标签因此保住）", async () => {
+    const led = makeLedger(tmpFile())
+    const oldP = "D:/p/brand-new"
+    const newP = "D:/p/renamed"
+
+    // ① 「+ 新建」那一刻：仓库零提交，播种只能写下 null
+    const id = (await resolve(led, [oldP], noRootCommit, statZero)).get(oldP)!
+    expect(led.get(id)!.rootCommit).toBeNull()
+
+    // ② 用户提交了第一个 commit：store 的 refreshRepo 从 core.oid 看出它有提交了，补算一次
+    await led.backfillRootCommit(id, oldP, async () => "rootAAA")
+    expect(led.get(id)!.rootCommit).toBe("rootAAA")
+
+    // ③ 改名：ino 全程为 0 → 判据①作废，只剩判据②。补算之前它是 null，这一步必然铸一个
+    //    全新 id，用户按 id 存的标签/收藏/归档/便签当场全丢
+    expect((await resolve(led, [newP], async () => "rootAAA", statZero)).get(newP)).toBe(id)
+  })
+
+  // 成本护栏：算不出唯一根提交（多根提交的仓库、git 读失败）时写空串而不是留 null。
+  // 空串在 rootKey 里与 null 同样作废（见上面「根提交为空串 → 该判据作废」），但它是「已经
+  // 算过」的记号——留 null 的话，这类仓库会在**每一次** refreshOne（文件监听触发，最快每分钟
+  // 一次）重跑一遍 `git rev-list --max-parents=0 HEAD`，而那是 O(历史长度) 的命令
+  it("算不出唯一根提交时记下空串：每个仓库最多补算一次", async () => {
+    const led = makeLedger(tmpFile())
+    const p = "D:/p/multi-root"
+    const id = (await resolve(led, [p], noRootCommit, statZero)).get(p)!
+    let calls = 0
+    const unusable = async () => {
+      calls++
+      return null // 多根提交（merge --allow-unrelated-histories 之后就是）或 git 读失败
+    }
+    await led.backfillRootCommit(id, p, unusable)
+    await led.backfillRootCommit(id, p, unusable)
+    await led.backfillRootCommit(id, p, unusable)
+    expect(calls).toBe(1)
+    expect(led.get(id)!.rootCommit).toBe("")
+  })
+
+  // 补算不该把账本里别的字段打回旧值：`await rootCommitOf()` 期间，并发的 doRefreshAll 可能
+  // 刚跑完一轮 resolve 改写了这条（认领 / 搬家 / 代刷新）。所以注入的 rootCommitOf 必须**真的**
+  // 在 await 期间改写账本：给个光秃的 `async () => "rootBBB"` 的话，把实现里那道重读守卫拆掉
+  //（拿 await 之前那份 entry 整份写回）这条照样全绿——而守卫护的是真事：整份写回会把 path /
+  // dev / ino / gen 一起打回旧值，byPath 于是指向**旧**路径，下一轮 resolve 把当前路径当成未知
+  // 路径重铸一个新 id，用户的标签/收藏/归档/便签全丢，正是账本存在的全部理由。
+  // 这条用 st(1, 42) 而不是本组的 statZero：并发那一轮要靠判据①（dev+ino）认回同一个 id，
+  // ino 恒为 0 的话它认不回来，改写的就是别人那条，这条用例又什么都没测到
+  it("补算期间并发跑完一轮 resolve（仓库搬了家）：只改 rootCommit，路径与代保持最新值", async () => {
+    const led = makeLedger(tmpFile())
+    const oldP = "D:/p/keep-fields"
+    const newP = "D:/p/keep-fields-moved"
+    const stat = () => st(1, 42)
+    const id = (await resolve(led, [oldP], noRootCommit, stat)).get(oldP)!
+    const before = led.get(id)!
+
+    let mid: ReturnType<typeof led.get>
+    await led.backfillRootCommit(id, oldP, async () => {
+      // 补算这个 git 进程还没回来，用户已经把仓库改了名，而并发的 doRefreshAll 跑完了一轮
+      await resolve(led, [newP], noRootCommit, stat)
+      mid = led.get(id) // 并发那一轮的结论：path/dev/ino/gen 全是新的
+      return "rootBBB"
+    })
+
+    const after = led.get(id)!
+    expect(after).toEqual({ ...mid!, rootCommit: "rootBBB" }) // 只动 rootCommit 这一个字段
+    expect(after.path).toBe(newP) // 不是被 await 之前那份快照打回 oldP
+    expect(after.gen).toBeGreaterThan(before.gen)
+  })
+})
+
 // 路径命中（byPath 直接命中就用老 id）有且只有一个例外：账本里记的 (dev,ino) 与现在对不上，
 // 且本轮恰好有一个未知路径正带着那个老 (dev,ino)。不认这个信号的话，「A 改名成 B + 同一轮里
 // 原路径 A 上又出现一个无关仓库」会让新仓库连人带标签继承 A 的身份，真正的 B 什么都不剩，

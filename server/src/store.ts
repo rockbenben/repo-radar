@@ -109,6 +109,12 @@ export class RepoStore {
     // 不会在正常路径（存在）上引入额外开销。绝不能让卡片静默消失——用户会以为自己删过它。
     if (!existsSync(path)) throw new Error(pathGoneMessage(path, cfg))
     const core = await getRepoCore(path)
+    // 账本里根提交还是空的仓库，在它**有了提交**的这一刻补算一次判据②。触发条件必须便宜，
+    // 而这里正好有现成的信号：core.oid 是上面那次 status 顺带给的（不额外 spawn），空仓库时
+    // 它是 null——空仓库一分钱都不付，补算成功之后也永不再进。放在指纹缓存的命中判断**之前**：
+    // 身份账本和 heavy 字段是两回事，缓存命中的轮次同样要能补上。见 backfillRootCommit：
+    // 不补的话，经「+ 新建」创建的项目终身没有判据②（创建完立刻重扫，那一刻零提交）
+    if (core.oid !== null) await this.identity?.backfillRootCommit(id, path, rootCommit)
     const fp = gitFingerprint(path, core.oid)
     // skipCache 只跳过**读**，仍然照常写回：刚算出来的这份是最新的，下一轮重扫理应命中它
     const cached = skipCache ? null : (this.cache?.get(id, fp) ?? null)
@@ -159,8 +165,12 @@ export class RepoStore {
     // commit/push，refreshOne（文件监听触发）拿到的才是新状态。这里若直接用本轮快照
     // 整份覆盖，X 会被打回扫描时的旧状态，且 watcher 正处冷却期、没有补救事件——
     // 看板凭空「回退」，错误状态能停到下一轮兜底重扫。凡是扫描期间被 refreshOne
-    // 刷过的仓库，一律以 refreshOne 的结果为准（仓库已被本轮移除的除外）
-    for (const [id, s] of this.freshened) if (next.has(id)) next.set(id, s)
+    // 刷过的仓库，一律以 refreshOne 的结果为准（仓库已被本轮移除的除外）。
+    // 注入时同样要过一遍 cfgNow：这批对象是 refreshOne 用它自己那一刻的配置装饰的，
+    // 整份灌回去等于在这条路上把上面那道重装饰防护绕开——配置变化并不总伴随 redecorate
+    // （PUT /api/config 只落盘 + applyConfig，不碰任何仓库状态），那些仓库的分组/标签
+    // 会停在旧值直到下一轮兜底重扫
+    for (const [id, s] of this.freshened) if (next.has(id)) next.set(id, this.decorate(s, cfgNow))
     this.freshened.clear()
     this.repos = next
     // 剪掉本轮扫描已不存在的仓库，避免 baseDesc 随仓库增删/根目录变更无界增长
@@ -176,11 +186,22 @@ export class RepoStore {
     try {
       const fresh = await this.refreshRepo(existing.path, id, cfg, opts.skipCache ?? false)
       this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
-      next = this.decorate(fresh, cfg)
+      // 装饰必须用**现在**的配置，不能用第一个 await 之前读的那份 cfg。这次刷新可能跑的是
+      // 完整 7 个 git 进程的全价路径（批量 pull/自定义命令的收尾、定时后台 fetch 每仓库还要先
+      // 真联网），一批下来是秒级的窗口，用户完全来得及在这期间打 ⭐/加标签/点「排除」——
+      // PATCH meta 已经落盘并广播过新值了。用旧快照装饰出的新状态会覆盖 this.repos 再广播回去：
+      // ⭐ 闪一下就没了、刚打的标签消失、刚排除的仓库又回到看板，磁盘上是新值、界面上是旧值，
+      // 且要错到下一轮 redecorate 或兜底重扫（默认 30 分钟）才恢复。这还会升级成真丢数据——
+      // 前端加标签是拿**当前显示的**数组算全量再 PUT 回去，用户看着标签空了再加一个，
+      // config.json 里原来那个就被永久删掉。doRefreshAll 的收尾早为完全相同的危险做过这道
+      // 防护（见上面的 cfgNow），refreshOne 也必须有。getConfig 只是一次 readFileSync
+      next = this.decorate(fresh, this.getConfig())
     } catch (err) {
       // 必须带上 id：改名后的仓库用的是账本认回的老 id，按路径重算会得出另一个 id，
-      // 于是这条状态的 id 与它在 repos 里的键对不上，装饰时也读不到用户的标签/归档
-      next = this.errorStatus(existing.path, cfg, err, id)
+      // 于是这条状态的 id 与它在 repos 里的键对不上，装饰时也读不到用户的标签/归档。
+      // 配置同样取现在的：出错的仓库照样带着用户的 ⭐/标签/归档显示在看板上，
+      // 这条路径把它们打回旧值和成功路径一样有害
+      next = this.errorStatus(existing.path, this.getConfig(), err, id)
     }
     if (!this.repos.has(id)) return undefined // 全量扫描已移除该仓库，勿复活
     this.repos.set(id, next)
@@ -250,6 +271,7 @@ export class RepoStore {
         dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
         ahead: -1,
         behind: -1,
+        upstream: null,
         stashCount: 0,
         stashOldest: null,
         release: null,

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 
 export interface Config {
@@ -11,7 +11,12 @@ export interface Config {
   notes: Record<string, string>
   archived: string[]
   lastOpened: Record<string, string> // 仓库 id → 上次通过编辑器/终端/目录打开的 ISO 时间
-  autoWatch: boolean // 文件监听实时刷新：默认开启（纯本地、无网络、无打扰），可在面板关闭
+  // 文件监听实时刷新：**默认关闭**，可在面板打开。
+  // 关掉的理由是成本与收益不成比例：一台机器上同时有几个项目在跑构建/测试时，递归监听看得见
+  // scan root 下的一切写入，内核缓冲区持续溢出（实测 74 个仓库、每 62 秒一次，永不停），每次
+  // 溢出都要补一轮全量重扫；而这个工具的用途是「看一眼各仓库什么状态」，秒级实时并不值那笔
+  // 常驻开销。默认路径改为：兜底定时重扫 + 手动点重扫，需要实时的人自己打开
+  autoWatch: boolean
   // 兜底全量重扫间隔（分钟）；0 = 关闭。文件监听不是万无一失的：网络盘 / WSL / OneDrive 这类
   // 同步目录收不全 inotify 事件，机器休眠期间的改动也完全没有事件——低频重扫是补票口
   autoScanMinutes: number
@@ -36,7 +41,7 @@ export const DEFAULT_CONFIG: Config = {
   notes: {},
   archived: [],
   lastOpened: {},
-  autoWatch: true,
+  autoWatch: false,
   autoScanMinutes: 30,
   watchLimit: 200,
   autoFetchMinutes: 0,
@@ -159,9 +164,65 @@ function sanitizeNumber(v: unknown, fallback: number, max = Number.MAX_SAFE_INTE
   return Math.min(Math.floor(v), max)
 }
 
+/**
+ * **解析**不出来的 config.json 挪到一边保住原始字节，返回 true 表示「已保住，可以用默认值继续跑」。
+ *
+ * 只对解析失败调用，绝不对读失败调用（见 loadConfig）：读不出来不代表内容坏了。
+ *
+ * 这里**不能**照搬 json-store 的「坏了当空」：那四个文件丢了最多是慢一轮，而 config.json 装的是
+ * 全部用户数据（tags/favorites/archived/notes/roots/groupOverrides/lastOpened）。当空继续的话，
+ * 下一次 saveConfig —— 点一次「在编辑器打开」就会写一次 lastOpened，窗口频繁 —— 会把一份默认
+ * 配置整份盖上去，用户的标签/收藏/归档从「文件还在、也许救得回来」变成「真的没了」。
+ * 所以先改名保住坏文件（顺带让 config.json 消失，下轮走「文件不存在」→ 默认值），再继续。
+ *
+ * 备份名带时间戳而不是固定后缀：固定后缀的话第二次损坏会覆盖掉第一次那份备份，而第一份往往
+ * 才是数据最全的那份——保住坏文件的整个意义就没了。
+ *
+ * 挪不动（目录只读 / 文件被杀软占住）就返回 false，由调用方抛出：宁可看板 500 让人立刻发现，
+ * 也不能让一份默认配置把用户数据覆盖掉——500 是可恢复的，覆盖不是。
+ */
+function quarantineCorrupt(file: string): boolean {
+  try {
+    const backup = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`
+    renameSync(file, backup)
+    console.error(`[repo-radar] config.json 解析失败，已备份为 ${backup} 并按默认设置继续 / corrupt config backed up`)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function loadConfig(file: string): Config {
-  if (!existsSync(file)) return structuredClone(DEFAULT_CONFIG)
-  const raw = JSON.parse(readFileSync(file, "utf8")) as Partial<Config>
+  // 「读」与「解析」必须分开，且只有**解析**失败才算「文件坏了」。
+  // 合在一个 try 里的话，任何非 ENOENT 的读失败——EACCES / EPERM / EBUSY / EIO / EMFILE，
+  // 杀软或备份进程短暂占住，REPO_RADAR_CONFIG 指向网络盘 / OneDrive 时的瞬时抖动——都会被
+  // 当成损坏：一份**字节完好**的 config.json 被改名成 config.json.corrupt-<时间戳>，返回默认
+  // 配置，下一次 saveConfig（点一次「在编辑器打开」写 lastOpened 就触发）把默认值整份落盘，
+  // 用户的标签/收藏/归档/便签就这么没了；日志还说「解析失败」，把人引去检查一份语法完全
+  // 正确的 JSON。「读不出来 ⇒ 也挪不动 ⇒ 走响亮的 500」这个前提是假的：Windows 上只拒
+  // FILE_READ_DATA 时 DELETE 权限仍在，rename 照常成功；POSIX 上 rename 只看父目录的 w+x，
+  // 从不看文件自身的读权限。
+  // 于是与 automation.ts 的 pathGone、repo-identity.ts 的 pathExists 取同一口径：只有 ENOENT
+  // 算「没有这个文件」，其余读失败一律原样抛出，走 quarantineCorrupt 注释自己选的那条路——
+  // 宁可看板 500 让人立刻发现，也不能让一份默认配置把用户数据覆盖掉：500 是可恢复的，覆盖不是。
+  // 也正因如此不能再用 existsSync 预判：它内部吞掉一切错误，EACCES 同样返回 false，
+  // 「不存在」与「读不了」又会被合成同一个答案，默认配置照样落盘
+  let text: string
+  try {
+    text = readFileSync(file, "utf8")
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return structuredClone(DEFAULT_CONFIG)
+    throw err
+  }
+  let raw: Partial<Config>
+  try {
+    raw = JSON.parse(text) as Partial<Config>
+  } catch (err) {
+    // 不加 try/catch 的话，一次断电留下的截断文件会让这里每轮都抛：RepoStore.getConfig 无人接，
+    // 看板永久 500，用户连「数据还在不在」都看不到
+    if (!quarantineCorrupt(file)) throw err
+    return structuredClone(DEFAULT_CONFIG)
+  }
   const cfg = mergeConfig(structuredClone(DEFAULT_CONFIG), raw)
   cfg.autoScanMinutes = sanitizeNumber(cfg.autoScanMinutes, DEFAULT_CONFIG.autoScanMinutes, MAX_INTERVAL_MINUTES)
   cfg.autoFetchMinutes = sanitizeNumber(cfg.autoFetchMinutes, DEFAULT_CONFIG.autoFetchMinutes, MAX_INTERVAL_MINUTES)
@@ -171,5 +232,12 @@ export function loadConfig(file: string): Config {
 
 export function saveConfig(file: string, config: Config): void {
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(config, null, 2))
+  // 先写同目录的临时文件再 rename，形状与 json-store.ts 的 write() 一致：writeFileSync 是
+  // 「先截断再写」，崩溃/断电正好落在这个窗口里就留下一个截断的 config.json。而这个文件装的是
+  // 全部用户数据，写它的路径有四条（roots / 元信息 / 归档 / lastOpened），其中 lastOpened
+  // 每点一次「在编辑器打开」就写一次——窗口频繁且真实。同目录 rename 在 NTFS 与 POSIX 上
+  // 都是原子替换，读方要么看到旧的完整内容、要么看到新的完整内容，不存在半截状态。
+  const tmp = `${file}.tmp`
+  writeFileSync(tmp, JSON.stringify(config, null, 2), "utf8")
+  renameSync(tmp, file)
 }
