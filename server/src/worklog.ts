@@ -1,4 +1,4 @@
-import { runGit, splitLines } from "./git"
+import { LOG_UTF8, NO_SHOW_SIGNATURE, runGit, splitLines } from "./git"
 import { mapLimit } from "./map-limit"
 
 export interface WorklogCommit {
@@ -57,6 +57,8 @@ export async function getWorklog(
       // HEAD 未出生（orphan 分支刚 checkout、init+fetch 未检出）时带 HEAD 会 exit 128——退回只查 --branches，别把好仓库误报成读取失败。
       // %s 放最后一列：subject 里若混进字面 \x1f 不会把 author/email 串位，多出的段在解析时并回 subject
       const args = (revs: string[]) => [
+        ...NO_SHOW_SIGNATURE,
+        ...LOG_UTF8, // 少了它，工作记录页的 subject/作者名会与详情面板同屏矛盾：那边已是中文，这边是 U+FFFD
         "--no-optional-locks",
         "log",
         ...revs,

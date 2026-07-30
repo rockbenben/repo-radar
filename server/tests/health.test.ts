@@ -11,7 +11,7 @@ function repo(over: Partial<RepoStatus>): RepoStatus {
     archived: false, note: null, lastOpened: null, mergedBranches: [],
     displayName: null, description: null, language: null, branch: "main",
     dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
-    ahead: 0, behind: 0, stashCount: 0,
+    ahead: 0, behind: 0, upstream: null, stashCount: 0,
     remotes: [{ name: "origin", url: "u" }],
     lastCommit: { hash: "h", message: "m", author: "a", date: new Date().toISOString() },
     health: [], githubInbox: null, stashOldest: null, release: null, error: null, scannedAt: "", ...over,
@@ -46,6 +46,10 @@ describe("checkHealth", () => {
   it("no-upstream does not fire for detached or remoteless repos", () => {
     expect(rules(repo({ branch: null, ahead: -1 }))).not.toContain("no-upstream")
     expect(rules(repo({ remotes: [], ahead: -1 }))).not.toContain("no-upstream")
+  })
+  // 上游配着、只是远程分支被删了（ahead 同样是 -1）：说「未跟踪上游」与事实相反
+  it("no-upstream does not fire when the upstream exists but its remote branch is gone", () => {
+    expect(rules(repo({ ahead: -1, behind: -1, upstream: "origin/feat" }))).not.toContain("no-upstream")
   })
   it("stale respects configured threshold and disabledRules disables", () => {
     const c = cfg()

@@ -14,16 +14,28 @@ describe("parseStatus", () => {
       branch: "main",
       ahead: 2,
       behind: 1,
+      upstream: "origin/main",
       dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
       oid: "1234567890abcdef",
     })
   })
 
-  it("returns -1/-1 when no upstream (no branch.ab line)", () => {
+  it("returns -1/-1 with upstream null when no upstream is configured", () => {
     const out = ["# branch.oid abc", "# branch.head main", ""].join("\n")
     const p = parseStatus(out)
     expect(p.ahead).toBe(-1)
     expect(p.behind).toBe(-1)
+    expect(p.upstream).toBeNull()
+  })
+
+  // PR 合并后远程自动删分支 + fetch --prune：git 仍给 branch.upstream，但远程跟踪 ref 没了，
+  // 算不出差距所以没有 branch.ab。只看 ahead 的话这与「没配上游」一模一样，而说这个分支
+  // 「未跟踪上游」既与事实相反，又会把用户推向 git push -u（把刚删掉的远程分支推回去）
+  it("keeps the upstream name when the remote branch is gone (no branch.ab line)", () => {
+    const out = ["# branch.oid abc", "# branch.head feat", "# branch.upstream origin/feat", ""].join("\n")
+    const p = parseStatus(out)
+    expect(p.ahead).toBe(-1)
+    expect(p.upstream).toBe("origin/feat")
   })
 
   it("detects detached HEAD", () => {

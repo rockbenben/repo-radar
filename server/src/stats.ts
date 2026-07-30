@@ -1,4 +1,4 @@
-import { runGit } from "./git"
+import { NO_SHOW_SIGNATURE, runGit } from "./git"
 import { mapLimit } from "./map-limit"
 import type { ActivityItem, HeatmapDay, RepoStatus } from "./types"
 
@@ -26,7 +26,7 @@ export async function repoCommitDays(path: string, repoId: string, sinceDays: nu
     // 按 committer 本地日期（%cI）分桶，与 --since（按 committer date 过滤）保持一致——
     // 否则 rebase 过的提交会通过时间窗口却落在窗口外的格子里，计入总数却不显示。
     // 前端 Heatmap 用浏览器本地日期渲染，同机单用户场景与此一致。
-    const r = await runGit(path, ["log", `--since=${sinceDays} days ago`, "--format=%cI", "--branches"])
+    const r = await runGit(path, [...NO_SHOW_SIGNATURE, "log", `--since=${sinceDays} days ago`, "--format=%cI", "--branches"])
     for (const line of r.stdout.split("\n")) {
       const date = line.trim().slice(0, 10)
       if (date !== "") days.set(date, (days.get(date) ?? 0) + 1)

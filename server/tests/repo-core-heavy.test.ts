@@ -69,6 +69,47 @@ describe("getRepoHeavy", () => {
     expect(heavy.mergedBranches).toEqual(["feature-done"])
   })
 
+  // 不带 base 的 `git branch --merged` 判的是「已合并进 HEAD」。游离 HEAD 停在某条分支的尖端时
+  // （从 git log 复制 sha 去 checkout 是最常见的入口），那条分支对 HEAD 恒成立、而 branch 为 null
+  // 让「排除当前分支」的过滤恒真——它就会出现在「可清理分支」里。那是全应用唯一没有二次确认的
+  // 破坏性按钮，点下去之后没有任何分支能到达那些提交（git fsck: unreachable commit）
+  it("游离 HEAD 停在某条分支尖端时不把那条分支报成可清理", async () => {
+    const repo = makeRepo()
+    git(repo, "checkout", "-b", "feature")
+    writeFileSync(join(repo, "f.txt"), "x")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "feature work")
+    const sha = git(repo, "rev-parse", "HEAD").trim()
+    git(repo, "checkout", "--detach", sha)
+    const { heavy } = await getRepoHeavy(repo, await getRepoCore(repo))
+    expect(heavy.mergedBranches).toEqual([])
+  })
+
+  // 站在 feature 上时「已合并进 HEAD」包括尚未并进主干的 develop——删掉它就只剩 reflog 能找回
+  // 那个分支名。主干叫 dev/trunk（不是字面量 main/master）的仓库里，被报成可清理的就是主干本身
+  it("站在 feature 分支上时不把尚未并进主干的分支报成可清理", async () => {
+    const repo = makeRepo()
+    git(repo, "checkout", "-b", "develop")
+    writeFileSync(join(repo, "d.txt"), "d")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "develop work")
+    git(repo, "checkout", "-b", "feature")
+    const { heavy } = await getRepoHeavy(repo, await getRepoCore(repo))
+    expect(heavy.mergedBranches).toEqual([])
+  })
+
+  // 另一个进入游离 HEAD 的入口：checkout 一个 tag。同样不给列表——游离时没有「相对谁安全」
+  // 可言。（`git branch --merged` 此时还会多打一行伪条目 `(HEAD detached at v1)`；它对切换器
+  // 的影响由 git-status.test.ts 那条用例守着，那里连名字带括号的**真**分支一起钉住了）
+  it("游离 HEAD（checkout tag）时不给可清理分支列表", async () => {
+    const repo = makeRepo()
+    git(repo, "branch", "old-done")
+    git(repo, "tag", "v1")
+    git(repo, "checkout", "v1")
+    const { heavy } = await getRepoHeavy(repo, liveCore(null))
+    expect(heavy.mergedBranches).toEqual([])
+  })
+
   it("从未打过 tag 时 release 为 null", async () => {
     expect((await getRepoHeavy(makeRepo(), liveCore())).heavy.release).toBeNull()
   })

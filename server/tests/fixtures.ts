@@ -22,6 +22,15 @@ export interface MakeRepoOpts {
   commits?: number // 提交数，默认 1；0 = 空仓库（无 HEAD）
 }
 
+/** 宿主仓库 + 一个真的 submodule（本地路径来源，需 protocol.file.allow）。返回宿主路径。 */
+export function makeRepoWithSubmodule(): string {
+  const child = makeRepo({ commits: 1 })
+  const parent = makeRepo({ commits: 1 })
+  git(parent, "-c", "protocol.file.allow=always", "submodule", "add", "-q", child.replace(/\\/g, "/"), "sub")
+  git(parent, "commit", "-m", "add submodule")
+  return parent
+}
+
 export function makeRepo(opts: MakeRepoOpts = {}): string {
   const dir = tempDir("rr-repo-")
   git(dir, "init", "-b", "main")

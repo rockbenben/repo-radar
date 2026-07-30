@@ -88,6 +88,22 @@ describe("stashDiff", () => {
     const dir = repoWithStashes(1)
     expect(await stashDiff(dir, "0".repeat(40))).toBeNull()
   })
+
+  // git 默认 core.quotePath=true 会把路径里的非 ASCII 字节 C-quote 掉，收纳箱里的 diff
+  // 于是变成 `diff --git "a/\344\270\255\346\226\207.md"`
+  it("非 ASCII 文件名原样返回，不是八进制转义", async () => {
+    const dir = makeRepo()
+    const named = "中文-😀.md"
+    writeFileSync(join(dir, named), "v0")
+    git(dir, "add", "-A")
+    git(dir, "commit", "-m", "add-nonascii")
+    writeFileSync(join(dir, named), "v1")
+    git(dir, "stash", "push", "-m", "nonascii")
+    const [entry] = await listStashes(dir)
+    const diff = await stashDiff(dir, entry.sha)
+    expect(diff).toContain(named)
+    expect(diff).not.toMatch(/\\3\d\d/) // 八进制转义的形状，如 \344
+  })
 })
 
 describe("stashAction", () => {

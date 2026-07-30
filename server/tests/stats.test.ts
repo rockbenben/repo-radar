@@ -78,7 +78,7 @@ describe("buildActivity", () => {
       archived: false, note: null, lastOpened: null, mergedBranches: [],
       displayName: null, description: null, language: null, branch: "main",
       dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
-      ahead: 0, behind: 0, stashCount: 0, remotes: [],
+      ahead: 0, behind: 0, upstream: null, stashCount: 0, remotes: [],
       lastCommit: date ? { hash: "h", message: "m", author: "a", date } : null,
       health: [], githubInbox: null, stashOldest: null, release: null, error: null, scannedAt: "",
     }) as RepoStatus

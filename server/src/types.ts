@@ -32,6 +32,17 @@ export interface GithubInbox {
   // prs/issues 的计数口径：true = 已减去当前登录用户自己开的；旧缓存无此字段（undefined）视同「不确定」。
   // desktop/src/notify.ts 用它判断前后两轮的计数是否可比——口径切换时直接做差会全线虚高，必须能识别出来
   byViewer?: boolean
+  // 累计「新到达」数：每轮 max(0, 本轮 - 上轮) 累加，只增不减。**不是 GitHub 返回的字段**，
+  // 由 InboxCache.getWithArrivals 附加（缓存条目上记账，见 inbox-cache.ts）。
+  //
+  // 存在的理由：前端队列的「已处理」水位存在浏览器 localStorage 里，而把水位往下调只发生在
+  // 渲染进程活着、且恰好观察到那次下探的时候（web/src/App.tsx 的清理 effect）。托盘常驻
+  // （--tray / 开机自启）恰恰是「没有渲染进程」的形态：4 个 PR 全被合掉（差值 ≤ 0，不弹通知，
+  // 也没有任何人下调水位）、随后来了 2 个新的 → 系统通知「PR +2」照弹，用户点进来，前端却按
+  // 2 ≤ 4 判定为已处理，「该你了」里根本没有这条，而且清理 effect 紧接着把水位降到 2，
+  // 2 ≤ 2 依然成立——再也不会出现。计数在服务端累加之后，通知与队列读的是同一条数据链。
+  prsAdded?: number
+  issuesAdded?: number
 }
 
 export interface RepoStatus {
@@ -50,8 +61,9 @@ export interface RepoStatus {
   mergedBranches: string[] // 已合并进 HEAD、可安全清理的本地分支（不含当前分支与 main/master）
   branch: string | null // null = detached HEAD
   dirty: DirtyCounts
-  ahead: number // -1 = 无 upstream
-  behind: number // -1 = 无 upstream
+  ahead: number // -1 = 无 upstream，或配了上游但远程分支已被删（此时 upstream 非 null）
+  behind: number // -1 = 同上
+  upstream: string | null // 配置的上游分支名；null = 真的没配上游
   stashCount: number
   stashOldest: string | null // 最老一条 stash 的提交时间（ISO）；null = 无 stash。用于「搁了多久」提醒
   // 发版雷达：最新 tag 之后主干堆了多少提交。null = 从未打过 tag（没有发版习惯的仓库不提醒）

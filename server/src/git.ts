@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { basename } from "node:path"
 import type { CommitInfo, DirtyCounts, RemoteInfo, RepoStatus } from "./types"
+import { mapLimit } from "./map-limit"
 import { readRepoMeta } from "./meta"
 import { detectLanguage } from "./lang"
 
@@ -23,6 +24,46 @@ export class GitError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 30_000
 
+/**
+ * 凡是**输出路径**的 git 命令都要带上它（全局参数，必须放在子命令之前）。git 默认
+ * core.quotePath=true，会把路径里的非 ASCII 字节 C-quote 掉：中文/emoji/重音文件名在详情面板
+ * 显示成 "caf\303\251.md"，diff 头是 `diff --git "a/\344\270\255\346\226\207…"`——
+ * 而本应用的目标用户就是多语言仓库，这属于日常状态而非边角情形。
+ *
+ * 它只关掉**非 ASCII** 的转义：含 `"` / `\` / 控制字符的路径仍会被引号包起来，那是必须保留的
+ * 行为（否则带换行的文件名会把逐行解析的输出撑破），别改成任何「全量不转义」的写法。
+ * 分支名和 tag 名不受 quotePath 影响（实测裸 UTF-8），所以范围只有 diff / ls-files / stash show。
+ */
+const QUOTE_PATH_OFF = ["-c", "core.quotePath=false"]
+
+/**
+ * 每一条 `git log` 都要带上：用户 gitconfig 里 `log.showSignature=true`（签名提交的人常开）时，
+ * git 会在**每条**提交的 --format 输出之前往 stdout 插一行验签结果（`Good "git" signature…`
+ * 或 `No signature`）。四处 git log 全是「一行 = 一条提交」的解析，于是 3 条提交解析成 6 条，
+ * 一半是 hash 为 "No signature"、message/author/date 全 undefined 的空条目——详情面板的
+ * 「最近提交」和卡片预览里每条真提交后面夹一条空行，时间渲染成「刚刚」，React key 还撞。
+ */
+export const NO_SHOW_SIGNATURE = ["-c", "log.showSignature=false"]
+
+/**
+ * 凡是输出**提交信息/作者名/stash 说明**的 log 家族命令都要带上。用户在 gitconfig 里设
+ * `i18n.logOutputEncoding=GBK`（中文 Windows 用户治 git log 乱码的标准做法，日文对应 cp932）
+ * 之后，git 按该编码输出字节，而 runGit 无条件 setEncoding("utf8")，每个汉字都成 U+FFFD。
+ *
+ * 更糟的是它会被固化：lastCommit 在 RepoHeavy 里、git 退出码是 0 所以不算 degraded，这份乱码
+ * 连同指纹一起写进 repo-cache.json。用户事后改回 gitconfig 也没用——指纹没变就一直命中坏缓存。
+ */
+export const LOG_UTF8 = ["-c", "i18n.logOutputEncoding=UTF-8"]
+
+/**
+ * diff 类命令必须带：用户设了 `color.ui=always` / `color.diff=always` 之后，git 即便在管道里
+ * 也会上色，ANSI 转义进入被逐行解析的 diff 文本。前端按 `+`/`-`/`@@` 前缀上色（DetailPanel），
+ * 行首变成 ESC 之后三个判据全落空——红绿高亮整个死掉，用户看到的是每行都挂着字面量 `[1m`。
+ *
+ * 必须用 `--no-color` 而不是 `-c color.ui=false`：后者压不住更具体的 `color.diff`（实测转义仍在）。
+ */
+const NO_COLOR = ["--no-color"]
+
 export function runGit(cwd: string, args: string[], timeoutMs = DEFAULT_TIMEOUT_MS, extraEnv?: Record<string, string>): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, { cwd, windowsHide: true, env: extraEnv ? { ...process.env, ...extraEnv } : undefined })
@@ -36,6 +77,15 @@ export function runGit(cwd: string, args: string[], timeoutMs = DEFAULT_TIMEOUT_
     // 逐 chunk Buffer.toString 会把边界上的字符各解各的、两边都成 U+FFFD（>64KB 的中文 log/diff 必现）
     child.stdout.setEncoding("utf8")
     child.stderr.setEncoding("utf8")
+    // 管道自身的 'error' 必须有人听。cwd 超过 Windows MAX_PATH(260) 时 spawn 是在**管道已建立
+    // 之后**才失败的，stdout/stderr 各 emit 一次 `read ENOTCONN`；无人监听的流 error 会被 Node
+    // 升级成进程级 uncaughtException，desktop 那边的兜底随即弹「repo-radar 遇到问题」并 exit(1)。
+    // 而这条路径在启动扫描里必经——扫描根下只要有一个超长路径的仓库，应用每次启动都在同一处
+    // 死掉，对话框里只有 `read ENOTCONN`，既不指出哪个仓库也不提路径长度，面板起不来也没法移除它。
+    // 失败原因由下面 child.on("error") 的 GitError 如实上报，这里是重复信息，空监听即可。
+    // 实测阈值精确为 260：259 字符干净走 child error，260 起必现两条 uncaught。
+    child.stdout.on("error", () => {})
+    child.stderr.on("error", () => {})
     child.stdout.on("data", (d: string) => (stdout += d))
     child.stderr.on("data", (d: string) => (stderr += d))
     child.on("error", (err) => {
@@ -112,6 +162,10 @@ export interface ParsedStatus {
   branch: string | null
   ahead: number
   behind: number
+  // 配置的上游（`# branch.upstream origin/x`），没配则为 null。
+  // 光看 ahead/behind 分不出「没配上游」和「配了但远程分支已被删」——后者 git 照样给
+  // branch.upstream、但给不出 branch.ab（远程跟踪 ref 没了，算不出差距），于是两种都是 -1
+  upstream: string | null
   dirty: DirtyCounts
   // HEAD 的 commit oid。git 一直在 `--branch` 的输出里给这一行，以前没解析。
   // 指纹要用它判断「这个仓库自上轮以来有没有新提交」——白拿，不增加任何 git 调用。
@@ -123,6 +177,7 @@ export function parseStatus(out: string): ParsedStatus {
   let branch: string | null = null
   let ahead = -1
   let behind = -1
+  let upstream: string | null = null
   let oid: string | null = null
   const dirty: DirtyCounts = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 }
   for (const line of out.split("\n")) {
@@ -132,6 +187,8 @@ export function parseStatus(out: string): ParsedStatus {
     } else if (line.startsWith("# branch.head ")) {
       const head = line.slice("# branch.head ".length)
       branch = head === "(detached)" ? null : head
+    } else if (line.startsWith("# branch.upstream ")) {
+      upstream = line.slice("# branch.upstream ".length).trim() || null
     } else if (line.startsWith("# branch.ab ")) {
       const m = /\+(\d+) -(\d+)/.exec(line)
       if (m) {
@@ -148,7 +205,7 @@ export function parseStatus(out: string): ParsedStatus {
       dirty.untracked++
     }
   }
-  return { branch, ahead, behind, dirty, oid }
+  return { branch, ahead, behind, upstream, dirty, oid }
 }
 
 export function parseRemotes(out: string): RemoteInfo[] {
@@ -173,6 +230,27 @@ export interface RepoDetail {
   remoteBranches: string[] // 远程独有分支（本地没有同名的），检出时 git 自动建跟踪分支
 }
 
+const HEADS_PREFIX = "refs/heads/"
+
+/**
+ * `git branch --format=%(refname)` 的输出 → 本地分支名。
+ *
+ * 必须用 %(refname) 而不是 %(refname:short)：游离 HEAD / rebase 进行中时 `git branch` 会多打
+ * 一行伪条目（`(HEAD detached at v1)`、`(no branch, rebasing feat)`），在 :short 下它就是那串
+ * 裸文本，会被当成真分支混进「可清理分支」和分支切换器——点清理必然报
+ * `error: branch '(HEAD detached at v1)' not found`，切换过去是 `fatal: invalid reference`。
+ * 而此时 parseStatus 给出的 branch 是 null，`b !== branch` 那道本该剔除当前 HEAD 的过滤对它恒真。
+ *
+ * 判据取 refs/heads/ 前缀而不是「丢掉 ( 开头的名字」：`git branch '(weird)'` 是合法分支，
+ * 它的 %(refname) 是 refs/heads/(weird)，那个启发式会误杀真分支。伪条目没有 refname，
+ * git 原样打出那串裸文本，所以前缀判据是无损的。
+ */
+function localBranchNames(r: GitResult): string[] {
+  return splitLines(r)
+    .filter((l) => l.startsWith(HEADS_PREFIX))
+    .map((l) => l.slice(HEADS_PREFIX.length))
+}
+
 // 分支排序：main/master 置顶，其余字母序
 function sortBranches(list: string[]): string[] {
   const rank = (b: string) => (b === "main" || b === "master" ? 0 : 1)
@@ -180,7 +258,7 @@ function sortBranches(list: string[]): string[] {
 }
 
 async function recentCommitsOf(path: string): Promise<CommitInfo[]> {
-  return runGit(path, ["log", "-10", "--format=%H%x1f%s%x1f%an%x1f%aI"])
+  return runGit(path, [...NO_SHOW_SIGNATURE, ...LOG_UTF8, "log", "-10", "--format=%H%x1f%s%x1f%an%x1f%aI"])
     .then((r) =>
       splitLines(r).map((line) => {
         const [hash, message, author, date] = line.split("\x1f")
@@ -199,7 +277,7 @@ export async function getRepoDetail(path: string, commitsOnly = false): Promise<
   const [recentCommits, stashes, localBranches, remoteRaw] = await Promise.all([
     recentCommitsOf(path),
     listStashes(path), // 结构化 stash（含 sha/分支/改动量），供详情面板直接操作
-    runGit(path, ["--no-optional-locks", "branch", "--format=%(refname:short)"]).then(splitLines).catch(() => []),
+    runGit(path, ["--no-optional-locks", "branch", "--format=%(refname)"]).then(localBranchNames).catch(() => []),
     runGit(path, ["--no-optional-locks", "branch", "-r", "--format=%(refname:short)"]).then(splitLines).catch(() => []),
   ])
   const branches = sortBranches(localBranches)
@@ -243,12 +321,30 @@ export async function createBranch(path: string, name: string): Promise<{ ok: bo
   }
 }
 
+// code 与 CommitCode 同一约定：稳定枚举供前端按语言组装文案，message 保留中文原文作日志/回退
+export type DiscardCode = "discarded" | "outOfScope" | "unbornHead" | "error"
+export interface DiscardResult {
+  ok: boolean
+  code: DiscardCode
+  message: string
+}
+
 /**
  * 丢弃全部未提交改动：reset --hard HEAD（还原已跟踪的改动/删除）+ clean -fd（删未跟踪文件/目录，
  * 但保留 .gitignore 忽略项，不加 -x 以免误删 node_modules/.env 等）。**不可恢复**。
  */
-export async function discardChanges(path: string): Promise<{ ok: boolean; message: string }> {
+export async function discardChanges(path: string): Promise<DiscardResult> {
+  // --untracked-files=normal 与 getRepoCore 那条同理，缺了它整个复核会被 gitconfig 的
+  // status.showUntrackedFiles=no 架空：`? ` 行全没了，before 与 residual 双双是空串，
+  // 下面 nothingChanged 里的 `residual !== ""` 一票否决——纯嵌套仓库场景又会报绿色成功
+  const readStatus = () =>
+    runGit(path, ["--no-optional-locks", "status", "--porcelain=v2", "--untracked-files=normal"])
+      .then((r) => r.stdout)
+      .catch(() => null)
   try {
+    // 动手之前的快照。只看「之后还剩什么」分不出「丢干净了，剩的是 git 碰不了的」与「一个字节
+    // 都没丢，剩的还是原样」——后者要报成功就成了空口宣告（见下方判据）
+    const before = await readStatus()
     try {
       await runGit(path, ["reset", "--hard", "HEAD"], COMMIT_TIMEOUT_MS)
     } catch (resetErr) {
@@ -256,15 +352,56 @@ export async function discardChanges(path: string): Promise<{ ok: boolean; messa
       // 若仓库其实有提交（rev-parse 偶发失败等），此时 read-tree --empty + clean 会把已提交文件当未跟踪删掉，
       // 是灾难性的，绝不能做：有任何不确定（rev-list 非空或本身失败）就抛出原错误、如实报失败。
       const noCommits = await runGit(path, ["rev-list", "-n", "1", "--all"]).then((r) => r.stdout.trim() === "").catch(() => false)
-      if (!noCommits) throw resetErr
+      if (!noCommits) {
+        // HEAD 未出生但仓库别处有提交 = orphan 分支（`git switch --orphan gh-pages`）。这里**不**放宽
+        // 上面那条判据去走空仓库路径：那条路会 read-tree --empty + clean -fd 把整个工作区清空，而
+        // rev-list 的偏执正是在挡这个。只把 git 的内部术语（`fatal: ambiguous argument 'HEAD'`）换成
+        // 一句用户看得懂的话——判据用 rev-parse 而不是匹配报错文本，git 的报错是会本地化的
+        const headBorn = await runGit(path, ["rev-parse", "--verify", "HEAD"]).then(() => true).catch(() => false)
+                  // 必须是**独立的 code**，不能塞进 code:"error"：那条 code 的不变量是「message 就是 git 原始
+        // 输出」，前端 msg.discardFail 的 {err} 透传正建立在它上面。塞一句中文进去，18 种语言的
+        // 用户都会读到中文——而改之前那里是 git 自己的报错，git 的报错**是**走 gettext 本地化的
+        if (!headBorn) return { ok: false, code: "unbornHead", message: "当前分支还没有提交（orphan 分支），这里暂不支持丢弃改动" }
+        throw resetErr
+      }
       // 确属空仓库：清空暂存区让已 add 的文件转未跟踪，交给下面 clean 删除（否则「丢弃」会漏掉暂存的新文件）。
       await runGit(path, ["read-tree", "--empty"], COMMIT_TIMEOUT_MS)
     }
-    await runGit(path, ["clean", "-fd"], COMMIT_TIMEOUT_MS)
-    return { ok: true, message: "已丢弃未提交改动" }
+    // clean 单独 try：走到这里 reset 已经成功，已跟踪的改动是**真的、不可恢复地**没了。把 clean
+    // 的失败交给最外层 catch 会返回一句笼统的「丢弃失败：warning: failed to remove locked.txt」——
+    // 唯一的动词是 warning、主语是个未跟踪文件，用户读完的结论是「什么都没发生」，于是不会去重做
+    // 那份工作。那是真实的数据丢失被一句错误提示盖住。Windows 上触发它只需要一个被别的进程
+    // 打开的未跟踪文件，或一个正被终端/dev server 当作 CWD 的未跟踪目录。
+    // 注意这里**不动 ok 的边界**：clean 失败以前返回 ok:false，现在仍然是 ok:false，只是在
+    // ok:false 内部换个更准的分类，没有任何路径的成败判定被挪动。
+    let cleanFailed: string | null = null
+    try {
+      await runGit(path, ["clean", "-fd"], COMMIT_TIMEOUT_MS)
+    } catch (cleanErr) {
+      cleanFailed = gitErrMessage(cleanErr)
+    }
+    // 复核一次再宣告成功。两类东西这两条 git 根本碰不到，而弹窗刚承诺「将丢弃 N 处未提交改动」：
+    //   · submodule 里的改动——`reset --hard` 不递归进去。porcelain v2 用 sub 字段首字符 S 标记
+    //     （`1 .M S.M. … sub`）。
+    //   · 未跟踪的**嵌套 git 仓库**——`clean -fd` 对它们静默跳过（退出 0、无输出、条目原样留着）。
+    //     它是 `? ` 行，与普通未跟踪目录长得一模一样，认不出来。
+    // 所以判据分两支：看得见 submodule 残留，或者**整份 status 一个字节都没变**（等于什么都没丢）。
+    // 只用后者不够——真改动 + 嵌套仓库并存时 status 变了、但仍有东西没丢；只用前者也不够——
+    // 纯嵌套仓库时 status 没变却会报绿色成功，用户能一直点下去而磁盘毫无变化。
+    // 复核本身读不到时不翻案（那两条 git 已经成功了）。
+    const residual = await readStatus()
+    const stuck = residual === null ? 0 : residual.split("\n").filter((l) => /^[12] \S+ S/.test(l)).length
+    const nothingChanged = residual !== null && residual !== "" && residual === before
+    if (stuck > 0 || nothingChanged || cleanFailed !== null) {
+      // message 只作日志与兜底；界面按 code 走 i18n。文案必须与**原因无关**——这个分支现在同时
+      // 覆盖 submodule 残留、纯嵌套仓库、clean 失败三种，把原因写死在句子里，每多一种就要再改
+      // 一遍 18 份文案，而漏改的那次用户会看到一句与实际原因不符的解释
+      return { ok: false, code: "outOfScope", message: cleanFailed ?? "有一部分改动这次没能丢弃" }
+    }
+    return { ok: true, code: "discarded", message: "已丢弃未提交改动" }
   } catch (err) {
     const msg = gitErrMessage(err)
-    return { ok: false, message: msg }
+    return { ok: false, code: "error", message: msg }
   }
 }
 
@@ -286,23 +423,38 @@ export interface StashEntry {
 // 加一个上限，长期运行也不会无界增长（stash 丢弃后其 sha 条目留着是无害的，命中即失效由 sha 唯一性保证）。
 const stashStatCache = new Map<string, { files: number; insertions: number; deletions: number }>()
 const STASH_STAT_CACHE_MAX = 2000
+// 单仓库内 `git stash show` 的并发上限。取 8 与 routes.ts 那层的仓库并发一致：两层相乘后
+// 峰值有界（8 × 8），而不是「仓库数 × 每仓 stash 数」那样跟着用户的 stash 堆积无限长
+const STASH_STAT_CONCURRENCY = 8
 
 // `git stash show --include-untracked` 需 git ≥ 2.32。探测一次 git 版本并缓存，避免每条 stash 都「带 flag 失败再重试」的双倍进程。
 let untrackedSupported: boolean | null = null
+// 在飞探测：K 条 stash 在同一 tick 里全看到 untrackedSupported === null，各自 spawn 一个
+// `git --version`，探测本身就成了它要省的那种进程扇出。与 github.ts 的 viewerInFlight 同一形状。
+let untrackedProbe: Promise<boolean> | null = null
 async function includeUntrackedSupported(cwd: string): Promise<boolean> {
   if (untrackedSupported !== null) return untrackedSupported
-  const v = await runGit(cwd, ["--version"]).then((r) => r.stdout).catch(() => null)
-  // 探测本身失败（spawn 抖动、被杀毒锁住等）：本次保守不带 flag，但**不缓存**——否则一次抖动会永久降级，
-  // 之后所有 stash show 都漏掉未跟踪内容（未跟踪-only 的 stash 会误报 files:0），直到重启。下次再探即可。
-  if (v === null) return false
-  const m = v.match(/(\d+)\.(\d+)/)
-  // 解析出版本才缓存；解析不出（异常输出）当「不支持」并缓存：安全地少一份未跟踪统计，而不是带 flag 失败
-  untrackedSupported = m ? Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 32) : false
-  return untrackedSupported
+  if (untrackedProbe) return untrackedProbe
+  untrackedProbe = (async () => {
+    try {
+      const v = await runGit(cwd, ["--version"]).then((r) => r.stdout).catch(() => null)
+      // 探测本身失败（spawn 抖动、被杀毒锁住等）：本次保守不带 flag，但**不缓存**——否则一次抖动会永久降级，
+      // 之后所有 stash show 都漏掉未跟踪内容（未跟踪-only 的 stash 会误报 files:0），直到重启。下次再探即可。
+      if (v === null) return false
+      const m = v.match(/(\d+)\.(\d+)/)
+      // 解析出版本才缓存；解析不出（异常输出）当「不支持」并缓存：安全地少一份未跟踪统计，而不是带 flag 失败
+      untrackedSupported = m ? Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 32) : false
+      return untrackedSupported
+    } finally {
+      untrackedProbe = null // 失败那次不缓存结论，清掉在飞句柄才能下次重探
+    }
+  })()
+  return untrackedProbe
 }
 // 按探测到的版本决定是否带 --include-untracked；不做「失败即退回」的兜底重试——那会把真错误掩盖成「diff 无未跟踪内容」。失败直接抛。
 async function stashShow(path: string, extra: string[], ref: string): Promise<GitResult> {
-  const args = ["--no-optional-locks", "stash", "show"]
+  // -c core.quotePath=false：见 QUOTE_PATH_OFF。stash diff 里的中文/emoji 文件名否则是 "\344\270\255…"
+  const args = [...QUOTE_PATH_OFF, "--no-optional-locks", "stash", "show", ...NO_COLOR]
   if (await includeUntrackedSupported(path)) args.push("--include-untracked")
   args.push(...extra, ref)
   return runGit(path, args)
@@ -310,45 +462,48 @@ async function stashShow(path: string, extra: string[], ref: string): Promise<Gi
 
 /** 列出单个仓库的全部 stash（含改动量统计）。任一步失败都退化为空/零，绝不抛。 */
 export async function listStashes(path: string): Promise<StashEntry[]> {
-  const r = await runGit(path, ["--no-optional-locks", "stash", "list", `--format=%H${STASH_SEP}%gd${STASH_SEP}%cI${STASH_SEP}%gs`]).catch(() => null)
+  const r = await runGit(path, [...LOG_UTF8, "--no-optional-locks", "stash", "list", `--format=%H${STASH_SEP}%gd${STASH_SEP}%cI${STASH_SEP}%gs`]).catch(() => null)
   if (r === null) return []
   const rows = splitLines(r).map((line) => {
     const [sha, ref, date, message] = line.split(STASH_SEP)
     const bm = message?.match(/^(?:WIP on|On) ([^:]+):/)
     return { sha, ref, date: date ?? "", message: message ?? "", branch: bm ? bm[1] : null }
   })
-  return Promise.all(
-    rows.map(async (row) => {
-      const cached = stashStatCache.get(row.sha)
-      if (cached) return { ...row, ...cached }
-      let files = 0
-      let insertions = 0
-      let deletions = 0
-      let ok = false
-      try {
-        // 用 sha（stash 提交号）而非 stash@{n}：并发 drop/pop 重新编号时统计不会张冠李戴，且与缓存 key（row.sha）一致
-        const st = await stashShow(path, ["--numstat"], row.sha)
-        for (const line of splitLines(st)) {
-          const [add, del] = line.split("\t")
-          files++
-          if (add !== undefined && add !== "-") insertions += Number(add) || 0
-          if (del !== undefined && del !== "-") deletions += Number(del) || 0
-        }
-        ok = true
-      } catch {
-        /* 统计失败则记 0 且不缓存（下次重试）*/
+  // 限并发，不用 Promise.all：每条 stash 一个 `git stash show` 子进程，裸 Promise.all 的峰值是
+  // 「本仓库的 stash 条数」，而 routes.ts 那层的 mapLimit(repos, 8) 只掐住了仓库这一维——
+  // 实测峰值 = min(仓库数,8) × 每仓 stash 数（单仓 120 条 → 120 个并发 git；8 仓 × 25 条 → 200 个）。
+  // 打开「收纳箱」或任一详情面板即触发，整机卡几秒；进程受限时 spawn 失败，而统计失败的降级是
+  // 静默记 0，那些 stash 会在收纳箱里显示成「0 文件 / 0 行」——收纳箱正好提供批量丢弃。
+  return mapLimit(rows, STASH_STAT_CONCURRENCY, async (row) => {
+    const cached = stashStatCache.get(row.sha)
+    if (cached) return { ...row, ...cached }
+    let files = 0
+    let insertions = 0
+    let deletions = 0
+    let ok = false
+    try {
+      // 用 sha（stash 提交号）而非 stash@{n}：并发 drop/pop 重新编号时统计不会张冠李戴，且与缓存 key（row.sha）一致
+      const st = await stashShow(path, ["--numstat"], row.sha)
+      for (const line of splitLines(st)) {
+        const [add, del] = line.split("\t")
+        files++
+        if (add !== undefined && add !== "-") insertions += Number(add) || 0
+        if (del !== undefined && del !== "-") deletions += Number(del) || 0
       }
-      const stat = { files, insertions, deletions }
-      // 只在版本探测「有定论」时缓存：探测瞬时失败的那一轮没带 --include-untracked，
-      // 统计可能漏掉未跟踪内容——按 sha 永久缓存会让「纯未跟踪的 stash」永远显示 0 文件，
-      // 用户当空 stash 批量丢弃就真丢数据了。无定论则本轮先用、下轮重算。
-      if (ok && untrackedSupported !== null) {
-        if (stashStatCache.size >= STASH_STAT_CACHE_MAX) stashStatCache.clear() // 到上限整体清空，避免无界增长
-        stashStatCache.set(row.sha, stat)
-      }
-      return { ...row, ...stat }
-    }),
-  )
+      ok = true
+    } catch {
+      /* 统计失败则记 0 且不缓存（下次重试）*/
+    }
+    const stat = { files, insertions, deletions }
+    // 只在版本探测「有定论」时缓存：探测瞬时失败的那一轮没带 --include-untracked，
+    // 统计可能漏掉未跟踪内容——按 sha 永久缓存会让「纯未跟踪的 stash」永远显示 0 文件，
+    // 用户当空 stash 批量丢弃就真丢数据了。无定论则本轮先用、下轮重算。
+    if (ok && untrackedSupported !== null) {
+      if (stashStatCache.size >= STASH_STAT_CACHE_MAX) stashStatCache.clear() // 到上限整体清空，避免无界增长
+      stashStatCache.set(row.sha, stat)
+    }
+    return { ...row, ...stat }
+  })
 }
 
 // 一次列出「sha → 当前 stash@{n}」映射。按 sha 定位不受丢弃/弹出后的重新编号影响。
@@ -510,12 +665,13 @@ export interface RepoDiff {
 
 export async function getRepoDiff(path: string): Promise<RepoDiff> {
   let diff = ""
+  // 三条命令都带 QUOTE_PATH_OFF：diff 头和未跟踪列表都是**路径**，不带就是一屏八进制转义
   try {
-    const r = await runGit(path, ["--no-optional-locks", "diff", "HEAD"])
+    const r = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "diff", ...NO_COLOR, "HEAD"])
     diff = r.stdout
   } catch {
     try {
-      const r = await runGit(path, ["--no-optional-locks", "diff"])
+      const r = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "diff", ...NO_COLOR])
       diff = r.stdout
     } catch {
       diff = ""
@@ -524,7 +680,7 @@ export async function getRepoDiff(path: string): Promise<RepoDiff> {
   if (diff.length > DIFF_MAX_CHARS) {
     diff = diff.slice(0, DIFF_MAX_CHARS) + "\n… (diff 已截断)"
   }
-  const untracked = await runGit(path, ["--no-optional-locks", "ls-files", "--others", "--exclude-standard"])
+  const untracked = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "ls-files", "--others", "--exclude-standard"])
     .then((r) => r.stdout.split("\n").filter((line) => line !== ""))
     .catch(() => [])
   return { diff, untracked }
@@ -569,6 +725,7 @@ export interface RepoCore {
   dirty: DirtyCounts
   ahead: number
   behind: number
+  upstream: string | null
   oid: string | null
 }
 
@@ -595,9 +752,9 @@ export interface RepoHeavy {
 /** 1 个 git 进程。status 失败（非 git 目录、git 缺失）直接抛出，由调用方决定如何降级。
  *  --no-optional-locks：读状态时不刷新/写 .git/index，避免触发文件监听的自反馈 */
 export async function getRepoCore(path: string): Promise<RepoCore> {
-  const status = await runGit(path, ["--no-optional-locks", "status", "--porcelain=v2", "--branch"])
+  const status = await runGit(path, ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"])
   const parsed = parseStatus(status.stdout)
-  return { branch: parsed.branch, dirty: parsed.dirty, ahead: parsed.ahead, behind: parsed.behind, oid: parsed.oid }
+  return { branch: parsed.branch, dirty: parsed.dirty, ahead: parsed.ahead, behind: parsed.behind, upstream: parsed.upstream, oid: parsed.oid }
 }
 
 /**
@@ -678,13 +835,13 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
     })(),
     // 无远程时 0 退出 + 空输出，所以抛出一律是真失败——这正是 H2 里那条坏缓存的入口
     runGit(path, ["remote", "-v"]).then((r) => parseRemotes(r.stdout)).catch(() => degrade([] as RemoteInfo[])),
-    runGit(path, ["log", "-1", "--format=%H%x00%s%x00%an%x00%aI"])
+    runGit(path, [...NO_SHOW_SIGNATURE, ...LOG_UTF8, "log", "-1", "--format=%H%x00%s%x00%an%x00%aI"])
       .then((r) => parseLastCommit(r.stdout))
       // 空仓库无 HEAD 时 git log 非零退出，那是「还没有提交」这个正确答案；有提交却读不出来才是降级
       .catch(() => (hasCommits ? degrade(null) : null)),
     // --format 必须在 --merged 之前：否则 git 会把 --format=… 当成 --merged 的 commit 参数而报错
-    runGit(path, ["branch", "--format=%(refname:short)", "--merged"])
-      .then((r) => r.stdout.split("\n").map((s) => s.trim()).filter(Boolean))
+    runGit(path, ["branch", "--format=%(refname)", "--merged"])
+      .then(localBranchNames)
       // 同上：无 HEAD 时 --merged 无从解析（实测 fatal: malformed object name HEAD），是正当空结果
       .catch(() => (hasCommits ? degrade([] as string[]) : [])),
   ])
@@ -695,8 +852,14 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
       release,
       remotes,
       lastCommit,
-      // 可安全清理的已合并分支：排除当前分支与主干（main/master）
-      mergedBranches: mergedRaw.filter((b) => b !== branch && b !== "main" && b !== "master"),
+      // 可安全清理的已合并分支。**只有站在主干上时才判得准**：不带 base 的 `--merged` 判的是
+      // 「已合并进 HEAD」，站在 feature 上时它会把尚未并进主干的 develop 也算进来；游离 HEAD 时
+      // 更糟——parseStatus 给出 branch=null，下面那道剔除当前分支的过滤恒真，于是**你正站着的
+      // 那条分支**进了列表，而「清理已合并分支」是全应用唯一没有二次确认的破坏性按钮，一点下去
+      // 那些提交就没有任何分支能到达（实测 git fsck 报 unreachable，只剩 reflog 兜 90 天）。
+      // 主干只认 main/master——这一行原本就是这么假设的（按名字排除的正是这两个）。
+      // 判不出「相对谁安全」时就不给列表：不做无法证实的安全承诺。
+      mergedBranches: branch === "main" || branch === "master" ? mergedRaw.filter((b) => b !== "main" && b !== "master") : [],
     },
     degraded,
   }
@@ -732,6 +895,7 @@ export function composeStatus(path: string, id: string, core: RepoCore, heavy: R
     dirty: core.dirty,
     ahead: core.ahead,
     behind: core.behind,
+    upstream: core.upstream,
     stashCount: heavy.stashCount,
     stashOldest: heavy.stashOldest,
     release: heavy.release,

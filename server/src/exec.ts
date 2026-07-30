@@ -54,6 +54,9 @@ export function runCommand(cwd: string, command: string, timeoutMs = EXEC_TIMEOU
     // setEncoding 走 StringDecoder：中文构建日志跨 chunk 边界不会两头解成乱码（逐 chunk toString 会）
     child.stdout?.setEncoding("utf8")
     child.stderr?.setEncoding("utf8")
+    // 管道自身的 error 要有人听，否则 cwd 超过 MAX_PATH 时 Node 把它升级成 uncaughtException（见 git.ts 的 runGit）
+    child.stdout?.on("error", () => {})
+    child.stderr?.on("error", () => {})
     child.stdout?.on("data", append)
     child.stderr?.on("data", append)
     child.on("exit", (code) => (exitCode = code))
