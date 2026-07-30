@@ -10,13 +10,25 @@ function CommitPreview({ repoId, changes }: { repoId: string; changes: number })
   const t = useT()
   const [open, setOpen] = useState(false)
   const [commits, setCommits] = useState<CommitInfo[] | null>(null)
+  // 每次打开都重取。拉过一次就不再拉的话，卡片其余部分（改动数、领先落后）跟着 repo:updated
+  // 实时走，这份提交列表却停在**第一次点开**那一刻——之后在这个仓库里提交多少次，
+  // 预览里都还是那几条旧提交，而它就贴在实时数字旁边
   useEffect(() => {
-    if (!open || commits !== null) return
+    if (!open) return
+    let cancelled = false
+    setCommits(null) // 先回到「加载中」：宁可空一下，也别把旧列表当成新的展示
     fetch(`/api/repos/${repoId}/detail?basic=1`) // 只要最近提交，跳过 stash/分支重活
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setCommits(d?.recentCommits ?? []))
-      .catch(() => setCommits([]))
-  }, [open, commits, repoId])
+      .then((d) => {
+        if (!cancelled) setCommits(d?.recentCommits ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setCommits([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, repoId])
   const content = (
     <div className="rr-preview" onClick={(e) => e.stopPropagation()}>
       {changes > 0 && <div className="ch">{t("preview.dirty", { n: changes })}</div>}
@@ -118,7 +130,10 @@ export const RepoCard = memo(function RepoCard({
   const t = useT()
   const sev = severity(repo)
   const [slot, baseName] = splitName(repo.name)
-  const changes = repo.dirty.staged + repo.dirty.unstaged + repo.dirty.untracked
+  // 必须算上 conflicted：只有冲突文件时 status --porcelain=v2 只有 u 行，staged/unstaged/untracked
+  // 全是 0，漏掉它这张卡就一边显示「✓ clean」一边挂着红色「N 个文件处于冲突状态」chip。
+  // 与 DetailPanel 的同名计算必须同时改，否则会变成「卡片说脏、面板说干净」
+  const changes = repo.dirty.staged + repo.dirty.unstaged + repo.dirty.untracked + repo.dirty.conflicted
   const web = remoteWeb(repo.remotes)
   const desc = repo.description ?? (repo.displayName && repo.displayName !== repo.name ? repo.displayName : null)
   const chips = repo.health.filter((h) => !GLYPH_RULES.has(h.rule))
@@ -193,7 +208,12 @@ export const RepoCard = memo(function RepoCard({
         )}
         {repo.ahead > 0 && <span className="ahead">↑{repo.ahead}</span>}
         {repo.behind > 0 && <span className="behind">↓{repo.behind}</span>}
-        {repo.ahead === -1 && repo.remotes.length > 0 && <span className="i">{t("card.noUpstream")}</span>}
+        {/* 判据必须与 health.ts 的 no-upstream 逐条对齐——那边有 branch !== null，这里漏了它就会在
+            游离 HEAD 上挂出「未跟踪上游」，而同一仓库的体检区不列这条，两处直说矛盾；游离时也压根
+            没有分支可跟踪，照提示去 git push -u 直接报错。upstream 非 null = 上游分支已被删 */}
+        {repo.ahead === -1 && repo.upstream === null && repo.branch !== null && repo.remotes.length > 0 && (
+          <span className="i">{t("card.noUpstream")}</span>
+        )}
       </div>
 
       {(chips.length > 0 || repo.mergedBranches.length > 0) && (

@@ -40,8 +40,9 @@ export interface RepoStatus {
   mergedBranches: string[] // 已合并、可安全清理的本地分支
   branch: string | null // null = detached HEAD
   dirty: DirtyCounts
-  ahead: number // -1 = 无 upstream
-  behind: number // -1 = 无 upstream
+  ahead: number // -1 = 无 upstream，或配了上游但远程分支已被删（此时 upstream 非 null）
+  behind: number // -1 = 同上
+  upstream: string | null // 配置的上游分支名；null = 真的没配上游
   stashCount: number
   stashOldest: string | null // 最老一条 stash 的提交时间（ISO）；null = 无 stash
   release: { tag: string; ahead: number; tagDate: string } | null // 最新 tag 之后堆的提交；null = 从未打 tag
@@ -58,6 +59,10 @@ export interface GithubInbox {
   issues: number // 开放 issue 数
   ciFailed: boolean // 最近一次工作流失败
   ciSha?: string | null // 远程默认分支 HEAD oid（CI「已处理」按它记；旧缓存无此字段）
+  // 服务端逐轮累加的「新到达」数（只增不减，旧缓存无此字段）。队列的「已处理」判定拿它当基线：
+  // 面板关着的那些轮次没有渲染进程去看计数的下探，光比水位会把「合光了又来新的」判成已处理
+  prsAdded?: number
+  issuesAdded?: number
 }
 
 export interface StashEntry {
@@ -102,6 +107,7 @@ export interface GithubStatus {
   ok: boolean
   error: string | null
   prs: { number: number; title: string; url: string; isDraft: boolean }[]
+  prsTruncated: boolean // prs 被服务端上限截断：计数要显示成「N+」，否则与「恰好 N 个」无从区分
   run: { status: string; conclusion: string | null; workflowName: string; headBranch: string } | null
 }
 

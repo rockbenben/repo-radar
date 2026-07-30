@@ -13,7 +13,7 @@ import { LANGS, useI18n } from "./i18n"
 import { resolveEmptyArea, type HasRootsState } from "./lib/emptyState"
 import { applyFilter, type FilterState } from "./lib/filter"
 import { daysSince, isGithubUrl } from "./lib/meta"
-import { mergeRepo } from "./lib/repos"
+import { mergeRepo, parentOf } from "./lib/repos"
 import { relativeTime } from "./lib/time"
 import { connectEvents, type ServerEvent } from "./lib/ws"
 import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
@@ -49,6 +49,38 @@ const STASH_SNOOZE_MS = 30 * 86_400_000 // stash「已处理」是打盹不是�
 // 计数类（PR/issue/落后/未推/未发版）——存当时数量，只在「更多（来了新的）」时重现；
 // stash——打盹：存点击时间，30 天到点重响；HEAD 类（没提交/冲突/CI）——存 HEAD hash，提交一次才重评。
 const COUNT_KINDS = new Set(["pr", "issue", "behind", "unpushed", "release"])
+
+/**
+ * 计数类「已处理」的存储形状：`"4"`（水位）或 `"4@7"`（水位 @ 点击当时服务端的累计新到达数）。
+ *
+ * 为什么要多存后半截：光靠水位，「下探」只有在渲染进程活着、并且恰好观察到那一轮时才会被记下
+ * （下面清理 effect 里的降档）。托盘常驻（--tray / 开机自启）恰恰是没有渲染进程的形态——
+ * 4 个 PR 全被合掉（差值 ≤ 0 不弹通知，也没人降水位）、随后来了 2 个新的：系统通知照弹
+ * 「PR +2」，用户点进来，这边却按 2 ≤ 4 判定为已处理，「该你了」里根本没有这条；紧接着清理
+ * effect 把水位降到 2，2 ≤ 2 依然成立——除非 PR 数涨过 2，否则再也不出现。用户被通知叫来看一个
+ * 不存在的条目，界面上还没有「撤销已处理」的入口。
+ * 服务端在 InboxCache 里逐轮累加「新到达」数（只增不减，见 server/src/types.ts 的 prsAdded），
+ * 面板关着的那些轮次照记，于是这里只要比对基线就知道「点了已处理之后到底有没有新东西进来」。
+ * 只有 pr/issue 有这份服务端记账；旧格式（纯数字）与其余计数类退回原来的纯水位比较，
+ * 下次点「已处理」时自动升级成新格式。
+ */
+const parseMark = (v: string): { n: number; base: number | null } => {
+  const at = v.indexOf("@")
+  return at < 0 ? { n: Number(v), base: null } : { n: Number(v.slice(0, at)), base: Number(v.slice(at + 1)) }
+}
+const formatMark = (n: number, base: number | null): string => (base === null ? String(n) : `${n}@${base}`)
+
+// 服务端记的累计新到达数；没有这份记账（非 GitHub 类、或还没拉到 inbox）返回 null
+function kindArrivals(r: RepoStatus, kind: string): number | null {
+  switch (kind) {
+    case "pr":
+      return r.githubInbox?.prsAdded ?? null
+    case "issue":
+      return r.githubInbox?.issuesAdded ?? null
+    default:
+      return null
+  }
+}
 
 // 计数类问题的当前数量——「已处理」清理时用来给水位降档
 function kindCount(r: RepoStatus, kind: string): number {
@@ -161,6 +193,15 @@ export default function App({
 }) {
   const { message, modal } = AntdApp.useApp()
   const { t, lang, setLang } = useI18n()
+  // t 由 I18nProvider 的 useMemo 在语言变化时重建（见 web/src/i18n/index.tsx）。
+  // 下面挂载时建立 WebSocket 的那个 effect 依赖数组是空的（连接要活整个会话，不能因为
+  // 别的东西变了就重连），它里面的事件处理器于是把 t 永久闭包在**挂载时**那个语言上：
+  // 中文进页面、切成英文再点批量 push，活动日志写进去的是「批量 push 完成：1 成功」，
+  // 而界面已全英文；日志还会落 localStorage 长期留着，此后每次批量操作再加一条。
+  // 把 t 放进依赖数组不是选项——那会让 connectEvents 每切一次语言就断开重连 WebSocket。
+  // 改用 ref 持有最新的 t，处理器内部读 ref（同 components/RootsEditor.tsx 的做法）
+  const tRef = useRef(t)
+  tRef.current = t
   const [repos, setRepos] = useState<RepoStatus[]>([])
   const [scanning, setScanning] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -207,7 +248,9 @@ export default function App({
   // 自动化开关的占位值必须与服务端默认值一致：/api/config 拉到之前（以及拉失败时）显示的
   // 就是这几个值，对不上就等于在骗人说后台没在跑。configLoaded 为假时控件一律禁用——
   // 拉失败时我们并不知道服务端的真实状态，禁用比展示一个可能相反的开关诚实
-  const [autoWatch, setAutoWatch] = useState(true) // 文件监听实时刷新（服务端持久化，默认开）
+  // 文件监听实时刷新（服务端持久化，**默认关**）。初值必须跟服务端默认一致：/api/config
+  // 回来之前这一格是先画出来的，猜错的那一侧会闪一下相反的状态，还会连带闪出它的子行（监听上限）
+  const [autoWatch, setAutoWatch] = useState(false)
   const [autoScanMin, setAutoScanMin] = useState(30) // 兜底全量重扫间隔（分钟，0=关；默认 30）
   const [configLoaded, setConfigLoaded] = useState(false)
   const [autoFetchMin, setAutoFetchMin] = useState(0) // 定时后台 fetch 间隔（分钟，0=关）
@@ -263,8 +306,14 @@ export default function App({
         const kind = k.slice(sep + 1)
         // 状态「未知」时不清，只在「确认已解决」时清——扫描瞬时出错（error 状态把计数全归零）
         // 或「有 GitHub 远程但还没拉到」（inbox 为 null）都不代表问题解决了，据此清会把用户的已处理/打盹一把抹光。
-        // 但压根没有 GitHub 远程的仓库 inbox 恒为 null——那是「确认不存在」不是「未知」，旧记录该清（防永久堆积）
-        const unknown = r.error !== null || (GITHUB_KINDS.has(kind) && r.githubInbox === null && r.remotes.some((rm) => isGithubUrl(rm.url)))
+        // 但压根没有 GitHub 远程的仓库 inbox 恒为 null——那是「确认不存在」不是「未知」，旧记录该清（防永久堆积）。
+        // remotes 为空同样算「未知」：`git remote -v` 这一次 spawn 失败/被杀软锁住/在网络盘上超时时，
+        // getRepoHeavy 会 degrade 成 []，而 error 仍是 null——只挡 error !== null 的话，一次瞬时抖动
+        // 就把用户点过的 ✓ 从 localStorage 永久删掉，下一轮远程恢复、PR 一个没变，条目原样复活。
+        // 不会因此无界堆积：:pr/:issue/:ci 这三个键只可能在 githubInbox 非空（即确实有 GitHub 远程）时被创建
+        const unknown =
+          r.error !== null ||
+          (GITHUB_KINDS.has(kind) && r.githubInbox === null && (r.remotes.length === 0 || r.remotes.some((rm) => isGithubUrl(rm.url))))
         if (unknown) {
           next[k] = v
           continue
@@ -274,10 +323,13 @@ export default function App({
           continue
         }
         // 计数类：数量掉下去后把水位跟着降——「3 个 PR」已处理、合掉 2 个只剩 1，之后来 1 个新的（2>1）
-        // 必须能冒出来；不降水位的话要涨过旧高点 3 才重现，违背「来了新的就回来」
-        const cur = COUNT_KINDS.has(kind) ? kindCount(r, kind) : null
-        if (cur !== null && cur < Number(v)) {
-          next[k] = String(cur)
+        // 必须能冒出来；不降水位的话要涨过旧高点 3 才重现，违背「来了新的就回来」。
+        // 这条只在面板开着时才跑得到（pr/issue 另有服务端记账兜住关着的那段，见 parseMark），
+        // 降档时必须原样保留基线那半截，否则记录会被降级回旧格式、服务端记账再也用不上
+        const mark = COUNT_KINDS.has(kind) ? parseMark(v) : null
+        const cur = mark ? kindCount(r, kind) : null
+        if (cur !== null && mark !== null && cur < mark.n) {
+          next[k] = formatMark(cur, mark.base)
           changed = true
         } else {
           next[k] = v
@@ -312,6 +364,11 @@ export default function App({
   // 一轮全量扫描的结果落到界面：整份替换（能表达「仓库没了」，mergeRepo 做不到），
   // 顺手把已经不存在的仓库从选中集里摘掉，免得批量操作打在幽灵 id 上
   const applyScanResult = useCallback((data: RepoStatus[]) => {
+    // 整份快照到手 = 后端通了，之前那条「无法连接」已经过期。只在 rescan() 的成功分支里清是不够的：
+    // 首发 /api/scan 失败（后端还在跑启动扫描、休眠唤醒后 socket 被重置）之后，数据是经 WS 的
+    // scan:done / 重连补拉到齐的，红色错误条会整场会话钉在那儿；而 resolveEmptyArea 见
+    // loadError !== null 就返回 "hidden"，「没有匹配的仓库」从此再不出现——筛空了就是一片空白
+    setLoadError(null)
     setRepos(data)
     setSelected((s) => new Set([...s].filter((id) => data.some((r) => r.id === id))))
   }, [])
@@ -355,8 +412,8 @@ export default function App({
           const f = e.payload.results.filter((r) => !r.ok)
           addLog(
             f.length === 0,
-            t("batch.done", { action: e.payload.action, ok: e.payload.results.length - f.length }) +
-              (f.length ? t("batch.doneFail", { n: f.length, names: f.map((x) => x.name).join("、") }) : ""),
+            tRef.current("batch.done", { action: e.payload.action, ok: e.payload.results.length - f.length }) +
+              (f.length ? tRef.current("batch.doneFail", { n: f.length, names: f.map((x) => x.name).join("、") }) : ""),
           )
         }
       } else if (e.type === "scan:progress") setScanProgress(e.payload.scanned >= e.payload.total ? null : e.payload)
@@ -582,7 +639,7 @@ export default function App({
     if (numbered.length > 0) {
       const max = Math.max(...numbered.map((r) => Number(r.name.slice(0, 3))))
       const sample = numbered[0]
-      setNewParent(sample.path.slice(0, sample.path.length - sample.name.length - 1))
+      setNewParent(parentOf(sample.path, sample.name))
       setNewName(`${String(max + 1).padStart(3, "0")}-`)
     } else {
       setNewParent("")
@@ -623,7 +680,7 @@ export default function App({
     const numbered = repos.filter((r) => /^\d{3}-/.test(r.name))
     if (numbered.length === 0) return ""
     const s = numbered[0]
-    return s.path.slice(0, s.path.length - s.name.length - 1)
+    return parentOf(s.path, s.name)
   }
   function openClone() {
     setCloneParent(commonParent())
@@ -658,8 +715,10 @@ export default function App({
     }
   }
 
-  // 自动化开关状态存服务端 config：autoWatch 文件监听默认开启（纯本地、无网络、无打扰），
-  // autoFetchMinutes 定时拉取与 notifications 系统通知默认关闭（走网络 / 会打扰，一律 opt-in）。
+  // 自动化开关状态存服务端 config：三个后台行为**一律默认关闭**——autoWatch 文件监听虽然纯
+  // 本地、不走网络，但常驻成本与「看一眼各仓库状态」这个用途不成比例（几个项目同时在跑构建时
+  // 内核缓冲区持续溢出，每次溢出都要补一轮全量重扫）；autoFetchMinutes 定时拉取走网络、
+  // notifications 系统通知会打扰。默认路径是兜底定时重扫 + 手动重扫。
   // 抽成具名函数：挂载时调一次，配置错误态里的「重试」按钮也调它——一份逻辑，两处触发
   const loadConfigStatus = useCallback(() => {
     return fetch("/api/config")
@@ -844,7 +903,7 @@ export default function App({
       : q.kind === "ci"
         ? (q.r.githubInbox?.ciSha ?? "0")
         : COUNT_KINDS.has(q.kind)
-          ? String(q.n)
+          ? formatMark(q.n, kindArrivals(q.r, q.kind)) // pr/issue 连服务端的累计新到达数一起存作基线
           : (q.r.lastCommit?.hash ?? "0")
   const isDismissed = (q: { r: RepoStatus; kind: string; n: number }): boolean => {
     const stored = dismissed[dismissKey(q)]
@@ -853,7 +912,20 @@ export default function App({
     // ci 的哨兵记录（点已处理时还没拿到 oid）：这轮红持续期间保持已处理，转绿由清理 effect 收走；
     // 只对存量哨兵如此——现在 oid 随轮询必达，新点的已处理都按 oid 记、新失败照常重现
     if (q.kind === "ci" && stored === "0") return true
-    return COUNT_KINDS.has(q.kind) ? q.n <= Number(stored) : stored === dismissVal(q)
+    if (!COUNT_KINDS.has(q.kind)) return stored === dismissVal(q)
+    const { n, base } = parseMark(stored)
+    const arrivals = kindArrivals(q.r, q.kind)
+    // 服务端记账说「点了已处理之后累计数变过」→ 立刻重现，与这边有没有看见计数下探无关。
+    // 比的是 `!==` 而不是 `>`：累计数**变小**不代表「没有新到达」，只可能是服务端那个计数器
+    // 被重置了（InboxCache 见 origin url 变了就从 0 重记——HTTPS 换 SSH、GitHub 上改仓库名后
+    // 更新远程、加/去 .git 后缀都算；github-inbox.json 损坏或被剪枝同理），而基线存在
+    // localStorage、键是 repoId，身份账本保证改远程不换 id，于是旧基线原地不动。
+    // 当成「没有新到达」的话，这个功能要修的症状原样复现：通知弹了「PR +2」、用户点进来
+    // 队列里却没有这条，而且要再攒够 base+1 次新到达才解除。计数器重置只能靠「对不上」认出来。
+    // 保守侧的代价：重置之后这条会多冒一次，用户再点一次 ✓ 就重新对上表。
+    // 没有基线（旧格式记录）或服务端没给记账时退回原来的纯水位比较
+    if (base !== null && arrivals !== null && arrivals !== base) return false
+    return q.n <= n
   }
   // 10 分钟心跳：stash 打盹到期等纯时间条件也能在长开的标签页里重评（否则没有 repo 更新就永远不重算）
   const [queueTick, setQueueTick] = useState(0)
@@ -924,7 +996,10 @@ export default function App({
       byKey.set(k, arr)
     }
     return [...byKey.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-  }, [visible, groupMode])
+    // t 必须在依赖里：「按语言」分组时它是没有 language 的仓库那一组的**组名**（keyOf 里的
+    // t("group.unidentified")）。少了它，切换界面语言后这个组名会一直停在旧语言，与同屏
+    // 其余文案对不上，且只有下次仓库更新（repo:updated / 重扫）才纠正——没有 git 活动就是永久错
+  }, [visible, groupMode, t])
   const failed = batch?.results.filter((r) => !r.ok) ?? []
 
   const renderCard = (r: RepoStatus) => (
@@ -1316,10 +1391,11 @@ export default function App({
           <Button
             size="small"
             className="rr-gear"
-            /* 高亮只标「用户自己额外开的后台行为」：自动扫描已是默认开启，算进来会让齿轮
-               永远亮着、信号归零；定时拉取（走网络）和系统通知（会打扰）才需要提示 */
-            type={autoFetchMin > 0 || notifications ? "primary" : "default"}
-            ghost={autoFetchMin > 0 || notifications}
+            /* 高亮只标「用户自己额外开的后台行为」。文件监听改成默认关闭之后它也算一个——
+               而且是三者里最贵的那个（常驻句柄 + 溢出补票的全量重扫）。此前它默认开着，
+               算进来会让齿轮永远亮着、信号归零，所以那时刻意排除在外 */
+            type={autoWatch || autoFetchMin > 0 || notifications ? "primary" : "default"}
+            ghost={autoWatch || autoFetchMin > 0 || notifications}
             title={t("settings.tip")}
           >
             ⚙

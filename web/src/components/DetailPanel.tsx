@@ -1,5 +1,5 @@
 import { App as AntdApp, AutoComplete, Button, Checkbox, Input, Modal, Select, Tag } from "antd"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { type TFunc, useT } from "../i18n"
 import { cleanStashMessage, isSideBranch, langColor, remoteWeb } from "../lib/meta"
 import { runStashApplyPop } from "../lib/stash"
@@ -13,7 +13,9 @@ const NEW_BRANCH = " new-branch" // 分支下拉里「新建分支」选项的�
 
 type DetailData = { recentCommits: CommitInfo[]; stashes: StashEntry[]; branches: string[]; remoteBranches: string[] }
 const EMPTY_DETAIL: DetailData = { recentCommits: [], stashes: [], branches: [], remoteBranches: [] }
-type MutRes = { ok: boolean; message: string; empty?: boolean } // 变更端点 { result } 的归一形状
+// 变更端点 { result } 的归一形状。code 是服务端的稳定枚举（见 git.ts 的 CommitCode / DiscardCode）：
+// 按语言组装文案要靠它，message 是中文原文，只作日志与兜底
+type MutRes = { ok: boolean; message: string; code?: string; empty?: boolean }
 
 // 体检明细：把服务端的健康规则译成当前语言的完整描述（数字从原文取）
 const HEALTH_KEY: Record<string, string> = {
@@ -84,7 +86,11 @@ export function DetailPanel({
   // ok: null = 结果未知（60s 没等到 WS 回执，操作可能已在服务端完成）——不能按失败报，用户会对已推送的仓库做错误的补救
   const [syncResult, setSyncResult] = useState<{ action: string; ok: boolean | null; message: string } | null>(null)
 
-  const changes = repo.dirty.staged + repo.dirty.unstaged + repo.dirty.untracked
+  // 必须算上 conflicted：只有冲突文件时 status --porcelain=v2 只有 u 行，其余三项全是 0，
+  // 漏掉它 `changes > 0` 恒假——「查看改动 / 提交 / 收进 stash / 丢弃改动」整块 section 不渲染，
+  // 用户正在解冲突却一个操作都点不了（而服务端 getRepoDiff 明明返回得了冲突 diff）。
+  // 与 RepoCard 的同名计算必须同时改，否则会变成「卡片说脏、面板说干净」
+  const changes = repo.dirty.staged + repo.dirty.unstaged + repo.dirty.untracked + repo.dirty.conflicted
 
   // 单仓库同步：起任务并等真正跑完（onSync 由 WS 回执兑现），期间显示「进行中」，完成后就地显示 ✓/✗ 与 git 输出
   const doSync = async (action: "fetch" | "pull" | "push") => {
@@ -101,20 +107,37 @@ export function DetailPanel({
     }
   }
 
+  // 在途 diff 请求的令牌：先后两次取回的顺序不保证，晚到的旧响应绝不能覆盖新内容
+  // （与 useStashDiff 同一手法）。上一版靠「拉过就不再拉」回避了这件事，而那正是本次要修的 bug
+  const diffReq = useRef(0)
+  const fetchDiff = async () => {
+    const seq = ++diffReq.current
+    try {
+      const r = await fetch(`/api/repos/${repo.id}/diff`)
+      const d = r.ok ? await r.json() : { diff: "", untracked: [] }
+      if (seq === diffReq.current) setDiff(d)
+    } catch {
+      if (seq === diffReq.current) setDiff({ diff: "", untracked: [] })
+    }
+  }
+  // 每次展开都重取。**不能记忆化**：diff 正下方就是提交输入框和「提交」按钮，而标题里的改动数
+  // 是实时的——一份拉过就冻住的 diff 会和「改动 / 提交（4）」并排显示，用户照着自己刚看过的
+  // 那两个文件写提交信息，实际提交的却是当前工作区的另一批内容
   const loadDiff = async () => {
     if (diffOpen) {
       setDiffOpen(false)
       return
     }
     setDiffOpen(true)
-    if (diff === null) {
-      try {
-        const r = await fetch(`/api/repos/${repo.id}/diff`)
-        setDiff(r.ok ? await r.json() : { diff: "", untracked: [] })
-      } catch {
-        setDiff({ diff: "", untracked: [] })
-      }
-    }
+    await fetchDiff()
+  }
+  /** 作废已展开的 diff。**两个 state 都要收**：只清 diff 而留着 diffOpen 的话，改动清零时
+   *  整块 section 卸载、state 却留在 hook 里，之后随便改一个文件让 section 回来，那份
+   *  已经被丢弃/入栈的旧 diff 会自动展开，用户一次都没点过 */
+  const closeDiff = () => {
+    diffReq.current++ // 在途请求一并作废，别让它把刚清掉的内容再写回来
+    setDiff(null)
+    setDiffOpen(false)
   }
   const doCommit = async () => {
     const msg = commitMsg.trim()
@@ -138,8 +161,7 @@ export function DetailPanel({
         else message.success(toast)
         onLog(true, t("msg.commitLog", { name: repo.name, msg }) + (pushToo ? t("msg.commitPush") : ""))
         setCommitMsg("")
-        setDiff(null)
-        setDiffOpen(false)
+        closeDiff()
       } else {
         message.error(`${t("msg.commitFail")}: ${data.detail ?? data.message}`)
         onLog(false, t("msg.commitFailLog", { name: repo.name, msg: data.detail ?? data.message }))
@@ -155,9 +177,9 @@ export function DetailPanel({
     setGh("loading")
     try {
       const r = await fetch(`/api/repos/${repo.id}/github`)
-      setGh(r.ok ? ((await r.json()) as GithubStatus) : { ok: false, error: t("detail.queryFail"), prs: [], run: null })
+      setGh(r.ok ? ((await r.json()) as GithubStatus) : { ok: false, error: t("detail.queryFail"), prs: [], prsTruncated: false, run: null })
     } catch {
-      setGh({ ok: false, error: t("detail.queryFail"), prs: [], run: null })
+      setGh({ ok: false, error: t("detail.queryFail"), prs: [], prsTruncated: false, run: null })
     }
   }
 
@@ -213,6 +235,7 @@ export function DetailPanel({
     if (res.ok) {
       message.success(t("msg.switchOk", { branch }))
       onLog(true, t("msg.switchLog", { name: repo.name, branch }))
+      closeDiff() // 换了分支，工作区已经是另一份了
       await refreshDetail() // 提交/工作区随分支变化，重取详情
     } else {
       message.error(t("msg.switchFail", { err: res.message }))
@@ -228,6 +251,7 @@ export function DetailPanel({
       message.success(t("msg.stashPushOk"))
       onLog(true, t("msg.stashPushLog", { name: repo.name }))
       setCommitMsg("")
+      closeDiff() // 改动已经收进 stash，工作区里不再有这些内容
       await refreshDetail()
     } else if (res.empty) {
       message.info(t("msg.stashPushEmpty"))
@@ -255,15 +279,23 @@ export function DetailPanel({
   const doDiscard = async () => {
     setDiscarding(true)
     const res = await postResult("discard")
+    // 无论成败都关弹窗：破坏性操作已经执行过了，留着弹窗只会诱使用户再点一次
+    setDiscardOpen(false)
+    setDiscardConfirm("")
     if (res.ok) {
       message.success(t("msg.discardOk"))
       onLog(true, t("msg.discardLog", { name: repo.name }))
-      setDiscardOpen(false)
-      setDiscardConfirm("")
-      await refreshDetail()
+      closeDiff() // 改动已经被丢弃，磁盘上根本不存在了
+    } else if (res.code === "unbornHead") {
+      message.warning(t("msg.discardUnbornHead"))
+    } else if (res.code === "outOfScope") {
+      // 不是「失败」，是这两条 git 碰不到的范围：submodule 内容、未跟踪的嵌套 git 仓库
+      message.warning(t("msg.discardOutOfScope"))
+      closeDiff()
     } else {
       message.error(t("msg.discardFail", { err: res.message }))
     }
+    await refreshDetail()
     setDiscarding(false)
   }
   const viewStashDiff = (s: StashEntry) => viewStashDiffModal(repo.id, s.sha, t("stash.diffTitle", { repo: titleName }))
@@ -315,6 +347,12 @@ export function DetailPanel({
   const commitGroup = (value: string) => {
     if (value !== repo.group) onPatchMeta(repo.id, { group: value })
   }
+  // 「自动」按钮是 repo.group 的第二个写入者（删掉 override 让服务端按目录重算），而面板不会因此
+  // 重挂载（key 只是 repo.id），输入框会一直停在旧 override 上：既与看板的分组同屏矛盾，随后
+  // 一次无操作的失焦更会 commitGroup(旧值) 把「自动」静默撤销。用户打字期间 repo.group 不变，
+  // 这个 effect 不会冲掉未提交的编辑
+  useEffect(() => setGroupInput(repo.group), [repo.group])
+
 
   useEffect(() => {
     let cancelled = false
@@ -345,6 +383,31 @@ export function DetailPanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo.id])
+
+  /**
+   * 仓库在服务端那边真的变了（HEAD 换了提交 / 未提交改动的构成变了）→ 面板里缓存下来的
+   * diff 与详情列表全部作废。
+   *
+   * 面板不会因此重挂载（App.tsx 的 key 只按 repo.id），而 repo:updated 只换掉 repo 这个 prop：
+   * 于是标题里的改动数、上面的分支/领先落后是实时的，diff 正文与「最近提交 / 分支 / stash」
+   * 却停在打开面板那一刻——用户在编辑器里改文件、或在别处提交，两半信息就开始互相矛盾，
+   * 而 diff 正下方就是提交输入框。
+   *
+   * 只在指纹**变过**之后才动：首次取数由上面按 repo.id 的 effect 负责，这里补的是「面板开着
+   * 期间又变了」。仓库切换会重挂载，ref 跟着重新初始化
+   */
+  const stamp = `${repo.lastCommit?.hash ?? ""}|${repo.dirty.staged}|${repo.dirty.unstaged}|${repo.dirty.untracked}|${repo.dirty.conflicted}`
+  const syncedStamp = useRef(stamp)
+  useEffect(() => {
+    if (syncedStamp.current === stamp) return
+    syncedStamp.current = stamp
+    void refreshDetail()
+    // 正展开着就直接重取，不能只清空：clean 之后 diff===null 渲染的是「加载中」，
+    // 而没有任何东西会再去取它，那块正文就永远停在加载中了
+    if (diffOpen && changes > 0) void fetchDiff()
+    else closeDiff()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stamp])
 
   const web = remoteWeb(repo.remotes)
   const nameMatch = /^(\d{3})-(.+)$/.exec(repo.name)
@@ -727,7 +790,10 @@ export function DetailPanel({
               <div className="issue warn">{gh.error ?? t("detail.queryFail")}</div>
             ) : (
               <>
-                <div className="kv" style={{ color: "var(--text)" }}>{t("detail.openPRs", { n: gh.prs.length })}</div>
+                {/* 截断时显示「100+」：gh 有抓取上限，「100」与「恰好 100 个」不能长得一样 */}
+                <div className="kv" style={{ color: "var(--text)" }}>
+                  {t("detail.openPRs", { n: gh.prsTruncated ? `${gh.prs.length}+` : gh.prs.length })}
+                </div>
                 {gh.prs.map((p) => (
                   <div key={p.number} className="kv">
                     <a href={p.url} target="_blank" rel="noreferrer" style={{ color: "var(--sig)" }}>

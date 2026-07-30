@@ -20,6 +20,7 @@ function repo(over: Partial<RepoStatus>): RepoStatus {
     branch: "main",
     dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
     ahead: -1,
+    upstream: null,
     behind: -1,
     stashCount: 0,
     remotes: [],
