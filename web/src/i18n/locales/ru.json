@@ -50,6 +50,7 @@
   "settings.watchLimit": "Лимит слежения",
   "settings.watchLimitHint": "Репозиториев под слежением за файлами",
   "settings.watchLimitCapped": "Отслеживается {watched} из {total} — остальные ждут пересканирования",
+  "settings.watchLimitCappedNoRescan": "Отслеживается {watched} из {total} — остальные не будут обновляться автоматически (пересканирование выключено)",
   "settings.watchLive": "Отслеживаются все {n} репозиториев",
   "settings.scanEvery": "Плановое пересканирование",
   "settings.scanEveryHint": "Полный скан по расписанию",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Новая ветка {branch}: {name}",
   "msg.discardOk": "Выполнен discard незакоммиченных изменений",
   "msg.discardFail": "Не удалось выполнить discard: {err}",
+  "msg.discardOutOfScope": "Часть изменений не удалось отменить — обработайте их вручную",
+  "msg.discardUnbornHead": "В этой ветке ещё нет коммитов — отмена изменений здесь не поддерживается",
   "msg.discardLog": "Discard незакоммиченных изменений {name}",
   "time.now": "только что"
 }

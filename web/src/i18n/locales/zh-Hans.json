@@ -355,6 +355,8 @@
   "msg.branchCreateLog": "新建分支 {branch}：{name}",
   "msg.discardOk": "已丢弃未提交改动",
   "msg.discardFail": "丢弃失败：{err}",
+  "msg.discardOutOfScope": "有一部分改动这次没能丢弃，需自行处理",
+  "msg.discardUnbornHead": "当前分支还没有提交，这里暂不支持丢弃改动",
   "msg.discardLog": "丢弃 {name} 的未提交改动",
   "time.now": "刚刚"
 }

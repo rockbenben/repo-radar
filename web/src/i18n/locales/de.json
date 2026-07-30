@@ -50,6 +50,7 @@
   "settings.watchLimit": "Watch-Limit",
   "settings.watchLimitHint": "Repos mit Datei-Überwachung",
   "settings.watchLimitCapped": "{watched} von {total} überwacht — der Rest hängt am Rescan",
+  "settings.watchLimitCappedNoRescan": "{watched} von {total} überwacht — der Rest wird nicht automatisch aktualisiert (Rescan ist aus)",
   "settings.watchLive": "Alle {n} Repos werden überwacht",
   "settings.scanEvery": "Regelmäßiger Rescan",
   "settings.scanEveryHint": "Vollständiger Scan im Intervall",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Neuer Branch {branch}: {name}",
   "msg.discardOk": "Nicht committete Änderungen verworfen",
   "msg.discardFail": "Verwerfen fehlgeschlagen: {err}",
+  "msg.discardOutOfScope": "Einige Änderungen konnten nicht verworfen werden und müssen manuell behandelt werden",
+  "msg.discardUnbornHead": "Dieser Branch hat noch keine Commits; das Verwerfen von Änderungen wird hier nicht unterstützt",
   "msg.discardLog": "Nicht committete Änderungen von {name} verwerfen",
   "time.now": "gerade eben"
 }

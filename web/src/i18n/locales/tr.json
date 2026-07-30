@@ -50,6 +50,7 @@
   "settings.watchLimit": "İzleme sınırı",
   "settings.watchLimitHint": "Dosya değişimi izlenen repo sayısı",
   "settings.watchLimitCapped": "{total} repodan {watched} izleniyor — kalanı taramaya bağlı",
+  "settings.watchLimitCappedNoRescan": "{total} repodan {watched} izleniyor — kalanı otomatik yenilenmez (yeniden tarama kapalı)",
   "settings.watchLive": "{n} reponun tümü izleniyor",
   "settings.scanEvery": "Düzenli yeniden tarama",
   "settings.scanEveryHint": "Aralıklarla tam tarama",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Yeni dal {branch}: {name}",
   "msg.discardOk": "Commit edilmemiş değişiklikler discard edildi",
   "msg.discardFail": "Discard başarısız: {err}",
+  "msg.discardOutOfScope": "Bazı değişiklikler geri alınamadı ve elle ele alınmalı",
+  "msg.discardUnbornHead": "Bu dalda henüz commit yok; burada değişiklikleri geri alma desteklenmiyor",
   "msg.discardLog": "{name} için commit edilmemiş değişiklikleri discard et",
   "time.now": "az önce"
 }

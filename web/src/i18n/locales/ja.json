@@ -50,6 +50,7 @@
   "settings.watchLimit": "監視上限",
   "settings.watchLimitHint": "ファイル変更を監視するリポジトリ数",
   "settings.watchLimitCapped": "{total} 中 {watched} を監視、残りは再スキャン頼み",
+  "settings.watchLimitCappedNoRescan": "{total} 中 {watched} を監視、残りは自動更新されません（定期再スキャンはオフ）",
   "settings.watchLive": "全 {n} リポジトリを監視中",
   "settings.scanEvery": "定期再スキャン",
   "settings.scanEveryHint": "定期的に全体をスキャン",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "新規ブランチ {branch}: {name}",
   "msg.discardOk": "未コミットの変更を破棄しました",
   "msg.discardFail": "破棄に失敗しました: {err}",
+  "msg.discardOutOfScope": "一部の変更は破棄できませんでした。手動で処理してください",
+  "msg.discardUnbornHead": "このブランチにはまだコミットがありません。ここでは変更の破棄に対応していません",
   "msg.discardLog": "{name} の未コミットの変更を破棄",
   "time.now": "たった今"
 }

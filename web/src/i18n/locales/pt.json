@@ -50,6 +50,7 @@
   "settings.watchLimit": "Limite de monitoramento",
   "settings.watchLimitHint": "Repos monitorados por mudanças",
   "settings.watchLimitCapped": "{watched} de {total} monitorados — o resto depende do reescaneamento",
+  "settings.watchLimitCappedNoRescan": "{watched} de {total} monitorados — o resto não será atualizado automaticamente (o reescaneamento está desligado)",
   "settings.watchLive": "Monitorando todos os {n} repos",
   "settings.scanEvery": "Reescaneamento periódico",
   "settings.scanEveryHint": "Escaneamento completo por intervalo",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Nova branch {branch}: {name}",
   "msg.discardOk": "Alterações não commitadas descartadas",
   "msg.discardFail": "Falha ao descartar: {err}",
+  "msg.discardOutOfScope": "Algumas alterações não puderam ser descartadas e precisam ser tratadas manualmente",
+  "msg.discardUnbornHead": "Este branch ainda não tem commits; descartar alterações não é suportado aqui",
   "msg.discardLog": "Descartar alterações não commitadas de {name}",
   "time.now": "agora mesmo"
 }

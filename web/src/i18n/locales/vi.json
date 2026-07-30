@@ -50,6 +50,7 @@
   "settings.watchLimit": "Giới hạn theo dõi",
   "settings.watchLimitHint": "Số repo được theo dõi thay đổi tệp",
   "settings.watchLimitCapped": "Đang theo dõi {watched}/{total} — phần còn lại dựa vào quét lại",
+  "settings.watchLimitCappedNoRescan": "Đang theo dõi {watched}/{total} — phần còn lại sẽ không tự làm mới (quét lại đã tắt)",
   "settings.watchLive": "Đang theo dõi cả {n} repo",
   "settings.scanEvery": "Quét lại định kỳ",
   "settings.scanEveryHint": "Quét toàn bộ theo chu kỳ",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Nhánh mới {branch}: {name}",
   "msg.discardOk": "Đã discard thay đổi chưa commit",
   "msg.discardFail": "Discard thất bại: {err}",
+  "msg.discardOutOfScope": "Một số thay đổi không thể hủy và cần bạn tự xử lý",
+  "msg.discardUnbornHead": "Nhánh này chưa có commit nào; không hỗ trợ hủy thay đổi ở đây",
   "msg.discardLog": "Discard thay đổi chưa commit của {name}",
   "time.now": "vừa xong"
 }

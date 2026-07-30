@@ -50,6 +50,7 @@
   "settings.watchLimit": "حدّ المراقبة",
   "settings.watchLimitHint": "عدد المستودعات المراقَبة لتغيّر الملفات",
   "settings.watchLimitCapped": "تُراقَب {watched} من {total} — والبقية تعتمد على الفحص الدوري",
+  "settings.watchLimitCappedNoRescan": "تُراقَب {watched} من {total} — والبقية لن تُحدَّث تلقائيًا (الفحص الدوري متوقف)",
   "settings.watchLive": "تُراقَب المستودعات الـ{n} كلها الآن",
   "settings.scanEvery": "إعادة فحص دورية",
   "settings.scanEveryHint": "فحص كامل على فترات",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "فرع جديد {branch}: {name}",
   "msg.discardOk": "تم تجاهل التغييرات غير الملتزمة",
   "msg.discardFail": "فشل التجاهل: {err}",
+  "msg.discardOutOfScope": "تعذّر تجاهل بعض التغييرات ويجب معالجتها يدويًا",
+  "msg.discardUnbornHead": "لا توجد commits في هذا الفرع بعد؛ تجاهل التغييرات غير مدعوم هنا",
   "msg.discardLog": "تجاهل التغييرات غير الملتزمة لـ {name}",
   "time.now": "الآن"
 }

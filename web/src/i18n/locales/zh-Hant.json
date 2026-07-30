@@ -50,6 +50,7 @@
   "settings.watchLimit": "監看上限",
   "settings.watchLimitHint": "即時監看檔案變動的儲存庫數",
   "settings.watchLimitCapped": "{total} 個中監看 {watched} 個，其餘靠兜底重掃",
+  "settings.watchLimitCappedNoRescan": "{total} 個中監看 {watched} 個，其餘不會自動刷新（兜底重掃已關閉）",
   "settings.watchLive": "正在即時監看全部 {n} 個儲存庫",
   "settings.scanEvery": "兜底重掃",
   "settings.scanEveryHint": "定時全量掃一遍",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "新增分支 {branch}：{name}",
   "msg.discardOk": "已捨棄未提交的變更",
   "msg.discardFail": "捨棄失敗：{err}",
+  "msg.discardOutOfScope": "有一部分變更這次沒能捨棄，需自行處理",
+  "msg.discardUnbornHead": "目前分支還沒有提交，這裡暫不支援捨棄變更",
   "msg.discardLog": "捨棄 {name} 的未提交變更",
   "time.now": "剛剛"
 }

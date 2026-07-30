@@ -50,6 +50,7 @@
   "settings.watchLimit": "Batas pemantauan",
   "settings.watchLimitHint": "Repo yang dipantau perubahan berkasnya",
   "settings.watchLimitCapped": "Memantau {watched} dari {total} — sisanya bergantung pada pemindaian ulang",
+  "settings.watchLimitCappedNoRescan": "Memantau {watched} dari {total} — sisanya tidak akan disegarkan otomatis (pemindaian ulang mati)",
   "settings.watchLive": "Memantau semua {n} repo",
   "settings.scanEvery": "Pemindaian ulang berkala",
   "settings.scanEveryHint": "Pindai penuh secara berkala",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Cabang baru {branch}: {name}",
   "msg.discardOk": "Perubahan yang belum di-commit telah di-discard",
   "msg.discardFail": "Discard gagal: {err}",
+  "msg.discardOutOfScope": "Sebagian perubahan tidak dapat dibuang dan harus ditangani sendiri",
+  "msg.discardUnbornHead": "Branch ini belum memiliki commit; membuang perubahan tidak didukung di sini",
   "msg.discardLog": "Discard perubahan yang belum di-commit dari {name}",
   "time.now": "baru saja"
 }

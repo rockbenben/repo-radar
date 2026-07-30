@@ -50,6 +50,7 @@
   "settings.watchLimit": "Limite de surveillance",
   "settings.watchLimitHint": "Dépôts surveillés pour les changements",
   "settings.watchLimitCapped": "{watched} sur {total} surveillés — le reste dépend du rescan",
+  "settings.watchLimitCappedNoRescan": "{watched} sur {total} surveillés — le reste ne sera pas rafraîchi automatiquement (le rescan est désactivé)",
   "settings.watchLive": "Les {n} dépôts sont tous surveillés",
   "settings.scanEvery": "Rescan périodique",
   "settings.scanEveryHint": "Scan complet à intervalle",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Nouvelle branche {branch} : {name}",
   "msg.discardOk": "Modifications non committées discardées",
   "msg.discardFail": "Échec du discard : {err}",
+  "msg.discardOutOfScope": "Certaines modifications n'ont pas pu être annulées et doivent être traitées manuellement",
+  "msg.discardUnbornHead": "Cette branche n'a encore aucun commit ; l'annulation des modifications n'est pas prise en charge ici",
   "msg.discardLog": "Discard des modifications non committées de {name}",
   "time.now": "à l'instant"
 }

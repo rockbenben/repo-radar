@@ -50,6 +50,7 @@
   "settings.watchLimit": "ขีดจำกัดการเฝ้าดู",
   "settings.watchLimitHint": "จำนวน repo ที่เฝ้าดูการเปลี่ยนแปลงไฟล์",
   "settings.watchLimitCapped": "เฝ้าดู {watched} จาก {total} ที่เหลือพึ่งการสแกนซ้ำ",
+  "settings.watchLimitCappedNoRescan": "เฝ้าดู {watched} จาก {total} ที่เหลือจะไม่รีเฟรชอัตโนมัติ (ปิดการสแกนซ้ำ)",
   "settings.watchLive": "กำลังเฝ้าดูทั้ง {n} repo แบบสด",
   "settings.scanEvery": "สแกนซ้ำตามรอบ",
   "settings.scanEveryHint": "สแกนทั้งหมดตามช่วงเวลา",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "แบรนช์ใหม่ {branch}: {name}",
   "msg.discardOk": "การเปลี่ยนแปลงที่ยังไม่ได้ commit ถูก discard แล้ว",
   "msg.discardFail": "Discard ล้มเหลว: {err}",
+  "msg.discardOutOfScope": "ไม่สามารถยกเลิกการเปลี่ยนแปลงบางส่วนได้ ต้องจัดการเอง",
+  "msg.discardUnbornHead": "สาขานี้ยังไม่มีคอมมิต จึงยังไม่รองรับการยกเลิกการเปลี่ยนแปลงที่นี่",
   "msg.discardLog": "Discard การเปลี่ยนแปลงที่ยังไม่ได้ commit ของ {name}",
   "time.now": "เมื่อกี้"
 }

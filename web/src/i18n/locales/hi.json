@@ -50,6 +50,7 @@
   "settings.watchLimit": "वॉच सीमा",
   "settings.watchLimitHint": "फ़ाइल बदलाव के लिए वॉच किए जा रहे रिपो",
   "settings.watchLimitCapped": "{total} में से {watched} वॉच हो रहे — बाकी स्कैन के भरोसे",
+  "settings.watchLimitCappedNoRescan": "{total} में से {watched} वॉच हो रहे — बाकी अपने आप रिफ़्रेश नहीं होंगे (पूरा स्कैन बंद है)",
   "settings.watchLive": "सभी {n} रिपो लाइव वॉच हो रहे हैं",
   "settings.scanEvery": "समय-समय पर पूरा स्कैन",
   "settings.scanEveryHint": "तय अंतराल पर पूरा स्कैन",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "नई ब्रांच {branch}: {name}",
   "msg.discardOk": "Uncommitted बदलाव discard किए गए",
   "msg.discardFail": "Discard विफल: {err}",
+  "msg.discardOutOfScope": "कुछ बदलाव रद्द नहीं किए जा सके; उन्हें स्वयं संभालना होगा",
+  "msg.discardUnbornHead": "इस ब्रांच में अभी कोई कमिट नहीं है; यहाँ बदलाव रद्द करना समर्थित नहीं है",
   "msg.discardLog": "{name} के uncommitted बदलाव discard किए गए",
   "time.now": "अभी-अभी"
 }

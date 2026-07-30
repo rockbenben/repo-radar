@@ -50,6 +50,7 @@
   "settings.watchLimit": "ওয়াচ সীমা",
   "settings.watchLimitHint": "ফাইল বদল ওয়াচ করা রিপোর সংখ্যা",
   "settings.watchLimitCapped": "{total}-এর মধ্যে {watched} ওয়াচ হচ্ছে — বাকিগুলো স্ক্যানের ভরসায়",
+  "settings.watchLimitCappedNoRescan": "{total}-এর মধ্যে {watched} ওয়াচ হচ্ছে — বাকিগুলো নিজে থেকে রিফ্রেশ হবে না (পুনঃস্ক্যান বন্ধ)",
   "settings.watchLive": "সব {n} রিপো লাইভ ওয়াচ হচ্ছে",
   "settings.scanEvery": "নিয়মিত পুনঃস্ক্যান",
   "settings.scanEveryHint": "নির্দিষ্ট সময় পরপর পূর্ণ স্ক্যান",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "নতুন ব্রাঞ্চ {branch}: {name}",
   "msg.discardOk": "আনকমিটেড পরিবর্তন discard করা হয়েছে",
   "msg.discardFail": "Discard ব্যর্থ হয়েছে: {err}",
+  "msg.discardOutOfScope": "কিছু পরিবর্তন বাতিল করা যায়নি; সেগুলি নিজে সামলাতে হবে",
+  "msg.discardUnbornHead": "এই ব্রাঞ্চে এখনও কোনো কমিট নেই; এখানে পরিবর্তন বাতিল করা সমর্থিত নয়",
   "msg.discardLog": "{name}-এর আনকমিটেড পরিবর্তন discard করা হলো",
   "time.now": "এইমাত্র"
 }

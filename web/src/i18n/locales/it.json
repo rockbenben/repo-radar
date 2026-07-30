@@ -50,6 +50,7 @@
   "settings.watchLimit": "Limite di osservazione",
   "settings.watchLimitHint": "Repo osservati per modifiche ai file",
   "settings.watchLimitCapped": "{watched} su {total} osservati — il resto dipende dalla riscansione",
+  "settings.watchLimitCappedNoRescan": "{watched} su {total} osservati — il resto non si aggiorna automaticamente (la riscansione è spenta)",
   "settings.watchLive": "Tutti i {n} repo sotto osservazione",
   "settings.scanEvery": "Riscansione periodica",
   "settings.scanEveryHint": "Scansione completa a intervalli",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Nuovo branch {branch}: {name}",
   "msg.discardOk": "Modifiche non committate scartate",
   "msg.discardFail": "Scarto non riuscito: {err}",
+  "msg.discardOutOfScope": "Alcune modifiche non sono state annullate e vanno gestite manualmente",
+  "msg.discardUnbornHead": "Questo branch non ha ancora commit; qui non è possibile annullare le modifiche",
   "msg.discardLog": "Scarta le modifiche non committate di {name}",
   "time.now": "adesso"
 }

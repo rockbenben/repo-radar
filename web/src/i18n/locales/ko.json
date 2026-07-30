@@ -50,6 +50,7 @@
   "settings.watchLimit": "감시 상한",
   "settings.watchLimitHint": "파일 변경을 감시하는 저장소 수",
   "settings.watchLimitCapped": "{total}개 중 {watched}개 감시, 나머지는 재스캔에 의존",
+  "settings.watchLimitCappedNoRescan": "{total}개 중 {watched}개 감시, 나머지는 자동으로 새로고침되지 않음 (재스캔 꺼짐)",
   "settings.watchLive": "{n}개 저장소 모두 감시 중",
   "settings.scanEvery": "주기적 재스캔",
   "settings.scanEveryHint": "일정 주기로 전체 스캔",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "새 브랜치 {branch}: {name}",
   "msg.discardOk": "discard 완료",
   "msg.discardFail": "discard 실패: {err}",
+  "msg.discardOutOfScope": "일부 변경 사항은 취소하지 못했습니다. 직접 처리하세요",
+  "msg.discardUnbornHead": "이 브랜치에는 아직 커밋이 없습니다. 여기서는 변경 사항 취소를 지원하지 않습니다",
   "msg.discardLog": "discard {name}의 미commit 변경 사항",
   "time.now": "방금"
 }

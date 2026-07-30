@@ -50,6 +50,7 @@
   "settings.watchLimit": "Límite de vigilancia",
   "settings.watchLimitHint": "Repos vigilados por cambios de archivos",
   "settings.watchLimitCapped": "{watched} de {total} vigilados — el resto depende del reescaneo",
+  "settings.watchLimitCappedNoRescan": "{watched} de {total} vigilados — el resto no se actualiza automáticamente (el reescaneo está apagado)",
   "settings.watchLive": "Vigilando los {n} repos en vivo",
   "settings.scanEvery": "Reescaneo periódico",
   "settings.scanEveryHint": "Escaneo completo por intervalo",
@@ -354,6 +355,8 @@
   "msg.branchCreateLog": "Nueva rama {branch}: {name}",
   "msg.discardOk": "Cambios sin confirmar descartados",
   "msg.discardFail": "Error al descartar: {err}",
+  "msg.discardOutOfScope": "Algunos cambios no se pudieron descartar y deben gestionarse manualmente",
+  "msg.discardUnbornHead": "Esta rama aún no tiene commits; descartar cambios no está disponible aquí",
   "msg.discardLog": "Descartar cambios sin confirmar de {name}",
   "time.now": "ahora mismo"
 }

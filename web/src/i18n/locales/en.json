@@ -355,6 +355,8 @@
   "msg.branchCreateLog": "New branch {branch}: {name}",
   "msg.discardOk": "Uncommitted changes discarded",
   "msg.discardFail": "Discard failed: {err}",
+  "msg.discardOutOfScope": "Some changes could not be discarded and need to be handled manually",
+  "msg.discardUnbornHead": "This branch has no commits yet; discarding changes is not supported here",
   "msg.discardLog": "Discard uncommitted changes of {name}",
   "time.now": "just now"
 }
