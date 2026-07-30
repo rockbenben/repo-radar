@@ -180,6 +180,32 @@ export function setAutostart(enabled: boolean, home = homedir()): AutostartState
 }
 
 /**
+ * 这份实例要不要把「开机自启」这条能力接给后端（main.ts 的 extras.autostart）。
+ *
+ * 自启在三个平台上都是**全局唯一一条 OS 条目**：Windows 是 HKCU Run 下值名等于 AUMID 的那一条
+ * （com.rockbenben.repo-radar，见 build/installer.nsh）、Linux 是固定路径的
+ * ~/.config/autostart/repo-radar.desktop（路径里没有任何 profile 成分）、macOS 是 LaunchServices
+ * 里的同一个 .app。而写进去的命令行只有 `"<exe>" --tray`，**带不上 REPO_RADAR_CONFIG /
+ * REPO_RADAR_PORT**——README 承诺的「用这两个变量再跑一份完全独立的实例」在自启这条路上兑现不了。
+ *
+ * 不按配置区分的话：两个实例操作同一条条目、互相覆盖；更实在的是用户为工作 profile 打开的自启，
+ * 登录后拉起来的必然是**默认配置**那一份——它会在 ~/.repo-radar/ 现写一份空 roots 的默认配置，
+ * 托盘里常驻一个空看板；用户再点自己的快捷方式，锁域不同（main.ts 给非默认配置挪了 userData）
+ * 所以两个都跑得起来，托盘里于是两个一模一样的图标、其中一个是空的，全程零提示。
+ *
+ * 因此非默认配置直接不注入：/api/autostart 会如实回 supported:false（见 server/src/routes.ts），
+ * 界面本就按 supported 把整行开关隐藏，不必新增任何文案。
+ * 让自启支持多 profile 是另一回事（条目名与 Exec 都要带 profile，且 macOS 登录项不接受参数），
+ * 那是新功能，不在这里做。
+ */
+export function autostartExtra(
+  isDefaultConfig: boolean,
+): { get: () => AutostartState; set: (enabled: boolean) => AutostartState } | undefined {
+  if (!isDefaultConfig) return undefined
+  return { get: () => getAutostart(), set: (enabled) => setAutostart(enabled) }
+}
+
+/**
  * 判断一个自启条目是不是「上一代（SEA 时代）程序」留下的遗留条目。
  *
  * 缺陷 1（上一轮）的语义修复：上一轮误把 SEA 时代 healAutostart 的规则（"自启指向你放它的

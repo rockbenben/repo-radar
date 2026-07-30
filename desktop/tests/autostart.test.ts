@@ -7,6 +7,7 @@ import { app } from "electron"
 import {
   autostartDesktopEntry,
   autostartExecutablePath,
+  autostartExtra,
   cleanupLegacyEntries,
   getAutostart,
   isLegacyEntry,
@@ -615,6 +616,29 @@ describe("getAutostart — Windows 读回状态必须与写入时用同一组 ar
     } finally {
       mockApp.isPackaged = false
     }
+  })
+})
+
+/**
+ * 自启是全局唯一一条 OS 条目，而写进去的命令行只有 `"<exe>" --tray`，带不上
+ * REPO_RADAR_CONFIG / REPO_RADAR_PORT——用非默认配置（README 承诺的"完全独立的实例"）打开的
+ * 自启，登录后拉起来的是**默认配置**那一份：托盘里常驻一个空 roots 的空看板，用户再点自己的
+ * 快捷方式又起一个（锁域不同，两个都跑得起来），托盘里两个一模一样的图标、全程零提示。
+ * 因此非默认配置根本不该拿到这条能力——不注入，/api/autostart 就如实回 supported:false，
+ * 界面据此把整行开关隐藏。
+ */
+describe("autostartExtra — 只有默认配置那份实例才提供开机自启", () => {
+  it("非默认配置（REPO_RADAR_CONFIG 指向别处）→ 不注入，后端只能回 supported:false", () => {
+    expect(autostartExtra(false)).toBeUndefined()
+  })
+
+  it("默认配置 → 注入，且 get/set 接的是真正问系统的那两个函数", () => {
+    const extra = autostartExtra(true)
+    expect(extra).toBeDefined()
+    // 未打包时 getAutostart 一律回 supported:false（见其注释），这里只验证接线：
+    // 拿到的确实是 getAutostart/setAutostart 的返回值形状，而不是一个空壳
+    expect(extra!.get()).toEqual({ supported: false, enabled: false })
+    expect(extra!.set(true)).toEqual({ supported: false, enabled: false })
   })
 })
 

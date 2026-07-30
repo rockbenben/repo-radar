@@ -5,7 +5,7 @@ import { createBackend } from "../../server/src/backend"
 import { loadConfig } from "../../server/src/config"
 import { FileLog, installConsoleTee, logFilePath } from "../../server/src/logger"
 import { DEFAULT_PORT, PORT, PORT_IS_EXPLICIT } from "../../server/src/port"
-import { cleanupLegacyEntries, getAutostart, setAutostart } from "./autostart"
+import { autostartExtra, cleanupLegacyEntries } from "./autostart"
 import { resolveConfigFile } from "./config-path"
 import { showNotification, summarizeInboxChanges } from "./notify"
 import { createQuit } from "./quit"
@@ -41,6 +41,9 @@ if (!configResolution.ok) {
 }
 const configFile = configResolution.configFile
 const configDir = join(configFile, "..")
+// 在这里取出来（而不是在 bootstrap 里读 configResolution.isDefault）：上面的 ok 判定收窄
+// 只在模块顶层这条控制流上成立，函数体里 TS 看到的仍是包含 { ok:false } 的联合类型
+const isDefaultConfig = configResolution.isDefault
 
 // 日志最先装：打包后的应用没有控制台，启动阶段出问题只能靠这个文件复盘
 installConsoleTee(new FileLog(logFilePath(configDir)))
@@ -101,7 +104,7 @@ if (process.platform === "darwin" && app.isPackaged) {
 // （保存的视图、活动日志、主题、语言），换目录等于把老用户的数据全部丢掉。
 // 必须在 app.whenReady() 之前调用（Electron 的硬性要求），这里在 requestSingleInstanceLock()
 // 之前设置，天然满足。
-if (!configResolution.isDefault) {
+if (!isDefaultConfig) {
   app.setPath("userData", join(configDir, "electron-userData"))
 }
 
@@ -208,7 +211,9 @@ function bootstrap(): void {
     // 等于让用户机器上任何别的前端项目、或一个恶意页面都能驱动本地 API（见 routes.ts）
     devOrigins: isDev,
     extras: {
-      autostart: { get: () => getAutostart(), set: (enabled) => setAutostart(enabled) },
+      // 只有默认配置那份实例才提供自启：条目是全局唯一一条、且命令行带不上
+      // REPO_RADAR_CONFIG/REPO_RADAR_PORT，理由与后果全在 autostartExtra 的注释里
+      autostart: autostartExtra(isDefaultConfig),
       shutdown: () => void quit(),
     },
   })
