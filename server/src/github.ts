@@ -15,6 +15,9 @@ function runGh(cwd: string, args: string[]): Promise<GhResult> {
     let stdout = ""
     let stderr = ""
     const timer = setTimeout(() => child.kill(), GH_TIMEOUT_MS)
+    // 同 git.ts 的 runGit：无人监听的管道 error 会变成进程级 uncaughtException
+    child.stdout?.on("error", () => {})
+    child.stderr?.on("error", () => {})
     child.stdout?.on("data", (d: Buffer) => (stdout += d.toString("utf8")))
     child.stderr?.on("data", (d: Buffer) => (stderr += d.toString("utf8")))
     child.on("error", (err) => {
@@ -46,6 +49,9 @@ export interface GithubStatus {
   ok: boolean
   error: string | null // gh 未安装 / 未登录 / 无 GitHub 远程 等
   prs: GithubPr[]
+  // prs 撞上了 PR_LIST_LIMIT。面板拿 prs.length 当「Open PRs: N」渲染，截断时必须让用户看出来：
+  // 否则「100」与「恰好 100 个」无从区分，而 gh 无论给多大的 --limit 都只是把这条界线往后挪
+  prsTruncated: boolean
   run: GithubRun | null // 最近一次工作流运行
 }
 
@@ -234,12 +240,17 @@ export async function getGithubInbox(slug: string, prevPrs?: number, prevIssues?
 }
 
 /** 按需查询某仓库的开放 PR 与最近 CI 状态（需本机安装并登录 gh）。纯本地触发，无后台调用。 */
+// gh 一次请求最多返回 100 条，正好取这个值：再大只会多分几页、不会消掉上限
+const PR_LIST_LIMIT = 100
+
 export async function getGithubStatus(cwd: string): Promise<GithubStatus> {
-  const empty: GithubStatus = { ok: false, error: null, prs: [], run: null }
+  const empty: GithubStatus = { ok: false, error: null, prs: [], prsTruncated: false, run: null }
 
   if (!(await ghAvailable())) return { ...empty, error: "本机未安装 GitHub CLI（gh）" } // 复用缓存探测，别每次点开都白 spawn 一次 --version
 
-  const prRes = await runGh(cwd, ["pr", "list", "--state", "open", "--json", "number,title,url,isDraft"])
+  // --limit：gh 默认只抓 30 条，而面板把这个数组的长度当「Open PRs: N」渲染——超过 30 个开放 PR 的
+  // 仓库会显示 30，同屏的行动队列却走 GraphQL totalCount 显示真实数字，两个数当场打架
+  const prRes = await runGh(cwd, ["pr", "list", "--state", "open", "--limit", String(PR_LIST_LIMIT), "--json", "number,title,url,isDraft"])
   if (prRes.code !== 0) {
     const msg = prRes.stderr.trim().split("\n").pop() || "gh 查询失败"
     // 常见：未登录、当前目录不是 GitHub 仓库
@@ -264,5 +275,5 @@ export async function getGithubStatus(cwd: string): Promise<GithubStatus> {
     }
   }
 
-  return { ok: true, error: null, prs, run }
+  return { ok: true, error: null, prs, prsTruncated: prs.length >= PR_LIST_LIMIT, run }
 }
