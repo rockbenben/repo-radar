@@ -1,10 +1,10 @@
-import { App as AntdApp, Button, Dropdown, Input, Modal, Popconfirm, Popover, Segmented, Select, Switch } from "antd"
+import { App as AntdApp, Button, Dropdown, Input, Modal, Popconfirm, Segmented, Select, Switch } from "antd"
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CockpitHero, GITHUB_KINDS, type QueueItem } from "./components/CockpitHero"
 import { CommandPalette } from "./components/CommandPalette"
 import { DetailPanel } from "./components/DetailPanel"
 import { RepoCard } from "./components/RepoCard"
-import { RootsEditor } from "./components/RootsEditor"
+import { ScanConfigEditor } from "./components/ScanConfigEditor"
 import { ScopeMark } from "./components/ScopeMark"
 import { StashView } from "./components/StashView"
 import { StatsView } from "./components/StatsView"
@@ -12,6 +12,7 @@ import { WorklogView } from "./components/WorklogView"
 import { LANGS, useI18n } from "./i18n"
 import { resolveEmptyArea, type HasRootsState } from "./lib/emptyState"
 import { applyFilter, type FilterState } from "./lib/filter"
+import { visibleLamps } from "./lib/lamps"
 import { daysSince, isGithubUrl } from "./lib/meta"
 import { mergeRepo, parentOf } from "./lib/repos"
 import { relativeTime } from "./lib/time"
@@ -155,6 +156,15 @@ const ATTENTION: { key: AttentionKey; labelKey: string; sev: "crit" | "warn" | "
 ]
 // 可一键批量处理的告警类型 → 对应的 git 操作
 const LAMP_OP: Partial<Record<AttentionKey, "push" | "pull">> = { unpushed: "push", behind: "pull" }
+const LAMP_KEYS = ATTENTION.map((a) => a.key)
+
+// 设置弹窗的两栏，按**交互模型**分：常规里点完即生效，扫描与打开方式要显式保存并重扫。
+// 第二项复用已有的 scan.title，只有「常规」是新词
+type SettingsTab = "general" | "scan"
+const SETTINGS_TABS: { key: SettingsTab; labelKey: string }[] = [
+  { key: "general", labelKey: "settings.tabGeneral" },
+  { key: "scan", labelKey: "scan.title" },
+]
 
 // 保存的视图：一套命名的筛选 + 排序 + 分组组合
 type SavedView = {
@@ -199,7 +209,7 @@ export default function App({
   // 中文进页面、切成英文再点批量 push，活动日志写进去的是「批量 push 完成：1 成功」，
   // 而界面已全英文；日志还会落 localStorage 长期留着，此后每次批量操作再加一条。
   // 把 t 放进依赖数组不是选项——那会让 connectEvents 每切一次语言就断开重连 WebSocket。
-  // 改用 ref 持有最新的 t，处理器内部读 ref（同 components/RootsEditor.tsx 的做法）
+  // 改用 ref 持有最新的 t，处理器内部读 ref（同 components/ScanConfigEditor.tsx 的做法）
   const tRef = useRef(t)
   tRef.current = t
   const [repos, setRepos] = useState<RepoStatus[]>([])
@@ -213,6 +223,9 @@ export default function App({
     tags: [],
   }))
   const [attention, setAttention] = useState<AttentionKey | null>(null)
+  // 顶栏告警灯：默认全开，用户可在设置里关掉自己不关心的类型（比如一堆本地实验仓的「无远程」）。
+  // 存的是关掉的那几盏，理由见 lib/lamps.ts——以后加新灯时老用户也得看得见
+  const [lamps, setLamps] = useState<AttentionKey[]>(() => visibleLamps(pref("lampsOff", ""), LAMP_KEYS))
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [batch, setBatch] = useState<BatchProgress | null>(null)
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number } | null>(null)
@@ -229,7 +242,14 @@ export default function App({
   const [execCmd, setExecCmd] = useState("")
   const [execResultOpen, setExecResultOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [rootsOpen, setRootsOpen] = useState(false) // 扫描目录管理弹窗
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general")
+  // 首次引导的「添加扫描目录」直达扫描那一栏；齿轮进来则停在「常规」。
+  // 两个 CTA 共用这一个入口，别各写各的 setTab+setOpen
+  const openScanSettings = () => {
+    setSettingsTab("scan")
+    setSettingsOpen(true)
+  }
   // 是否已配置过扫描来源（roots 或手动仓库）：null=config 还没拉到。首次引导欢迎页只在
   // 明确「没配置过」时出现——配置了但扫出 0 个仓库的用户应看到「未发现仓库」而不是被当成新用户
   const [hasRoots, setHasRoots] = useState<HasRootsState>(null)
@@ -466,13 +486,17 @@ export default function App({
   useEffect(() => savePref("view", view), [view])
   useEffect(() => savePref("group", groupMode), [groupMode])
   useEffect(() => savePref("arch", showArchived ? "1" : "0"), [showArchived])
+  useEffect(() => savePref("lampsOff", LAMP_KEYS.filter((k) => !lamps.includes(k)).join(",")), [lamps])
   useEffect(() => savePref("views", JSON.stringify(views)), [views])
   useEffect(() => savePref("log", JSON.stringify(log)), [log])
 
   const applyView = (v: SavedView) => {
     setFilter({ query: v.query, group: v.group, sort: v.sort, severity: null, tags: v.tags ?? [] })
     setGroupMode(v.groupMode)
-    setAttention(v.attention)
+    // 保存的视图来自 localStorage，里面的告警筛选可能已经不成立了：这盏灯被用户在设置里关掉、
+    // 或干脆是旧版本才有的类型。照单全收会让看板停在一个没有开关可以退出的筛选里（灯不渲染，
+    // 空结果页也没有清除筛选的入口），只能刷新页面；旧类型还会让下面 visible 里的查找落空
+    setAttention(v.attention && lamps.includes(v.attention) ? v.attention : null)
     setViewName(v.name)
   }
   const saveCurrentView = (name: string) => {
@@ -888,8 +912,7 @@ export default function App({
     const isCrit = (r: RepoStatus) => r.error !== null || r.health.some((h) => h.severity === "error")
     const crit = active.filter(isCrit).length
     const warn = active.filter((r) => !isCrit(r) && r.health.some((h) => h.severity === "warn")).length
-    const attn = Object.fromEntries(ATTENTION.map((a) => [a.key, active.filter(a.test).length])) as Record<AttentionKey, number>
-    return { fleet: active.length, crit, warn, clean: active.length - crit - warn, attn, archived: repos.length - active.length }
+    return { fleet: active.length, crit, warn, clean: active.length - crit - warn, archived: repos.length - active.length }
   }, [active, repos])
   const stashTotal = useMemo(() => active.reduce((s, r) => s + r.stashCount, 0), [active])
 
@@ -979,11 +1002,17 @@ export default function App({
   // 默认只看未排除的；「已排除」开关切换为只看被排除的那些（便于管理 / 取消排除）
   const excluded = useMemo(() => repos.filter((r) => r.archived), [repos])
   const base = showArchived ? excluded : active
+  // 灯的计数必须和灯的筛选数同一批仓库。之前计数走 active、筛选走 base：在「已排除」视图里
+  // 顶栏亮着「未提交改动 5」，点下去却是空的——那 5 个都不在这个视图的仓库集合里
+  const attn = useMemo(
+    () => Object.fromEntries(ATTENTION.map((a) => [a.key, base.filter(a.test).length])) as Record<AttentionKey, number>,
+    [base],
+  )
   const filtered = useMemo(() => applyFilter(base, filter), [base, filter])
   const visible = useMemo(() => {
-    if (!attention) return filtered
-    const test = ATTENTION.find((a) => a.key === attention)!.test
-    return filtered.filter(test)
+    // 找不到就当没筛选：attention 可能来自旧版本存下的保存视图，那时的灯类型现在已经没了
+    const rule = attention === null ? undefined : ATTENTION.find((a) => a.key === attention)
+    return rule ? filtered.filter(rule.test) : filtered
   }, [filtered, attention])
   const sections = useMemo(() => {
     if (groupMode === "none") return null // 不分组：所有仓库平铺一个网格
@@ -1204,11 +1233,64 @@ export default function App({
           style={{ display: "none" }}
           onChange={importManifestFile}
         />
-        <Popover
-          trigger="click"
-          placement="bottomRight"
-          rootClassName="rr-settings-pop"
-          content={
+        <Button
+          size="small"
+          className="rr-gear"
+          /* 高亮只标「用户自己额外开的后台行为」。文件监听改成默认关闭之后它也算一个——
+             而且是三者里最贵的那个（常驻句柄 + 溢出补票的全量重扫）。此前它默认开着，
+             算进来会让齿轮永远亮着、信号归零，所以那时刻意排除在外 */
+          type={autoWatch || autoFetchMin > 0 || notifications ? "primary" : "default"}
+          ghost={autoWatch || autoFetchMin > 0 || notifications}
+          /* 图标按钮没有可读文字，tooltip 就是它的名字，说清「点了会发生什么」即可。
+             原来那条是「设置：主题 · 自动扫描 · 定时拉取 · 提醒」——枚举了 4 项而设置里现在有十来项，
+             还把「GitHub 提醒」称作「提醒」，界面上同一个东西两个叫法 */
+          title={t("settings.title")}
+          onClick={() => setSettingsOpen(true)}
+        >
+          ⚙
+        </Button>
+        {/* 设置从顶栏弹层改成弹窗：这里没有一项是高频操作（语言、告警灯、四个后台开关、扫描目录
+            全是「设一次」），弹层「不打断上下文」的优势换不到东西；而它长到 644px 之后，在最小
+            窗口（600 高）下已经必须滚动，且里面还有个按钮再开一层弹窗。
+            两栏的分界是**交互模型**：常规里的东西点完即生效，扫描与打开方式要按「保存并重新扫描」。
+            版本与 GitHub 链接不是设置，放页脚常驻，不占分栏 */}
+        <Modal
+          open={settingsOpen}
+          onCancel={() => setSettingsOpen(false)}
+          title={t("settings.title")}
+          width={640}
+          rootClassName="rr-settings-modal"
+          footer={
+            <div className="rr-settings-foot">
+              {instance.version !== "" && (
+                // 端口跟在版本号后面，不另起一行、也不新增文案键：数字本身就说明问题，
+                // 而 18 份翻译为一个端口号加一条新字符串不值当
+                <span className="rr-ver" title={t("settings.versionHint")}>
+                  v{instance.version}
+                  {instance.port > 0 && ` · 127.0.0.1:${instance.port}`}
+                </span>
+              )}
+              <a className="rr-settings-gh" href={REPO_URL} target="_blank" rel="noreferrer noopener">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+                </svg>
+                <span>GitHub</span>
+                <span className="ext">↗</span>
+              </a>
+            </div>
+          }
+        >
+          <div className="rr-settings-body">
+            {/* 两栏用 Segmented 而不是左侧导航栏：只有两项，划走 150px 装两个词不划算；
+                而且这个控件顶栏导航已经在用，视觉语言现成 */}
+            <Segmented
+              size="small"
+              block
+              value={settingsTab}
+              onChange={(v) => setSettingsTab(v as SettingsTab)}
+              options={SETTINGS_TABS.map(({ key, labelKey }) => ({ label: t(labelKey), value: key }))}
+            />
+            {settingsTab === "general" && (
             <div className="rr-settings">
               {/* 显示：语言与主题——纯展示偏好放在最前 */}
               <div className="grp">{t("settings.grpDisplay")}</div>
@@ -1235,6 +1317,38 @@ export default function App({
                     { label: t("settings.light"), value: "light" },
                   ]}
                 />
+              </div>
+              {/* 告警灯：直接把顶栏那排灯摆进来，亮=会显示、暗=已关掉，点一下切换。
+                  原先是 antd 多选框，六盏灯被 maxTagCount 折叠成「+ 6 …」——这个控件唯一的
+                  职责就是告诉你哪几盏开着，而它恰恰什么都没说，非得点开下拉才知道。
+                  换成实物之后：状态零点击可读，改动一点击完成，颜色与顶栏同源（crit/warn），
+                  所见即所得；顺带没了下拉搜索，也就没了「搜中文搜不到」那类问题 */}
+              <div className="row stack">
+                <span className="lb">
+                  {t("settings.lamps")}<span className="hint">{t("settings.lampsHint")}</span>
+                </span>
+                <div className="rr-lamp-pick">
+                  {ATTENTION.map((a) => {
+                    const on = lamps.includes(a.key)
+                    return (
+                      <button
+                        key={a.key}
+                        type="button"
+                        className={a.sev}
+                        aria-pressed={on}
+                        onClick={() => {
+                          const next = on ? lamps.filter((k) => k !== a.key) : LAMP_KEYS.filter((k) => k === a.key || lamps.includes(k))
+                          setLamps(next)
+                          // 关掉的那盏灯正被当作筛选条件时，看板会卡在一个没有开关可以退出的筛选里
+                          if (attention && !next.includes(attention)) setAttention(null)
+                        }}
+                      >
+                        <span className="d" />
+                        {t(a.labelKey)}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
               {/* 本地刷新 / 联网与提醒 分成两组：组标题本身承载产品的成本模型——本地、
                   不走网络的行为默认开；会发请求或打扰人的行为一律 opt-in。混在一个「自动化」
@@ -1337,14 +1451,10 @@ export default function App({
                 </span>
                 <Switch size="small" checked={notifications} onChange={toggleNotifications} disabled={!configLoaded} />
               </div>
-              {/* 系统：扫描来源管理 + 开机自启 + 退出 + 版本——本机/本实例相关的操作放最后 */}
+              {/* 系统：本机/本实例相关的两个动作。它们和上面的开关一样即时生效，
+                  所以是「常规」里的一个分组，不值得单开一栏——版本和 GitHub 链接搬去页脚之后，
+                  这一栏就只剩这两行了 */}
               <div className="grp">{t("settings.grpSystem")}</div>
-              <div className="row">
-                <span className="lb">{t("roots.title")}</span>
-                <Button size="small" onClick={() => setRootsOpen(true)}>
-                  {t("settings.manage")}
-                </Button>
-              </div>
               {autostart.supported && (
                 <div className="row">
                   <span className="lb">
@@ -1365,49 +1475,31 @@ export default function App({
                   </Popconfirm>
                 </div>
               )}
-              {instance.version !== "" && (
-                <div className="row">
-                  <span className="lb">
-                    {t("settings.version")}<span className="hint">{t("settings.versionHint")}</span>
-                  </span>
-                  {/* 端口跟在版本号后面，不另起一行、也不新增文案键：数字本身就说明问题，
-                      而 18 份翻译为一个端口号加一条新字符串不值当 */}
-                  <span className="rr-ver">
-                    v{instance.version}
-                    {instance.port > 0 && ` · 127.0.0.1:${instance.port}`}
-                  </span>
-                </div>
-              )}
-              <a className="rr-settings-gh" href={REPO_URL} target="_blank" rel="noreferrer noopener">
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                  <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
-                </svg>
-                <span>GitHub</span>
-                <span className="ext">↗</span>
-              </a>
             </div>
-          }
-        >
-          <Button
-            size="small"
-            className="rr-gear"
-            /* 高亮只标「用户自己额外开的后台行为」。文件监听改成默认关闭之后它也算一个——
-               而且是三者里最贵的那个（常驻句柄 + 溢出补票的全量重扫）。此前它默认开着，
-               算进来会让齿轮永远亮着、信号归零，所以那时刻意排除在外 */
-            type={autoWatch || autoFetchMin > 0 || notifications ? "primary" : "default"}
-            ghost={autoWatch || autoFetchMin > 0 || notifications}
-            title={t("settings.tip")}
-          >
-            ⚙
-          </Button>
-        </Popover>
+            )}
+            {/* 扫描与打开方式独立成栏。open 只跟弹窗开合走、不跟分栏走：切到别的栏只是把它藏起来，
+                这样敲了一半还没保存的路径不会因为切栏被抹掉（代价是弹窗一开就拉一次 /api/config，
+                本机一个 GET，换不丢用户输入很划算） */}
+            <ScanConfigEditor
+              open={settingsOpen}
+              hidden={settingsTab !== "scan"}
+              onClose={() => setSettingsOpen(false)}
+              onSaved={() => {
+                void rescan()
+                // 保存后同步「是否已配置扫描来源」，欢迎页/空状态的分流才不会用旧值；
+                // 复用 loadConfigStatus 而不是另抄一份 fetch——两处对 hasRoots 的写入必须走同一套判定
+                void loadConfigStatus()
+              }}
+            />
+          </div>
+        </Modal>
       </div>
 
       {view === "board" && (
         <div className="rr-annun">
           {ATTENTION.map((a) => {
-            const n = counts.attn[a.key]
-            if (n === 0) return null
+            const n = attn[a.key]
+            if (n === 0 || !lamps.includes(a.key)) return null
             return (
               <span
                 key={a.key}
@@ -1669,7 +1761,7 @@ export default function App({
                   <div className="ht">{t("empty.configErrorHint")}</div>
                   <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
                     <Button onClick={retryConfigStatus}>{t("common.retry")}</Button>
-                    <Button type="primary" ghost onClick={() => setRootsOpen(true)}>
+                    <Button type="primary" ghost onClick={openScanSettings}>
                       {t("empty.welcomeCta")}
                     </Button>
                   </div>
@@ -1683,7 +1775,7 @@ export default function App({
                 <div className="rr-welcome">
                   <div className="tt">{t("empty.welcomeTitle")}</div>
                   <div className="ht">{t("empty.welcomeHint")}</div>
-                  <Button type="primary" ghost onClick={() => setRootsOpen(true)}>
+                  <Button type="primary" ghost onClick={openScanSettings}>
                     {t("empty.welcomeCta")}
                   </Button>
                 </div>
@@ -1721,16 +1813,6 @@ export default function App({
       )}
 
       <CommandPalette open={paletteOpen} repos={active} onClose={() => setPaletteOpen(false)} onOpen={openRepo} onCopyPath={copyPath} />
-      <RootsEditor
-        open={rootsOpen}
-        onClose={() => setRootsOpen(false)}
-        onSaved={() => {
-          void rescan()
-          // 保存后同步「是否已配置扫描来源」，欢迎页/空状态的分流才不会用旧值；
-          // 复用 loadConfigStatus 而不是另抄一份 fetch——两处对 hasRoots 的写入必须走同一套判定
-          void loadConfigStatus()
-        }}
-      />
 
       <Modal
         open={newOpen}

@@ -571,7 +571,12 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     if (typeof body.target !== "string" || !OPEN_TARGETS.has(body.target))
       return c.json({ error: "target must be editor|terminal|explorer" }, 400)
     const cfg = loadConfig(configFile)
-    openFn(cfg.open[body.target as keyof Config["open"]], repo.path)
+    const template = cfg.open[body.target as keyof Config["open"]]
+    // 空模板 = 用户在「扫描与打开方式」里把这条命令清空了（或手改配置删掉了）。此时什么都别做，
+    // 尤其不能往下走：spawn("") 静默无事发生，而 lastOpened 照写、接口照回 200，卡片会立刻显示
+    // 「刚刚打开」并跳到「最近打开」排序的最前面——根本没有程序被启动，界面却在说反话
+    if (template.trim() === "") return c.json({ error: `open.${body.target} is empty` }, 400)
+    openFn(template, repo.path)
     // 记住"上次打开"时间，让常用项目能按此排序置顶
     cfg.lastOpened[repo.id] = new Date().toISOString()
     saveConfig(configFile, cfg)

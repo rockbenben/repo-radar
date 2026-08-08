@@ -40,7 +40,10 @@ function Root() {
 
   // direction 传给 antd ConfigProvider，让 Select/Modal/Dropdown/Segmented 等内部布局也镜像
   return (
-    <ConfigProvider theme={radarTheme(mode)} direction={rtl ? "rtl" : "ltr"}>
+    // button.autoInsertSpace：antd 默认给「恰好两个汉字」的按钮塞一个空格，于是「退出」渲染成
+    // 「退 出」、「添加」成「添 加」，看着像排版事故。这个产品 18 种语言里有 4 种是 CJK，
+    // 按钮文案又短，撞上的概率很高——全局关掉，一处生效
+    <ConfigProvider theme={radarTheme(mode)} direction={rtl ? "rtl" : "ltr"} button={{ autoInsertSpace: false }}>
       <I18nProvider lang={lang} setLang={setLang}>
         <AntApp>
           <App themeMode={mode} onToggleTheme={() => setMode((m) => (m === "dark" ? "light" : "dark"))} />

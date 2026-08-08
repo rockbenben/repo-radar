@@ -40,8 +40,8 @@ export interface RefreshOptions {
  * 几百个仓库时这个窗口是秒级的。对这些仓库说「请在 manualRepos 中更新这条路径」是**无法
  * 执行的指示**：用户打开 config.json，manualRepos 里根本没有这条路径。
  *
- * 手动那条指向配置文件而不是「设置」面板：⚙ 设置里的「扫描来源管理」（RootsEditor）只编辑
- * config.roots，manualRepos 目前没有对应 UI（见 web/src/components/RootsEditor.tsx 顶部注释），
+ * 手动那条指向配置文件而不是「设置」面板：⚙ 设置里的「扫描与打开方式」（ScanConfigEditor）只编辑
+ * config 的 roots / excludes / open，manualRepos 目前没有对应 UI（见 web/src/components/ScanConfigEditor.tsx 顶部注释），
  * 唯一真实可行的路是直接改配置文件——指错地方等于没提示。
  *
  * 归一化后比较而不是裸 `includes`：Windows/macOS 上大小写与分隔符风格随手一改就对不上，

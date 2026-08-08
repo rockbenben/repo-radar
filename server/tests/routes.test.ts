@@ -508,6 +508,28 @@ describe("api", () => {
     t.cleanup()
   })
 
+  // 命令模板可以被清空——「扫描与打开方式」弹窗里就有这三个输入框。空模板必须当场拒掉：
+  // 放它往下走的话 spawn("") 静默无事发生，lastOpened 却照写、接口照回 200，
+  // 卡片立刻显示「刚刚打开」并跳到「最近打开」排序最前面，而根本没有程序被启动
+  it("POST /api/repos/:id/open 拒绝空命令模板，且不写 lastOpened", async () => {
+    const t = setup()
+    await t.store.refreshAll()
+    const id = t.store.list()[0].id
+    const cfg = loadConfig(t.configFile)
+    saveConfig(t.configFile, { ...cfg, open: { ...cfg.open, terminal: "  " } })
+
+    const res = await t.appWithOpen.request(`/api/repos/${id}/open`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: "terminal" }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(t.opened).toEqual([]) // 没有 spawn
+    expect(loadConfig(t.configFile).lastOpened[id]).toBeUndefined() // 也没有「刚刚打开」
+    t.cleanup()
+  })
+
   it("GET /api/repos rejects disallowed origins and accepts allowed/absent ones", async () => {
     const t = setup()
     await t.store.refreshAll()
