@@ -80,7 +80,9 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
 
       <section style={{ marginBottom: 28 }}>
         <h2>{t("stats.heatmapTitle")}</h2>
-        <Heatmap days={days} />
+        {/* legend 不能只给详情面板那张小图：这张才是主图（371 格、五档绿），
+            没有色阶说明的话深浅只是装饰，读者无从判断"深一点"到底多多少 */}
+        <Heatmap days={days} legend />
       </section>
       <div style={{ display: "grid", gap: 28, gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))" }}>
         <section>
