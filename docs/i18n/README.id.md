@@ -6,7 +6,7 @@
 
 > Rencana 365 Open Source #027 · Dasbor lokal yang mengawasi semua Git repo Anda dan menunjukkan mana yang butuh perhatian Anda.
 
-[English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · **Bahasa Indonesia**
+[English](../../README.md) · [简体中文](../../README.zh.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · **Bahasa Indonesia**
 
 Anda punya Git repo lebih banyak daripada yang sanggup Anda pantau satu per satu. repo-radar mengawasi semuanya dan menyodorkan beberapa yang benar-benar butuh perhatian Anda sekarang — supaya sisanya tak perlu lagi memenuhi pikiran Anda.
 
@@ -34,19 +34,19 @@ npm install
 npm start
 ```
 
-Saat pertama kali dijalankan, klik **Tambah direktori pemindaian** (atau ⚙ Pengaturan → Direktori pemindaian) lalu arahkan ke folder tempat repo Anda berada — tak perlu menyentuh JSON, tak perlu restart; begitu Anda simpan, ia langsung memindai ulang. Pengaturan tersimpan di `~/.repo-radar/config.json` kalau Anda lebih suka menyuntingnya sendiri.
+Saat pertama kali dijalankan, klik **Tambah direktori pemindaian** (atau ⚙ Pengaturan → Pemindaian & perintah buka) lalu arahkan ke folder tempat repo Anda berada — tak perlu menyentuh JSON, tak perlu restart; begitu Anda simpan, ia langsung memindai ulang. Pengaturan tersimpan di `~/.repo-radar/config.json` kalau Anda lebih suka menyuntingnya sendiri.
 
 ## Papan
 
 Satu kartu per repo — warna kesehatan, branch, rincian working-tree, ahead/behind, commit terakhir, tag — dengan **editor / terminal / folder** sekali klik di setiap kartu. Dari sini Anda:
 
-- **Temukan** — cari, klik bahasa / `#tag` / lampu perhatian untuk memfilter, urutkan, dan kelompokkan berdasarkan folder atau bahasa; simpan filter + urutan + pengelompokan mana pun sebagai view bernama. ⌘/Ctrl-K membuka launcher.
+- **Temukan** — cari, klik bahasa / `#tag` / lampu perhatian untuk memfilter, urutkan, dan kelompokkan berdasarkan folder atau bahasa; simpan filter + urutan + pengelompokan mana pun sebagai view bernama. ⌘/Ctrl-K membuka launcher. Lampu yang tak Anda perlukan bisa dimatikan di ⚙ Pengaturan → Lampu sinyal.
 - **Bertindak secara batch** — pilih repo untuk fetch / pull (`--ff-only`) / push, atau jalankan perintah shell secara paralel di seluruhnya (dengan pratinjau dry-run dan output per-repo). Satu repo yang gagal tak akan pernah menghentikan yang lainnya.
 - **Gali sebuah repo** — panel detail memberi rincian kesehatan lengkap, beralih / membuat / membuang branch, **commit di tempat** dengan diff langsung, PR & CI GitHub sesuai permintaan, commit terbaru, stash, heatmap 12 minggu, dan pembersihan sekali klik untuk branch yang sudah ter-merge — hanya ditawarkan selagi kamu berada di `main`/`master`, satu-satunya posisi di mana “sudah ter-merge” berarti ter-merge ke trunk. Membuang perubahan memulihkan berkas terlacak dan menghapus yang tak terlacak, tetapi tidak menyentuh isi submodul maupun repo git bersarang yang tak terlacak; kalau masih ada yang tertinggal, ia memberitahumu alih-alih melaporkan sukses.
 - **Selalu terkini** — jalur penyegaran bawaan adalah pemindaian ulang tiap 30 menit ditambah pemindaian manual dari bilah atas. Pemindaian otomatis saat file berubah **nonaktif secara default** dan dinyalakan sendiri di panel pengaturan: ia lokal saja dan tidak pernah menyentuh jaringan, tetapi saat beberapa proyek dibangun sekaligus, buffer notifikasi kernel meluap terus-menerus, dan setiap luapan berharga satu pemindaian ulang — harga tetap yang terlalu mahal untuk alat yang dipakai sekadar melirik apa yang berubah. Kalau dinyalakan, di Windows dan macOS, satu pemantauan rekursif per direktori pemindaian mencakup seluruh repo di bawahnya, sehingga menambah, menghapus, atau mengganti nama repo terlihat dalam hitungan detik; di Linux repo dipantau satu per satu dan `watchLimit` (bawaan 200, 0 = tanpa batas) membatasi jumlahnya, dengan prioritas untuk repo favorit dan yang baru di-commit. Kalau luapan terus terjadi, pemindaian ulang penambal merenggang secara eksponensial (paling sering tiap 30 menit) dan tidak lagi membangun ulang pemantauan — itu hanya terjadi kalau target pemantauan benar-benar hilang. Pemindaian ulang tiap 30 menit menutup apa yang terlewat, bilah atas menampilkan “terakhir dipindai”, dan panel pengaturan menampilkan cakupan secara langsung (“memantau M dari N”). Mengganti nama atau memindahkan repo tetap mempertahankan tag, bintang, status arsip, dan catatannya — repo-radar melacak identitas, bukan sekadar path. Pencocokan terjadi pada putaran pemindaian **tepat setelah** perpindahan, sehingga tersisa dua celah: perpindahan lambat antar-volume yang membentang di dua putaran pemindaian, dengan penambahan/penghapusan repo lain atau pemindaian ulang berkala jatuh di antaranya; dan perpindahan yang tujuannya tidak dipindai pada putaran itu — memindahkan repo ke luar direktori pemindaian lalu baru menambahkan lokasi barunya sebagai direktori pemindaian adalah cara paling umum terkena. Keduanya jatuh kembali ke identitas berbasis path: repo muncul sebagai kartu baru, dan tag/bintang/arsip/catatannya tertinggal di bawah id yang tidak lagi dimilikinya. Fetch latar terjadwal bersifat opsional. Tab **Stats** (heatmap commit setahun, paling/paling tidak aktif) dan tab **Worklog** yang menyalin rentang tanggal sebagai laporan mingguan Markdown.
 - **Mulai & pindahkan repo** — **+ New** menyarankan proyek bernomor berikutnya, menjalankan `git init`, menulis README, dan mengadopsinya ke papan; ekspor / impor manifest membawa setelan Anda antar-mesin.
 
-UI-nya antd 6 dengan tema instrument-cockpit gelap, dilokalkan ke dalam 18 bahasa (otomatis dicocokkan dengan browser Anda pada kunjungan pertama, RTL untuk bahasa Arab).
+UI-nya antd 6 dengan tema instrument-cockpit gelap, dilokalkan ke dalam 18 bahasa (otomatis dicocokkan dengan browser Anda pada kunjungan pertama, RTL untuk bahasa Arab). Kontras teks disetel ke WCAG AA di kedua tema.
 
 ## Berjalan diam-diam di latar belakang
 
@@ -57,6 +57,8 @@ Saat keluar, repo-radar menunggu hingga 10 detik agar pekerjaan git yang sudah b
 Aktifkan **Jalankan saat login** di ⚙ Pengaturan dan ia mulai tanpa jendela bersama sesi Anda — tak ada jendela sampai Anda memintanya. Notifikasi desktop opsional hanya menyala saat ada yang *baru* masuk ke antrean Anda, bahkan dengan jendela tertutup. Pembaruan sengaja dibuat manual (tanpa auto-update): cukup jalankan installer baru menimpa yang lama. Log ditulis ke `<config dir>/logs/repo-radar.log`.
 
 ## Konfigurasi
+
+Direktori pemindaian, folder yang dikecualikan, dan perintah buka bisa diubah lewat ⚙ Pengaturan → Pemindaian & perintah buka; sisanya hanya lewat berkas.
 
 Semua yang disentuh UI disimpan ke `~/.repo-radar/config.json` — Anda jarang perlu membukanya. Field yang penting:
 

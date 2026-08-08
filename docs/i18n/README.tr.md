@@ -8,7 +8,7 @@
 
 [![365 Open Source Plan #027](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
 
-[English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · **Türkçe** · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
+[English](../../README.md) · [简体中文](../../README.zh.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · **Türkçe** · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
 Elle takip edebileceğinizden daha fazla Git reponuz var. repo-radar hepsine göz kulak olur ve şu anda sizi bekleyen birkaçını gösterir — böylece geri kalanı aklınızı meşgul etmez.
 
@@ -36,19 +36,19 @@ npm install
 npm start
 ```
 
-İlk çalıştırmada **Tarama dizini ekle**'ye (veya ⚙ Ayarlar → Tarama dizinleri) tıklayın ve repolarınızı barındıran klasörleri gösterin — JSON yok, yeniden başlatma yok; kaydettiğiniz anda yeniden tarar. Elle düzenlemeyi tercih ederseniz ayarlar `~/.repo-radar/config.json` içindedir.
+İlk çalıştırmada **Tarama dizini ekle**'ye (veya ⚙ Ayarlar → Tarama ve açma komutları) tıklayın ve repolarınızı barındıran klasörleri gösterin — JSON yok, yeniden başlatma yok; kaydettiğiniz anda yeniden tarar. Elle düzenlemeyi tercih ederseniz ayarlar `~/.repo-radar/config.json` içindedir.
 
 ## Pano
 
 Repo başına bir kart — sağlık rengi, branch, çalışma ağacı dökümü, ileride/geride, son commit, etiketler — ve her kartta tek tıkla **editör / terminal / klasör**. Buradan:
 
-- **Bulun** — arayın, filtrelemek için bir dile / `#tag`'e / dikkat lambasına tıklayın, klasöre veya dile göre sıralayın ve gruplayın; herhangi bir filtre + sıralama + gruplamayı adlandırılmış bir görünüm olarak kaydedin. ⌘/Ctrl-K bir başlatıcı açar.
+- **Bulun** — arayın, filtrelemek için bir dile / `#tag`'e / dikkat lambasına tıklayın, klasöre veya dile göre sıralayın ve gruplayın; herhangi bir filtre + sıralama + gruplamayı adlandırılmış bir görünüm olarak kaydedin. ⌘/Ctrl-K bir başlatıcı açar. İhtiyacınız olmayan lambalar ⚙ Ayarlar → Sinyal lambaları altından kapatılabilir.
 - **Toplu iş yapın** — fetch / pull (`--ff-only`) / push için repo seçin ya da hepsinde paralel olarak bir shell komutu çalıştırın (dry-run önizlemesi ve repo başına çıktı ile). Bir reponun başarısız olması diğerlerini asla durdurmaz.
 - **Bir repoya derinlemesine dalın** — detay paneli tam bir sağlık dökümü, branch değiştirme / oluşturma / atma, canlı diff ile **yerinde commit**, talep üzerine GitHub PR ve CI, son commit'ler, stash'ler, 12 haftalık ısı haritası ve halihazırda birleştirilmiş branch'lerin tek tıkla temizliğini sunar — bu temizlik yalnızca `main`/`master` üzerindeyken önerilir, çünkü «halihazırda birleştirilmiş»in «ana dala birleştirilmiş» ile örtüştüğü tek konum orasıdır. Değişiklikleri atmak izlenen dosyaları geri alır ve izlenmeyenleri siler, ancak alt modüllerin içeriğine ve izlenmeyen iç içe git depolarına dokunmaz; geride bir şey kalırsa başarı bildirmek yerine bunu söyler.
 - **Güncel kalın** — varsayılan yenileme yolu, 30 dakikada bir dönen tam tarama ile araç çubuğundaki elle tarama. Dosya izlemeli otomatik tarama ise **varsayılan olarak kapalı**, gerekirse ayarlar panelinden açılır: yalnızca yereldir ve ağa hiç dokunmaz, ama aynı anda birkaç proje derlenirken çekirdeğin bildirim tamponu sürekli taşar ve her taşma bir taramaya mal olur — neyin değiştiğine şöyle bir bakmak için kullanılan bir araca göre fazla yüksek, sürekli ödenen bir bedel. Açıldığında Windows ve macOS'ta tarama dizini başına tek bir özyinelemeli izleme, altındaki tüm depoları kapsar; böylece bir depoyu eklemek, silmek veya yeniden adlandırmak saniyeler içinde görünür. Linux'ta depolar tek tek izlenir ve `watchLimit` (varsayılan 200, 0 = sınırsız) kaç tanesinin izleneceğini sınırlar, favorilere ve son commit atılanlara öncelik verir. Taşmalar sürerse telafi taramalarının arası üstel olarak açılır (en sık 30 dakikada bir) ve izleme artık yeniden kurulmaz — bu yalnızca bir izleme hedefi gerçekten kaybolduğunda olur. 30 dakikada bir dönen tam tarama izlemenin kaçırdığını toplar, araç çubuğunda «son tarama» görünür ve ayarlar paneli kapsamı canlı olarak («N repodan M izleniyor») gösterir. Bir depoyu yeniden adlandırmak veya taşımak etiketlerini, yıldızını, arşiv durumunu ve notlarını korur — repo-radar yalnızca yolu değil, kimliği izler. Eşleştirme taşımadan **hemen sonraki** tarama turunda yapılır; bu da iki boşluk bırakır: iki tarama turuna yayılan, arada başka bir deponun eklenmesi/kaldırılması ya da periyodik tam taramanın denk geldiği yavaş bir birim-arası taşıma; ve hedefi o turda taranmayan bir taşıma — bir depoyu tarama dizinlerinizin dışına çıkarıp yeni yerini ancak daha sonra tarama dizini olarak eklemek buna düşmenin alışılmış yoludur. İkisi de yol tabanlı kimliğe geri döner: depo yepyeni bir kart olarak gelir ve etiketleri/yıldızı/arşivi/notları artık taşımadığı id'nin altında kalır. Zamanlanmış arka plan fetch ise isteğe bağlı. Ayrıca bir **İstatistikler** sekmesi (bir yıllık commit ısı haritası, en çok/en az aktif) ve bir tarih aralığını Markdown biçiminde haftalık rapor olarak kopyalayan bir **Çalışma günlüğü** sekmesi bulunur.
 - **Repo başlatın ve taşıyın** — **+ New** bir sonraki numaralı projeyi önerir, `git init` çalıştırır, bir README yazar ve panoya alır; manifest dışa/içe aktarma kurulumunuzu makineler arasında taşır.
 
-Arayüz, koyu bir kokpit-enstrüman temasında antd 6'dır ve 18 dile yerelleştirilmiştir (ilk ziyarette tarayıcınıza otomatik eşlenir, Arapça için RTL).
+Arayüz, koyu bir kokpit-enstrüman temasında antd 6'dır ve 18 dile yerelleştirilmiştir (ilk ziyarette tarayıcınıza otomatik eşlenir, Arapça için RTL). Metin kontrastı her iki temada da WCAG AA'ya göre ayarlanmıştır.
 
 ## Arka planda sessizce çalışır
 
@@ -59,6 +59,8 @@ Pencereyi kapatmak repo-radar'ı tray'e indirir, böylece dönemsel tam tarama, 
 ⚙ Ayarlar'da **Girişte başlat**'ı açın; oturumunuzla birlikte penceresiz başlar — siz isteyene kadar pencere yok. İsteğe bağlı masaüstü bildirimleri yalnızca kuyruğunuza *yeni* bir şey ulaştığında, pencere kapalıyken bile tetiklenir. Yükseltmeler tasarım gereği manueldir (otomatik güncelleme yok): yeni kurulum dosyasını eskisinin üzerine çalıştırın. Loglar `<config dir>/logs/repo-radar.log` dosyasına yazılır.
 
 ## Yapılandırma
+
+Tarama dizinleri, hariç tutulan klasörler ve açma komutları ⚙ Ayarlar → Tarama ve açma komutları üzerinden düzenlenebilir; gerisi yalnızca dosyadan.
 
 Arayüzün dokunduğu her şey `~/.repo-radar/config.json` dosyasına kaydedilir — onu nadiren açmanız gerekir. Önemli alanlar:
 

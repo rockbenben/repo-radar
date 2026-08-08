@@ -6,7 +6,7 @@
 
 > A local dashboard that watches all your Git repos and shows you which ones need you.
 
-**English** · [简体中文](docs/i18n/README.zh-Hans.md) · [繁體中文](docs/i18n/README.zh-Hant.md) · [日本語](docs/i18n/README.ja.md) · [한국어](docs/i18n/README.ko.md) · [Español](docs/i18n/README.es.md) · [Français](docs/i18n/README.fr.md) · [Deutsch](docs/i18n/README.de.md) · [Português](docs/i18n/README.pt.md) · [Русский](docs/i18n/README.ru.md) · [Italiano](docs/i18n/README.it.md) · [العربية](docs/i18n/README.ar.md) · [हिन्दी](docs/i18n/README.hi.md) · [বাংলা](docs/i18n/README.bn.md) · [ไทย](docs/i18n/README.th.md) · [Türkçe](docs/i18n/README.tr.md) · [Tiếng Việt](docs/i18n/README.vi.md) · [Bahasa Indonesia](docs/i18n/README.id.md)
+**English** · [简体中文](README.zh.md) · [繁體中文](docs/i18n/README.zh-Hant.md) · [日本語](docs/i18n/README.ja.md) · [한국어](docs/i18n/README.ko.md) · [Español](docs/i18n/README.es.md) · [Français](docs/i18n/README.fr.md) · [Deutsch](docs/i18n/README.de.md) · [Português](docs/i18n/README.pt.md) · [Русский](docs/i18n/README.ru.md) · [Italiano](docs/i18n/README.it.md) · [العربية](docs/i18n/README.ar.md) · [हिन्दी](docs/i18n/README.hi.md) · [বাংলা](docs/i18n/README.bn.md) · [ไทย](docs/i18n/README.th.md) · [Türkçe](docs/i18n/README.tr.md) · [Tiếng Việt](docs/i18n/README.vi.md) · [Bahasa Indonesia](docs/i18n/README.id.md)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![365 Open Source Plan #027](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
@@ -37,19 +37,19 @@ npm install
 npm start
 ```
 
-On first launch, click **Add scan directories** (or ⚙ Settings → Scan directories) and point it at the folders that hold your repos — no JSON, no restart; it rescans the moment you save. Settings live in `~/.repo-radar/config.json` if you'd rather hand-edit them.
+On first launch, click **Add scan directories** (or ⚙ Settings → Scanning & open commands) and point it at the folders that hold your repos — no JSON, no restart; it rescans the moment you save. Settings live in `~/.repo-radar/config.json` if you'd rather hand-edit them.
 
 ## The board
 
 One card per repo — health color, branch, working-tree breakdown, ahead/behind, last commit, tags — with one-click **editor / terminal / folder** on every card. From here you:
 
-- **Find** — search, click a language / `#tag` / attention-lamp to filter, sort, and group by folder or language; save any filter + sort + group as a named view. ⌘/Ctrl-K opens a launcher.
+- **Find** — search, click a language / `#tag` / attention-lamp to filter, sort, and group by folder or language; save any filter + sort + group as a named view. ⌘/Ctrl-K opens a launcher. Lamps you don't care about can be switched off in ⚙ Settings → Signal lamps.
 - **Act in batches** — select repos to fetch / pull (`--ff-only`) / push, or run a shell command in parallel across them (with a dry-run preview and per-repo output). One repo failing never stops the rest.
 - **Dig into a repo** — the detail panel gives a full health breakdown, switch / create branches, discard changes, **commit in place** with a live diff, GitHub PR & CI on demand, recent commits, stashes, a 12-week heatmap, and one-click cleanup of already-merged branches — offered only while you're on `main`/`master`, since that's the only position where "already merged" means merged into the trunk. Discarding changes reverts tracked files and removes untracked ones, but leaves submodule contents and untracked nested git repos alone; when something is left behind it tells you instead of reporting success.
 - **Stay fresh** — the default refresh path is a 30-minute fallback rescan plus the toolbar's manual rescan. File-watch auto-scan is **off by default**, opt-in from the settings panel: it is local-only and never touches the network, but with several projects building at once the kernel notification buffer overflows constantly and every overflow costs a rescan — too high a standing price for a glance-at-what-changed tool. Turn it on and, on Windows and macOS, one recursive watch per scan directory covers every repo under it, so adding, deleting or renaming a repo shows up within seconds; on Linux repos are watched individually and `watchLimit` (200 by default, 0 = no limit) caps how many, with favorites and recently committed repos taking priority. Repeated overflows back off exponentially, up to 30 minutes apart, and no longer rebuild the watch handles — only a watch target that actually died does that. The fallback rescan catches whatever the watcher misses, the toolbar shows "last scanned", and the settings panel shows live "watching N of M" coverage. Renaming or moving a repo keeps its tags, star, archive state and notes — repo-radar tracks identity, not just the path. Identity is matched on the scan round right after the move, which leaves two gaps: a slow, cross-volume move that straddles two scan rounds, with another repo's add/remove or the periodic rescan landing in between; and a move whose destination isn't scanned on that next round — moving a repo out of your scan directories and only later adding its new home as a scan directory is the common way to hit it. Both fall back to path-based identity, so the repo comes back as a fresh card and its tags/star/archive/notes stay under the id it no longer has. Scheduled background fetch is opt-in. A **Stats** tab (year-long commit heatmap, most/least active) and a **Worklog** tab that copies a date range as a Markdown weekly report.
 - **Start & move repos** — **+ New** suggests the next numbered project, runs `git init`, writes a README, and adopts it into the board; manifest export / import carries your setup between machines.
 
-The UI is antd 6 in a dark instrument-cockpit theme, localized into 18 languages (auto-matched to your browser on first visit, RTL for Arabic).
+The UI is antd 6 in a dark instrument-cockpit theme, localized into 18 languages (auto-matched to your browser on first visit, RTL for Arabic). Text contrast is tuned to WCAG AA in both themes.
 
 ## Runs quietly in the background
 
@@ -60,6 +60,8 @@ Quitting waits for git work already in flight — a batch pull, a stash drop, a 
 Turn on **Launch at login** in ⚙ Settings and it starts headless with your session — no window until you ask for it. Optional desktop notifications fire only when something *new* reaches your queue, even with the window closed. Upgrades are manual by design (no auto-update): run the new installer over the old one. Logs land in `<config dir>/logs/repo-radar.log`.
 
 ## Configuration
+
+Scan directories, excluded folders and the open commands are editable in ⚙ Settings → Scanning & open commands; everything else is hand-edit only.
 
 Everything the UI touches is saved to `~/.repo-radar/config.json` — you rarely need to open it. The fields that matter:
 

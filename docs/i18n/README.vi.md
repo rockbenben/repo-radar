@@ -6,7 +6,7 @@
 
 > Kế hoạch 365 Open Source #027 · Một bảng điều khiển cục bộ theo dõi tất cả các repo Git của bạn và cho bạn biết cái nào cần đến bạn.
 
-[English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · **Tiếng Việt** · [Bahasa Indonesia](README.id.md)
+[English](../../README.md) · [简体中文](../../README.zh.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · **Tiếng Việt** · [Bahasa Indonesia](README.id.md)
 
 Bạn có nhiều repo Git hơn mức có thể tự theo dõi xuể. repo-radar để mắt tới tất cả và chỉ cho bạn thấy vài cái đang cần đến bạn ngay lúc này — để bạn khỏi bận tâm đến những cái còn lại.
 
@@ -34,19 +34,19 @@ npm install
 npm start
 ```
 
-Ở lần khởi chạy đầu tiên, nhấp **Thêm thư mục quét** (hoặc ⚙ Cài đặt → Thư mục quét) rồi trỏ đến các thư mục chứa repo của bạn — không phải đụng tới JSON, không cần khởi động lại; vừa lưu là nó quét lại ngay. Cấu hình nằm ở `~/.repo-radar/config.json` nếu bạn thích tự sửa tay.
+Ở lần khởi chạy đầu tiên, nhấp **Thêm thư mục quét** (hoặc ⚙ Cài đặt → Quét & lệnh mở) rồi trỏ đến các thư mục chứa repo của bạn — không phải đụng tới JSON, không cần khởi động lại; vừa lưu là nó quét lại ngay. Cấu hình nằm ở `~/.repo-radar/config.json` nếu bạn thích tự sửa tay.
 
 ## Bảng điều khiển
 
 Mỗi repo một card — màu sức khỏe, nhánh, phân tích cây làm việc, ahead/behind, commit gần nhất, tag — với **editor / terminal / folder** một chạm trên mọi card. Từ đây bạn:
 
-- **Tìm** — tìm kiếm, nhấp vào một ngôn ngữ / `#tag` / đèn chú ý để lọc, sắp xếp và nhóm theo thư mục hoặc ngôn ngữ; lưu bất kỳ bộ lọc + sắp xếp + nhóm nào thành một view có tên. ⌘/Ctrl-K mở một launcher.
+- **Tìm** — tìm kiếm, nhấp vào một ngôn ngữ / `#tag` / đèn chú ý để lọc, sắp xếp và nhóm theo thư mục hoặc ngôn ngữ; lưu bất kỳ bộ lọc + sắp xếp + nhóm nào thành một view có tên. ⌘/Ctrl-K mở một launcher. Những đèn bạn không cần có thể tắt trong ⚙ Cài đặt → Đèn cảnh báo.
 - **Hành động theo lô** — chọn repo để fetch / pull (`--ff-only`) / push, hoặc chạy song song một lệnh shell trên khắp chúng (với bản xem trước dry-run và output theo từng repo). Một repo lỗi cũng không bao giờ làm gián đoạn những repo còn lại.
 - **Đào sâu vào một repo** — panel chi tiết cung cấp phân tích sức khỏe đầy đủ, chuyển / tạo / hủy nhánh, **commit tại chỗ** với diff trực tiếp, GitHub PR & CI theo yêu cầu, commit gần đây, stash, bản đồ nhiệt 12 tuần, và dọn dẹp một chạm các nhánh đã được merge — chỉ được đề xuất khi bạn đang ở `main`/`master`, vị trí duy nhất mà «đã merge» đồng nghĩa với «đã merge vào nhánh chính». Việc hủy thay đổi sẽ hoàn nguyên các tệp được theo dõi và xóa các tệp chưa theo dõi, nhưng không chạm vào nội dung submodule lẫn các repo git lồng nhau chưa được theo dõi; nếu còn sót gì, nó sẽ nói ra thay vì báo thành công.
 - **Luôn cập nhật** — cách làm mới mặc định là một lượt quét lại mỗi 30 phút cộng với lượt quét thủ công trên thanh công cụ. Tự động quét khi tệp thay đổi **mặc định tắt**, bạn tự bật trong bảng cài đặt: nó chỉ chạy cục bộ và không bao giờ chạm tới mạng, nhưng khi vài dự án cùng build một lúc thì bộ đệm thông báo của nhân hệ điều hành tràn liên tục, và mỗi lần tràn tốn một lượt quét lại — cái giá thường trực quá đắt cho một công cụ chỉ để liếc xem có gì thay đổi. Khi bật lên, trên Windows và macOS, mỗi thư mục quét chỉ cần một handle theo dõi đệ quy là bao trọn mọi repo bên dưới nó, nên việc thêm, xóa hay đổi tên một repo sẽ hiện ra trong vài giây; trên Linux các repo được theo dõi riêng lẻ và `watchLimit` (mặc định 200, 0 = không giới hạn) giới hạn số lượng, ưu tiên repo yêu thích và mới commit. Nếu tràn liên tục, các lượt quét bù sẽ giãn ra theo cấp số nhân (nhiều nhất 30 phút một lần) và không dựng lại bộ theo dõi nữa — chuyện đó chỉ xảy ra khi mục tiêu theo dõi thực sự biến mất. Một lượt quét lại mỗi 30 phút bù những gì bộ theo dõi bỏ sót, thanh công cụ hiển thị «quét lần cuối», và bảng cài đặt hiển thị mức phủ theo thời gian thực («đang theo dõi M/N»). Đổi tên hay di chuyển một repo vẫn giữ được thẻ, dấu sao, trạng thái lưu trữ và ghi chú của nó — repo-radar theo dõi danh tính, không chỉ đường dẫn. Việc đối chiếu diễn ra ở lượt quét **ngay sau** khi di chuyển, nên còn lại hai khe hở: một lần di chuyển chậm giữa các ổ đĩa trải qua hai lượt quét, mà ở giữa lại chen vào việc thêm/bớt một repo khác hoặc lượt quét lại định kỳ; và một lần di chuyển mà đích đến không được quét trong lượt đó — chuyển repo ra khỏi các thư mục quét rồi mãi sau mới thêm vị trí mới của nó làm thư mục quét là cách thường gặp nhất để rơi vào trường hợp này. Cả hai đều lùi về danh tính theo đường dẫn: repo trở lại như một thẻ mới, còn thẻ/dấu sao/lưu trữ/ghi chú của nó nằm lại dưới cái id mà nó không còn giữ. Fetch nền theo lịch là tùy chọn. Tab **Stats** (bản đồ nhiệt commit cả năm, hoạt động nhiều/ít nhất) và tab **Worklog** sao chép một khoảng ngày thành báo cáo tuần Markdown.
 - **Khởi tạo & di chuyển repo** — **+ New** gợi ý dự án được đánh số tiếp theo, chạy `git init`, viết một README, và đưa nó vào board; xuất / nhập manifest mang thiết lập của bạn giữa các máy.
 
-Giao diện là antd 6 với chủ đề buồng lái thiết bị (instrument-cockpit) tối, được bản địa hóa sang 18 ngôn ngữ (tự khớp với trình duyệt của bạn ở lần truy cập đầu tiên, RTL cho tiếng Ả Rập).
+Giao diện là antd 6 với chủ đề buồng lái thiết bị (instrument-cockpit) tối, được bản địa hóa sang 18 ngôn ngữ (tự khớp với trình duyệt của bạn ở lần truy cập đầu tiên, RTL cho tiếng Ả Rập). Độ tương phản chữ được canh theo WCAG AA ở cả hai chủ đề.
 
 ## Chạy âm thầm ở chế độ nền
 
@@ -57,6 +57,8 @@ Khi thoát, repo-radar chờ tối đa 10 giây cho phần việc git đang ch�
 Bật **Khởi động cùng đăng nhập** trong ⚙ Cài đặt và nó khởi động không giao diện cùng phiên của bạn — không có cửa sổ cho đến khi bạn yêu cầu. Thông báo desktop tùy chọn chỉ kích hoạt khi có gì đó *mới* đến hàng đợi của bạn, ngay cả khi cửa sổ đang đóng. Việc nâng cấp cố ý để thủ công (không tự động cập nhật): chỉ cần chạy trình cài đặt mới đè lên bản cũ. Log được ghi vào `<config dir>/logs/repo-radar.log`.
 
 ## Cấu hình
+
+Thư mục quét, thư mục loại trừ và lệnh mở đều sửa được trong ⚙ Cài đặt → Quét & lệnh mở; phần còn lại chỉ sửa tay trong tệp.
 
 Mọi thứ giao diện chạm tới đều được lưu vào `~/.repo-radar/config.json` — bạn hiếm khi cần mở nó. Các trường quan trọng:
 

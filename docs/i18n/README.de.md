@@ -8,7 +8,7 @@
 
 [![365 Open Source Plan #027](https://img.shields.io/badge/365%20Open%20Source%20Plan-%23027-1f6feb)](https://github.com/rockbenben/365opensource)
 
-[English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · **Deutsch** · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
+[English](../../README.md) · [简体中文](../../README.zh.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · **Deutsch** · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
 Du hast mehr Git-Repos, als du von Hand im Blick behalten kannst. repo-radar behält sie alle im Auge und zeigt dir die wenigen, die dich jetzt brauchen — damit der Rest dir aus dem Kopf geht.
 
@@ -36,19 +36,19 @@ npm install
 npm start
 ```
 
-Klicke beim ersten Start auf **Scan-Verzeichnisse hinzufügen** (oder ⚙ Einstellungen → Scan-Verzeichnisse) und richte es auf die Ordner, die deine Repos enthalten — kein JSON, kein Neustart; es scannt neu, sobald du speicherst. Die Einstellungen liegen in `~/.repo-radar/config.json`, falls du sie lieber von Hand editierst.
+Klicke beim ersten Start auf **Scan-Verzeichnisse hinzufügen** (oder ⚙ Einstellungen → Scan & Öffnen-Befehle) und richte es auf die Ordner, die deine Repos enthalten — kein JSON, kein Neustart; es scannt neu, sobald du speicherst. Die Einstellungen liegen in `~/.repo-radar/config.json`, falls du sie lieber von Hand editierst.
 
 ## Das Board
 
 Eine Karte pro Repo — Health-Farbe, Branch, Working-Tree-Aufschlüsselung, ahead/behind, letzter Commit, Tags — mit Ein-Klick **Editor / Terminal / Ordner** auf jeder Karte. Von hier aus kannst du:
 
-- **Finden** — suchen, auf eine Sprache / einen `#tag` / eine Warnleuchte klicken, um zu filtern, sortieren und nach Ordner oder Sprache gruppieren; speichere jeden Filter + Sortierung + Gruppierung als benannte Ansicht. ⌘/Strg-K öffnet einen Launcher.
+- **Finden** — suchen, auf eine Sprache / einen `#tag` / eine Warnleuchte klicken, um zu filtern, sortieren und nach Ordner oder Sprache gruppieren; speichere jeden Filter + Sortierung + Gruppierung als benannte Ansicht. ⌘/Strg-K öffnet einen Launcher. Lampen, die dich nicht interessieren, lassen sich unter ⚙ Einstellungen → Signallampen ausschalten.
 - **In Batches handeln** — wähle Repos für fetch / pull (`--ff-only`) / push aus oder führe einen Shell-Befehl parallel über sie hinweg aus (mit Dry-Run-Vorschau und Ausgabe pro Repo). Ein fehlschlagendes Repo stoppt nie die übrigen.
 - **In ein Repo eintauchen** — das Detail-Panel liefert eine vollständige Health-Aufschlüsselung, Branches wechseln / erstellen / verwerfen, **an Ort und Stelle committen** mit Live-Diff, GitHub-PR & -CI auf Anfrage, letzte Commits, Stashes, eine 12-Wochen-Heatmap und ein Ein-Klick-Aufräumen bereits gemergter Branches — angeboten nur, solange du auf `main`/`master` bist, denn nur dort bedeutet „bereits gemergt“ auch „in den Trunk gemergt“. Das Verwerfen von Änderungen stellt getrackte Dateien wieder her und entfernt ungetrackte, lässt aber Submodul-Inhalte und ungetrackte verschachtelte Git-Repos unangetastet; bleibt etwas übrig, sagt es dir das, statt Erfolg zu melden.
 - **Aktuell bleiben** — Der Standardweg zur Aktualisierung ist ein Rescan alle 30 Minuten plus der manuelle Rescan in der Leiste. Auto-Scan per Datei-Überwachung ist **standardmäßig aus** und wird bei Bedarf im Einstellungspanel eingeschaltet: Er ist rein lokal und geht nie ins Netz, aber wenn mehrere Projekte gleichzeitig bauen, läuft der Benachrichtigungspuffer des Kernels ständig über, und jeder Überlauf kostet einen Rescan — für ein Werkzeug zum kurzen Blick darauf, was sich geändert hat, ein zu hoher Dauerpreis. Eingeschaltet gilt: Unter Windows und macOS deckt ein einziger rekursiver Watch pro Scan-Verzeichnis jedes Repo darunter ab, sodass ein hinzugefügtes, gelöschtes oder umbenanntes Repo innerhalb von Sekunden auftaucht; unter Linux werden Repos einzeln überwacht, und `watchLimit` (standardmäßig 200, 0 = unbegrenzt) begrenzt die Anzahl, wobei Favoriten und zuletzt committete Repos Vorrang haben. Bei anhaltenden Überläufen wächst der Abstand der nachholenden Rescans exponentiell (höchstens alle 30 Minuten), und die Watch-Handles werden nicht mehr neu aufgebaut — das passiert nur noch, wenn ein Watch-Ziel tatsächlich verloren ging. Ein Rescan alle 30 Minuten fängt auf, was die Überwachung verpasst, die Leiste zeigt „Zuletzt gescannt“, und das Einstellungspanel zeigt die Abdeckung live als „M von N überwacht“. Ein Repo umzubenennen oder zu verschieben erhält seine Tags, den Stern, den Archivstatus und Notizen — repo-radar verfolgt die Identität, nicht bloß den Pfad. Zugeordnet wird sie im Scan-Durchlauf **direkt nach** dem Verschieben, woraus zwei Lücken bleiben: ein langsames Verschieben über Volume-Grenzen, das zwei Scan-Durchläufe überspannt und dazwischen das Hinzufügen/Entfernen eines anderen Repos oder den periodischen Rescan erwischt; und ein Verschieben, dessen Ziel in diesem Durchlauf nicht gescannt wird — ein Repo aus den Scan-Verzeichnissen heraus zu verschieben und sein neues Zuhause erst später als Scan-Verzeichnis hinzuzufügen ist der übliche Weg dorthin. Beide fallen auf die pfadbasierte Identität zurück: das Repo kommt als frische Karte zurück, und Tags/Stern/Archiv/Notizen bleiben unter der id liegen, die es nicht mehr hat. Der geplante Hintergrund-Fetch ist opt-in. Ein **Stats**-Tab (jahresübergreifende Commit-Heatmap, aktivste/inaktivste) und ein **Worklog**-Tab, der einen Zeitraum als Markdown-Wochenbericht kopiert.
 - **Repos starten & verschieben** — **+ New** schlägt das nächste nummerierte Projekt vor, führt `git init` aus, schreibt eine README und übernimmt es ins Board; Manifest-Export / -Import trägt deine Einrichtung von Rechner zu Rechner.
 
-Die UI ist antd 6 in einem dunklen Instrumenten-Cockpit-Theme, in 18 Sprachen lokalisiert (beim ersten Besuch automatisch an deinen Browser angeglichen, RTL für Arabisch).
+Die UI ist antd 6 in einem dunklen Instrumenten-Cockpit-Theme, in 18 Sprachen lokalisiert (beim ersten Besuch automatisch an deinen Browser angeglichen, RTL für Arabisch). Der Textkontrast ist in beiden Themes auf WCAG AA abgestimmt.
 
 ## Läuft leise im Hintergrund
 
@@ -59,6 +59,8 @@ Beim Beenden wartet repo-radar bis zu 10 Sekunden auf bereits laufende Git-Arbei
 Schalte **Bei der Anmeldung starten** in ⚙ Einstellungen ein, und es startet headless mit deiner Sitzung — kein Fenster, bis du danach verlangst. Optionale Desktop-Benachrichtigungen feuern nur, wenn etwas *Neues* deine Warteschlange erreicht, auch bei geschlossenem Fenster. Upgrades sind bewusst manuell (kein Auto-Update): führe den neuen Installer über den alten aus. Logs landen in `<config dir>/logs/repo-radar.log`.
 
 ## Konfiguration
+
+Scan-Verzeichnisse, ausgeschlossene Ordner und die Öffnen-Befehle lassen sich unter ⚙ Einstellungen → Scan & Öffnen-Befehle bearbeiten; alles andere nur von Hand in der Datei.
 
 Alles, was die UI berührt, wird in `~/.repo-radar/config.json` gespeichert — du musst sie selten öffnen. Die Felder, die zählen:
 

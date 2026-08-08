@@ -6,7 +6,7 @@
 
 > Plano 365 Open Source #027 · Um painel local que fica de olho em todos os seus repos Git e mostra quais precisam de você.
 
-[English](../../README.md) · [简体中文](README.zh-Hans.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · **Português** · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
+[English](../../README.md) · [简体中文](../../README.zh.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · **Português** · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
 Você tem mais repos Git do que consegue acompanhar na mão. O repo-radar fica de olho em todos eles e mostra os poucos que precisam de você agora — para que o resto saia da sua cabeça.
 
@@ -34,19 +34,19 @@ npm install
 npm start
 ```
 
-No primeiro lançamento, clique em **Adicionar diretórios de escaneamento** (ou ⚙ Configurações → Diretórios de escaneamento) e aponte para as pastas que contêm seus repos — sem JSON, sem reiniciar; ele reescaneia no instante em que você salva. As configurações ficam em `~/.repo-radar/config.json` se você preferir editá-las à mão.
+No primeiro lançamento, clique em **Adicionar diretórios de escaneamento** (ou ⚙ Configurações → Varredura e comandos de abertura) e aponte para as pastas que contêm seus repos — sem JSON, sem reiniciar; ele reescaneia no instante em que você salva. As configurações ficam em `~/.repo-radar/config.json` se você preferir editá-las à mão.
 
 ## O painel
 
 Um cartão por repo — cor de saúde, branch, resumo da árvore de trabalho, à frente/atrás, último commit, tags — com **editor / terminal / pasta** de um clique em cada cartão. A partir daqui você pode:
 
-- **Encontrar** — busque, clique em uma linguagem / `#tag` / lâmpada de atenção para filtrar, ordene e agrupe por pasta ou linguagem; salve qualquer filtro + ordenação + agrupamento como uma visão nomeada. ⌘/Ctrl-K abre um lançador.
+- **Encontrar** — busque, clique em uma linguagem / `#tag` / lâmpada de atenção para filtrar, ordene e agrupe por pasta ou linguagem; salve qualquer filtro + ordenação + agrupamento como uma visão nomeada. ⌘/Ctrl-K abre um lançador. Os indicadores que não te interessam podem ser desligados em ⚙ Configurações → Indicadores.
 - **Agir em lotes** — selecione repos para fetch / pull (`--ff-only`) / push, ou execute um comando de shell em paralelo sobre eles (com pré-visualização de dry-run e saída por repo). A falha de um repo nunca impede os demais.
 - **Aprofundar em um repo** — o painel de detalhes dá um resumo completo de saúde, trocar / criar / descartar branches, **commit no local** com um diff ao vivo, PR e CI do GitHub sob demanda, commits recentes, stashes, um mapa de calor de 12 semanas e uma limpeza de um clique de branches já mesclados — oferecida apenas enquanto você está em `main`/`master`, a única posição onde “já mesclado” significa mesclado no tronco. Descartar alterações reverte os arquivos rastreados e remove os não rastreados, mas deixa intactos o conteúdo de submódulos e os repos git aninhados não rastreados; se sobrar algo, ele diz isso em vez de relatar sucesso.
 - **Manter-se atualizado** — o caminho de atualização padrão é um reescaneamento a cada 30 minutos mais o reescaneamento manual da barra. O escaneamento automático por monitoramento de arquivos vem **desligado por padrão** e é ligado sob demanda no painel de configurações: ele é apenas local e nunca toca a rede, mas com vários projetos compilando ao mesmo tempo o buffer de notificações do kernel transborda sem parar, e cada transbordo custa um reescaneamento — um preço permanente alto demais para uma ferramenta feita para dar uma olhada no que mudou. Com ele ligado, no Windows e no macOS, um único monitoramento recursivo por diretório de escaneamento cobre todos os repos abaixo dele, então adicionar, apagar ou renomear um repo aparece em segundos; no Linux os repos são monitorados individualmente e `watchLimit` (200 por padrão, 0 = sem limite) limita quantos, com prioridade para favoritos e repos com commit recente. Se os transbordos continuam, os reescaneamentos de recuperação se espaçam exponencialmente (no máximo a cada 30 minutos) e não reconstroem mais os monitoramentos — isso só acontece quando um alvo monitorado realmente some. Um reescaneamento a cada 30 minutos recolhe o que o monitoramento perde, a barra mostra “último escaneamento” e o painel de configurações mostra a cobertura ao vivo (“monitorando M de N”). Renomear ou mover um repo preserva suas tags, sua estrela, seu estado de arquivo e suas notas — o repo-radar acompanha a identidade, não apenas o caminho. O pareamento acontece na rodada de escaneamento **imediatamente após** a movimentação, o que deixa duas brechas: uma movimentação lenta entre volumes que abrange duas rodadas de escaneamento, com a inclusão/remoção de outro repo ou o reescaneamento periódico caindo no meio; e uma movimentação cujo destino não é escaneado naquela rodada — tirar um repo dos seus diretórios de escaneamento e só depois adicionar o novo local como diretório de escaneamento é o jeito comum de cair nela. Ambas voltam à identidade por caminho: o repo reaparece como um cartão novo e suas tags/estrela/arquivo/notas ficam sob o id que ele não tem mais. O fetch agendado em segundo plano é opcional. Uma aba **Stats** (mapa de calor de commits de um ano, mais/menos ativo) e uma aba **Worklog** que copia um intervalo de datas como relatório semanal em Markdown.
 - **Iniciar e mover repos** — **+ New** sugere o próximo projeto numerado, roda `git init`, escreve um README e o adota no painel; a exportação / importação de manifesto leva sua configuração entre máquinas.
 
-A interface é antd 6 em um tema escuro de cockpit de instrumentos, localizada em 18 idiomas (correspondida automaticamente ao seu navegador na primeira visita, RTL para o árabe).
+A interface é antd 6 em um tema escuro de cockpit de instrumentos, localizada em 18 idiomas (correspondida automaticamente ao seu navegador na primeira visita, RTL para o árabe). O contraste do texto é ajustado para WCAG AA nos dois temas.
 
 ## Roda discretamente em segundo plano
 
@@ -57,6 +57,8 @@ Ao sair, o repo-radar espera até 10 segundos pelo trabalho git já em andamento
 Ative **Iniciar ao fazer login** em ⚙ Configurações e ele inicia sem interface com a sua sessão — sem janela até você pedir. As notificações de desktop opcionais disparam apenas quando algo *novo* chega à sua fila, mesmo com a janela fechada. As atualizações são manuais por design (sem atualização automática): execute o novo instalador sobre o antigo. Os logs vão para `<diretório de configuração>/logs/repo-radar.log`.
 
 ## Configuração
+
+Os diretórios de varredura, as pastas excluídas e os comandos de abertura são editáveis em ⚙ Configurações → Varredura e comandos de abertura; o resto, só editando o arquivo à mão.
 
 Tudo que a interface toca é salvo em `~/.repo-radar/config.json` — você raramente precisa abri-lo. Os campos que importam:
 
