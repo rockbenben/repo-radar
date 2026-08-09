@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../../web/public/og-image.png" width="820" alt="repo·radar — um painel local que fica de olho em todos os seus repos Git e sinaliza os que precisam de você" />
+  <img src="../../docs/images/board-en.jpg" width="900" alt="Painel do repo·radar: luzes de alerta no topo, fila «precisa de você» abaixo e um cartão por repo com branch, estado da árvore de trabalho e editor / terminal / pasta em um clique" />
 </p>
 
 # repo-radar
@@ -8,88 +8,89 @@
 
 [English](../../README.md) · [简体中文](../../README.zh.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · **Português** · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md) · [Bahasa Indonesia](README.id.md)
 
-Você tem mais repos Git do que consegue acompanhar na mão. O repo-radar fica de olho em todos eles e mostra os poucos que precisam de você agora — para que o resto saia da sua cabeça.
+[⬇ Baixar para Windows · macOS · Linux](https://github.com/rockbenben/repo-radar/releases/latest)
 
-Ele traz à tona o que você de outra forma esqueceria de checar:
+Você tem mais repos Git do que consegue acompanhar de cabeça. O repo-radar vigia todos e mostra os poucos que precisam de você agora — o resto pode sair da sua mente.
 
-- **Repos que você perdeu de vista** — todos os repos que você possui em uma única tela, com busca, abra qualquer um com um clique.
-- **Trabalho que ficou pela metade** — mudanças não commitadas, não enviadas ou em stash, sinalizadas antes que você as perca.
-- **GitHub esperando por você** — PRs abertos, issues e CI falhando em todos os repos, reunidos através do seu `gh` local já autenticado.
-- **Projetos que ficam obsoletos** — os que você não toca há tempo demais, ou com lançamento atrasado.
+Ele traz à tona o que você esqueceria de conferir:
 
-Os que precisam de ação sobem ao topo do painel como uma fila, classificados por urgência, um item por repo — clique para resolver diretamente. Dispense com ✓ e ele fica de fora até que algo realmente mude; quando não há nada esperando, ele mostra "all clear". O resto dos seus repos está sempre a uma busca de distância.
+- **Trabalho pela metade** — mudanças sem commit, sem push ou no stash, sinalizadas antes que você as perca.
+- **GitHub esperando por você** — PRs abertos, issues e CI vermelho, lidos pelo seu `gh` já autenticado.
+- **Projetos esfriando** — sem toque há tempo demais, ou com release atrasado.
+- **Repos que você perdeu de vista** — todos em uma tela, pesquisáveis, abertos em um clique.
+
+O que precisa de ação sobe como uma fila: um item por repo, por urgência. Dispense com ✓ e ele fica fora até algo mudar de verdade.
+
+## Compatibilidade
+
+| Aspecto | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Instalação | instalador `.exe` | `.dmg` | `.AppImage` |
+| Fechar a janela | vai para a bandeja | vai para a bandeja | encerra — use **Iniciar ao fazer login** para mantê-lo |
+| Monitorar mudanças | todos os repos sob um diretório de varredura | idem | os primeiros 200 repos (o limite sobe ou sai nas configurações) |
+
+Tudo roda na sua máquina e usa o `git` que você já tem — sem conta, sem telemetria, nada é enviado. A coluna do GitHub (PRs, issues, CI) é opcional e lê pela [CLI `gh`](https://cli.github.com/) onde você já está autenticado; sem ela, o resto continua funcionando.
 
 ## Instalação
 
-Pegue o arquivo da sua plataforma em [Releases](https://github.com/rockbenben/repo-radar/releases) — sem necessidade de Node.js. O app não é assinado digitalmente, então cada sistema operacional avisa na primeira execução:
+Pegue o arquivo da sua plataforma em [Releases](https://github.com/rockbenben/repo-radar/releases) — sem Node.js. O app não é assinado, então cada sistema avisa na primeira execução:
 
-- **Windows** — execute `repo-radar-<version>-x64-setup.exe`; no aviso do SmartScreen clique em *Mais informações → Executar assim mesmo*.
-- **macOS** — abra `repo-radar-<version>-arm64.dmg` e arraste o app para Applications. Clique com o botão direito → Abrir na primeira vez; se o macOS disser que está danificado, limpe a flag de quarentena uma vez com `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
+- **Windows** — no aviso do SmartScreen, *Mais informações → Executar assim mesmo*.
+- **macOS** — clique com o botão direito → Abrir na primeira vez. Se o macOS disser que está danificado: `xattr -cr /Applications/repo-radar.app`.
+- **Linux** — primeiro `chmod +x repo-radar-*.AppImage`.
 
-Ou execute a partir do código-fonte:
+Prefere não confiar em um binário? [Compile você mesmo](../development.md) — é `npm install && npm start`.
 
-```bash
-npm install
-npm start
-```
-
-No primeiro lançamento, clique em **Adicionar diretórios de escaneamento** (ou ⚙ Configurações → Varredura e comandos de abertura) e aponte para as pastas que contêm seus repos — sem JSON, sem reiniciar; ele reescaneia no instante em que você salva. As configurações ficam em `~/.repo-radar/config.json` se você preferir editá-las à mão.
+Na primeira execução clique em **Adicionar diretórios de varredura** e aponte para a pasta que *contém* seus repos — um `~/Projetos`, não cada repo um a um. Ele desce até 6 níveis procurando qualquer coisa com um `.git`, e o painel se preenche. Sem JSON, sem reiniciar.
 
 ## O painel
 
-Um cartão por repo — cor de saúde, branch, resumo da árvore de trabalho, à frente/atrás, último commit, tags — com **editor / terminal / pasta** de um clique em cada cartão. A partir daqui você pode:
+Um cartão por repo — cor de saúde, branch, detalhe da árvore de trabalho, ahead/behind, último commit, tags — com **editor / terminal / pasta** em um clique.
 
-- **Encontrar** — busque, clique em uma linguagem / `#tag` / lâmpada de atenção para filtrar, ordene e agrupe por pasta ou linguagem; salve qualquer filtro + ordenação + agrupamento como uma visão nomeada. ⌘/Ctrl-K abre um lançador. Os indicadores que não te interessam podem ser desligados em ⚙ Configurações → Indicadores.
-- **Agir em lotes** — selecione repos para fetch / pull (`--ff-only`) / push, ou execute um comando de shell em paralelo sobre eles (com pré-visualização de dry-run e saída por repo). A falha de um repo nunca impede os demais.
-- **Aprofundar em um repo** — o painel de detalhes dá um resumo completo de saúde, trocar / criar / descartar branches, **commit no local** com um diff ao vivo, PR e CI do GitHub sob demanda, commits recentes, stashes, um mapa de calor de 12 semanas e uma limpeza de um clique de branches já mesclados — oferecida apenas enquanto você está em `main`/`master`, a única posição onde “já mesclado” significa mesclado no tronco. Descartar alterações reverte os arquivos rastreados e remove os não rastreados, mas deixa intactos o conteúdo de submódulos e os repos git aninhados não rastreados; se sobrar algo, ele diz isso em vez de relatar sucesso.
-- **Manter-se atualizado** — o caminho de atualização padrão é um reescaneamento a cada 30 minutos mais o reescaneamento manual da barra. O escaneamento automático por monitoramento de arquivos vem **desligado por padrão** e é ligado sob demanda no painel de configurações: ele é apenas local e nunca toca a rede, mas com vários projetos compilando ao mesmo tempo o buffer de notificações do kernel transborda sem parar, e cada transbordo custa um reescaneamento — um preço permanente alto demais para uma ferramenta feita para dar uma olhada no que mudou. Com ele ligado, no Windows e no macOS, um único monitoramento recursivo por diretório de escaneamento cobre todos os repos abaixo dele, então adicionar, apagar ou renomear um repo aparece em segundos; no Linux os repos são monitorados individualmente e `watchLimit` (200 por padrão, 0 = sem limite) limita quantos, com prioridade para favoritos e repos com commit recente. Se os transbordos continuam, os reescaneamentos de recuperação se espaçam exponencialmente (no máximo a cada 30 minutos) e não reconstroem mais os monitoramentos — isso só acontece quando um alvo monitorado realmente some. Um reescaneamento a cada 30 minutos recolhe o que o monitoramento perde, a barra mostra “último escaneamento” e o painel de configurações mostra a cobertura ao vivo (“monitorando M de N”). Renomear ou mover um repo preserva suas tags, sua estrela, seu estado de arquivo e suas notas — o repo-radar acompanha a identidade, não apenas o caminho. O pareamento acontece na rodada de escaneamento **imediatamente após** a movimentação, o que deixa duas brechas: uma movimentação lenta entre volumes que abrange duas rodadas de escaneamento, com a inclusão/remoção de outro repo ou o reescaneamento periódico caindo no meio; e uma movimentação cujo destino não é escaneado naquela rodada — tirar um repo dos seus diretórios de escaneamento e só depois adicionar o novo local como diretório de escaneamento é o jeito comum de cair nela. Ambas voltam à identidade por caminho: o repo reaparece como um cartão novo e suas tags/estrela/arquivo/notas ficam sob o id que ele não tem mais. O fetch agendado em segundo plano é opcional. Uma aba **Stats** (mapa de calor de commits de um ano, mais/menos ativo) e uma aba **Worklog** que copia um intervalo de datas como relatório semanal em Markdown.
-- **Iniciar e mover repos** — **+ New** sugere o próximo projeto numerado, roda `git init`, escreve um README e o adota no painel; a exportação / importação de manifesto leva sua configuração entre máquinas.
+- **Encontrar** — busque, ou filtre por linguagem, `#tag` ou luz de alerta. ⌘/Ctrl-K abre um lançador.
+- **Salvar uma visão** — qualquer filtro + ordenação + agrupamento, nomeado e reutilizável.
+- **Agir em lote** — fetch / pull / push nos repos selecionados, ou um mesmo comando de shell em todos. Um repo falhando nunca para os demais.
+- **Trabalhar no lugar** — o painel de detalhes faz commit com diff ao vivo, troca de branch, descarta mudanças, limpa branches mesclados e busca PR e CI do GitHub sob demanda.
+- **Criar e mover repos** — **+ Novo** cria um repo e o coloca direto no painel; exportar / importar o manifesto leva sua configuração para outra máquina.
 
-A interface é antd 6 em um tema escuro de cockpit de instrumentos, localizada em 18 idiomas (correspondida automaticamente ao seu navegador na primeira visita, RTL para o árabe). O contraste do texto é ajustado para WCAG AA nos dois temas.
+As luzes no topo são os tipos de alerta — sem remoto, sem push, sem commit, atrás do remoto, stash pendente. Desligue as que não interessam em ⚙ Configurações.
 
-## Roda discretamente em segundo plano
+Mais duas abas: **Estatísticas** (heatmap de commits de um ano, repos mais e menos ativos) e **Registro de trabalho** (copiar um intervalo de datas como relatório semanal em Markdown).
 
-Fechar a janela leva o repo-radar para a bandeja, então o reescaneamento periódico, o monitoramento de arquivos (se você o ligou), os fetches agendados e os alertas do GitHub continuam rodando — clique no ícone da bandeja para trazer o painel de volta, ou saia de verdade pelo menu da bandeja. (No Linux, onde as bandejas de desktop não são confiáveis, fechar sai em vez disso; use Iniciar ao fazer login para mantê-lo residente.)
+Tema escuro de cockpit de instrumentos, localizado em 18 idiomas, com contraste de texto ajustado ao WCAG AA nos dois temas.
 
-Ao sair, o repo-radar espera até 10 segundos pelo trabalho git já em andamento — um pull em lote, um stash descartado, um fetch agendado — para que nada seja cortado no meio da escrita e deixe um `.git/index.lock` obsoleto. Se esse tempo não bastar, ele sai de todo jeito e registra isso no log: é o único lugar que explica um `index.lock` que você encontre depois.
+## Mantendo-se atualizado
 
-Ative **Iniciar ao fazer login** em ⚙ Configurações e ele inicia sem interface com a sua sessão — sem janela até você pedir. As notificações de desktop opcionais disparam apenas quando algo *novo* chega à sua fila, mesmo com a janela fechada. As atualizações são manuais por design (sem atualização automática): execute o novo instalador sobre o antigo. Os logs vão para `<diretório de configuração>/logs/repo-radar.log`.
+O padrão é uma revarredura de reserva a cada 30 minutos mais a revarredura manual da barra — local, silenciosa, sem rede.
+
+A varredura automática por monitoramento de arquivos vem **desligada por padrão** e é opcional nas configurações. Ela também é local, mas com vários projetos compilando ao mesmo tempo o buffer de notificações do kernel transborda o tempo todo, e cada transbordo custa uma revarredura — preço fixo alto demais para uma ferramenta de dar uma olhada no que mudou. Ligada, repos novos, apagados ou renomeados aparecem em segundos.
+
+Renomeie ou mova um repo e ele mantém tags, favorito, estado de arquivo e notas. O repo-radar reconhece um repo pelo que há dentro dele, não por onde ele está — uma pasta movida continua sendo o mesmo projeto, não um novo.
+
+O fetch agendado em segundo plano é opcional e a única função que vai à rede por conta própria.
+
+## Roda quieto em segundo plano
+
+Fechar a janela recolhe o repo-radar para a bandeja, então revarreduras, monitoramento e alertas do GitHub seguem rodando. Clique no ícone para trazer o painel de volta, ou saia pelo menu da bandeja.
+
+Ao sair, ele espera até 10 segundos pelo trabalho git em andamento — um pull em lote, um stash descartado — para que nada seja cortado no meio da escrita e deixe um `.git/index.lock` velho. Se não bastar, sai mesmo assim e registra isso no log.
+
+Ative **Iniciar ao fazer login** e ele sobe sem janela junto com sua sessão. Notificações de desktop são opcionais e só disparam quando algo *novo* entra na sua fila.
 
 ## Configuração
 
-Os diretórios de varredura, as pastas excluídas e os comandos de abertura são editáveis em ⚙ Configurações → Varredura e comandos de abertura; o resto, só editando o arquivo à mão.
+Diretórios de varredura, pastas excluídas e os comandos de abertura são editáveis em ⚙ Configurações → Varredura e comandos de abertura. O resto fica em `~/.repo-radar/config.json`, que você raramente precisa abrir — a lista completa de campos, os dois arquivos de cache ao lado e as variáveis de ambiente para rodar uma segunda instância estão na [referência de configuração](../configuration.md).
 
-Tudo que a interface toca é salvo em `~/.repo-radar/config.json` — você raramente precisa abri-lo. Os campos que importam:
+## Limitações conhecidas
 
-| Campo | O que faz |
-| --- | --- |
-| `roots` / `excludes` / `manualRepos` | onde escanear (encontra `.git` até 6 níveis de profundidade, sem seguir links simbólicos), o que pular e repos adicionados fora das roots — uma entrada de `manualRepos` que é renomeada ou movida não é acompanhada por identidade como um repo escaneado; o cartão fica em erro até você atualizar o caminho aqui, e se a movimentação foi há mais de uma rodada de escaneamento, essa atualização traz o cartão de volta mas não suas tags/estrela/arquivo/notas |
-| `health` | `{ staleDays, disabledRules }` — ajuste o limite "stale" ou desative verificações individuais |
-| `open` | modelos de comando para os botões editor / terminal / pasta (`{path}` = o caminho do repo) |
-| `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | comportamento em segundo plano — por padrão só `autoScanMinutes` (30) está ligado; os outros três, incluindo `autoWatch`, estão desligados. `watchLimit` (200, 0 = sem limite) só se aplica **no Linux**, onde os repos são monitorados individualmente; Windows e macOS usam um monitoramento recursivo por diretório de escaneamento e sempre cobrem todos os repos |
-| `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | organização por repo |
-
-Dois outros arquivos ficam ao lado do `config.json`, ambos seguros para apagar — o repo-radar os reconstrói, com custos diferentes. `repo-cache.json` guarda os campos git “pesados” de cada repo (stashes, tags, remotos, branches mesclados…) indexados por uma impressão digital do `.git`, então um repo sem alterações pula essas chamadas de git no próximo reescaneamento; apagá-lo apenas torna o próximo reescaneamento mais lento, uma vez. `repo-identity.json` é o livro de identidade que permite a um repo renomeado ou movido manter suas tags, sua estrela, seu estado de arquivo e suas notas em vez de ser tratado como um repo novo. Aqui a perda é imediata, não postergada: qualquer repo que já tivesse sido renomeado ou movido **antes** de o arquivo ser perdido recebe um id novo no escaneamento seguinte, e suas tags/estrela/arquivo/notas ficam encalhadas sob o id que ele não tem mais. Repos que nunca foram renomeados não são afetados, e a partir do momento em que o livro é reconstruído, as renomeações voltam a ser protegidas.
-
-`REPO_RADAR_CONFIG` e `REPO_RADAR_PORT` (17420 por padrão) substituem o caminho de configuração e a porta — defina **ambas** para executar uma segunda instância totalmente independente. O servidor só escuta em `127.0.0.1` e valida o cabeçalho Origin em cada requisição de API e WebSocket.
-
-A porta padrão fica propositalmente acima da faixa de portas dinâmicas do sistema: o Windows usa 49152–65535 por padrão, mas 1024–15000 assim que o Hyper-V/WSL2 é instalado, e o sistema reserva blocos inteiros da faixa ativa — uma porta dentro dela falha no bind com `EACCES`, e os blocos mudam a cada reinicialização.
-
-Se a porta **padrão** ainda assim não puder ser vinculada, o repo-radar recorre ao próximo candidato (`+1000`, `+2000`, `+3000`, e depois uma porta atribuída pelo sistema) em vez de se recusar a iniciar, lembra a porta em que ficou e a reutiliza nas próximas execuções, e a mostra ao lado da versão em ⚙ Configurações. Lembrar importa porque a porta faz parte da origem da página, e o painel guarda visões salvas, registro de atividade, tema e idioma em armazenamento do navegador vinculado à origem — deixar a porta oscilar faria esses dados parecerem sumir e voltar. Apague `<diretório de configuração>/port-state.json` para voltar à porta padrão.
-
-Uma porta definida por você via `REPO_RADAR_PORT` nunca é substituída — é uma promessa aos seus favoritos, upstreams de proxy reverso e scripts, então uma porta que não vincula falha de forma explícita. O mesmo vale em `npm run dev`, onde o alvo do proxy do vite é fixado no carregamento da configuração.
-
-## Desenvolvimento
-
-```bash
-npm run dev     # vite + a janela do app com hot reload
-npm test        # suítes de teste de server + web + desktop e typechecks
-npm run dist    # compila os instaladores em dist-electron/
-```
-
-Stack: shell Electron + Node + Hono (todo git via `spawn`, zero dependências nativas) + Vite / React 19 / antd 6, com chokidar + WebSocket para atualizações ao vivo. O servidor Hono roda dentro do processo principal do Electron e a janela o carrega via `127.0.0.1`, então a UI é HTTP + WebSocket comum — exatamente o que seria em um navegador.
+- **Atualizações são manuais por escolha.** Sem auto-update: rode o novo instalador por cima do antigo.
+- **Um repo movido é reconhecido na varredura seguinte — se perder essa varredura, as tags não vão junto.** Uma movimentação lenta entre volumes, ou um destino que você ainda não adicionou como diretório de varredura, volta como cartão novo e deixa as tags no antigo.
+- **Linux não tem bandeja confiável**, então fechar a janela encerra o app.
+- **Repos adicionados um a um, fora de um diretório de varredura, não são reconhecidos assim** — se mover um, você mesmo aponta o novo caminho.
+- **Descartar mudanças não mexe em submódulos nem em repos git aninhados**, e diz isso em vez de relatar limpeza total.
 
 ## Sobre o Plano 365 Open Source
 
-Projeto **#027** do [Plano 365 Open Source](https://github.com/rockbenben/365opensource) — uma pessoa + IA, mais de 300 projetos open-source em um ano. [Envie sua ideia →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)
+Projeto **#027** do [Plano 365 Open Source](https://github.com/rockbenben/365opensource) — uma pessoa + IA, mais de 300 projetos open-source em um ano.
+
+[Envie sua ideia →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)

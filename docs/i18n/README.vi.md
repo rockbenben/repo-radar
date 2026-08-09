@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../../web/public/og-image.png" width="820" alt="repo·radar — một bảng điều khiển cục bộ theo dõi tất cả các repo Git của bạn và đánh dấu những repo cần đến bạn" />
+  <img src="../../docs/images/board-en.jpg" width="900" alt="Bảng repo·radar: đèn cảnh báo ở trên, hàng đợi «cần bạn xử lý» bên dưới, rồi mỗi kho một thẻ với nhánh, trạng thái cây làm việc và mở trình soạn thảo / terminal / thư mục bằng một cú nhấp" />
 </p>
 
 # repo-radar
@@ -8,88 +8,89 @@
 
 [English](../../README.md) · [简体中文](../../README.zh.md) · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md) · [Italiano](README.it.md) · [العربية](README.ar.md) · [हिन्दी](README.hi.md) · [বাংলা](README.bn.md) · [ไทย](README.th.md) · [Türkçe](README.tr.md) · **Tiếng Việt** · [Bahasa Indonesia](README.id.md)
 
-Bạn có nhiều repo Git hơn mức có thể tự theo dõi xuể. repo-radar để mắt tới tất cả và chỉ cho bạn thấy vài cái đang cần đến bạn ngay lúc này — để bạn khỏi bận tâm đến những cái còn lại.
+[⬇ Tải cho Windows · macOS · Linux](https://github.com/rockbenben/repo-radar/releases/latest)
 
-Nó nêu bật những thứ mà bình thường bạn hay quên kiểm tra:
+Bạn có nhiều kho Git hơn mức có thể tự nhớ hết. repo-radar trông chừng tất cả và chỉ đưa ra vài kho đang cần bạn ngay lúc này — số còn lại cứ để ngoài đầu.
 
-- **Những repo bạn đã quên** — mọi repo bạn sở hữu trên một màn hình, có thể tìm kiếm, mở bất kỳ cái nào chỉ với một cú nhấp.
-- **Việc còn dang dở** — các thay đổi chưa commit, chưa push, hoặc đang nằm trong stash, được đánh dấu trước khi bạn lỡ tay đánh mất.
-- **GitHub đang chờ bạn** — các PR mở, issue và CI thất bại trên khắp các repo, được thu thập qua `gh` đã đăng nhập sẵn cục bộ của bạn.
-- **Các dự án đang nguội dần** — những cái bạn đã quá lâu không đụng đến, hoặc quá hạn phát hành.
+Nó lôi ra những thứ mà bạn hay quên kiểm tra:
 
-Những cái cần xử lý sẽ được đẩy lên đầu board thành một hàng đợi, xếp theo mức độ khẩn cấp, mỗi repo một mục — nhấp vào là xử lý được ngay. Gạt đi bằng ✓ thì nó biến mất cho đến khi thực sự có gì đó thay đổi; còn khi chẳng có gì phải chờ, nó báo "all clear". Các repo còn lại thì lúc nào cũng chỉ cần gõ tìm là ra.
+- **Việc còn dang dở** — thay đổi chưa commit, chưa push hoặc đang nằm trong stash, được đánh dấu trước khi bạn làm mất.
+- **GitHub đang chờ bạn** — PR đang mở, issue và CI đỏ, đọc qua `gh` mà bạn đã đăng nhập sẵn.
+- **Dự án đang nguội dần** — lâu quá không đụng tới, hoặc đã trễ hạn phát hành.
+- **Kho bạn không còn để mắt tới** — tất cả trên một màn hình, tìm được, mở bằng một cú nhấp.
+
+Thứ gì cần xử lý sẽ nổi lên đầu thành một hàng đợi: mỗi kho một mục, xếp theo mức khẩn. Gạt đi bằng ✓ và nó không quay lại cho tới khi thực sự có gì đó thay đổi.
+
+## Phạm vi hỗ trợ
+
+| Khía cạnh | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Cài đặt | trình cài `.exe` | `.dmg` | `.AppImage` |
+| Đóng cửa sổ | thu vào khay hệ thống | thu vào khay hệ thống | thoát hẳn — dùng **Khởi động khi đăng nhập** để nó ở lại |
+| Theo dõi thay đổi | toàn bộ kho dưới thư mục quét | như trên | 200 kho đầu tiên (nâng hoặc bỏ giới hạn trong cài đặt) |
+
+Mọi thứ chạy trên máy bạn và dùng chính `git` bạn đang có — không tài khoản, không đo đạc từ xa, không gửi gì lên mạng. Cột GitHub (PR, issue, CI) là tùy chọn và đọc qua [`gh` CLI](https://cli.github.com/) nơi bạn đã đăng nhập; bỏ qua nó thì phần còn lại vẫn chạy.
 
 ## Cài đặt
 
-Lấy file cho nền tảng của bạn từ [Releases](https://github.com/rockbenben/repo-radar/releases) — không cần Node.js. Ứng dụng chưa được ký mã (code-sign), nên hệ điều hành nào cũng sẽ cảnh báo ở lần chạy đầu tiên:
+Lấy tệp cho nền tảng của bạn ở [Releases](https://github.com/rockbenben/repo-radar/releases) — không cần Node.js. Ứng dụng không ký số nên mỗi hệ điều hành đều cảnh báo ở lần chạy đầu:
 
-- **Windows** — chạy `repo-radar-<version>-x64-setup.exe`; ở lời nhắc SmartScreen, bấm *More info → Run anyway*.
-- **macOS** — mở `repo-radar-<version>-arm64.dmg` và kéo ứng dụng vào Applications. Nhấp chuột phải → Open ở lần đầu tiên; nếu macOS báo ứng dụng bị hỏng, hãy xóa cờ quarantine một lần bằng `xattr -cr /Applications/repo-radar.app`.
-- **Linux** — `chmod +x repo-radar-<version>-x86_64.AppImage && ./repo-radar-<version>-x86_64.AppImage`.
+- **Windows** — ở hộp SmartScreen chọn *Thông tin thêm → Vẫn chạy*.
+- **macOS** — lần đầu hãy chuột phải → Mở. Nếu macOS báo hỏng: `xattr -cr /Applications/repo-radar.app`.
+- **Linux** — `chmod +x repo-radar-*.AppImage` trước đã.
 
-Hoặc chạy từ mã nguồn:
+Không muốn tin một tệp nhị phân? [Tự biên dịch](../development.md) — chỉ là `npm install && npm start`.
 
-```bash
-npm install
-npm start
-```
+Lần chạy đầu, nhấn **Thêm thư mục quét** rồi trỏ tới thư mục *chứa* các kho của bạn — kiểu `~/Projects`, chứ không phải thêm từng kho một. Nó lần xuống tối đa 6 cấp để tìm mọi thứ có `.git`, và bảng sẽ tự đầy. Không JSON, không khởi động lại.
 
-Ở lần khởi chạy đầu tiên, nhấp **Thêm thư mục quét** (hoặc ⚙ Cài đặt → Quét & lệnh mở) rồi trỏ đến các thư mục chứa repo của bạn — không phải đụng tới JSON, không cần khởi động lại; vừa lưu là nó quét lại ngay. Cấu hình nằm ở `~/.repo-radar/config.json` nếu bạn thích tự sửa tay.
+## Bảng
 
-## Bảng điều khiển
+Mỗi kho một thẻ — màu sức khỏe, nhánh, chi tiết cây làm việc, ahead/behind, commit gần nhất, thẻ nhãn — kèm **trình soạn thảo / terminal / thư mục** chỉ một cú nhấp.
 
-Mỗi repo một card — màu sức khỏe, nhánh, phân tích cây làm việc, ahead/behind, commit gần nhất, tag — với **editor / terminal / folder** một chạm trên mọi card. Từ đây bạn:
+- **Tìm ra nó** — tìm kiếm, hoặc lọc theo ngôn ngữ, `#tag` hay đèn cảnh báo. ⌘/Ctrl-K mở bộ khởi chạy.
+- **Lưu một khung nhìn** — bộ lọc + sắp xếp + nhóm bất kỳ, đặt tên và dùng lại.
+- **Xử lý hàng loạt** — fetch / pull / push trên các kho đã chọn, hoặc chạy cùng một lệnh shell trong tất cả. Một kho lỗi không bao giờ chặn phần còn lại.
+- **Làm ngay tại chỗ** — bảng chi tiết cho commit kèm diff trực tiếp, đổi nhánh, bỏ thay đổi, dọn nhánh đã merge và lấy PR & CI của GitHub khi cần.
+- **Tạo và di chuyển kho** — **+ Mới** tạo kho rồi đưa thẳng lên bảng; xuất / nhập manifest mang cấu hình của bạn sang máy khác.
 
-- **Tìm** — tìm kiếm, nhấp vào một ngôn ngữ / `#tag` / đèn chú ý để lọc, sắp xếp và nhóm theo thư mục hoặc ngôn ngữ; lưu bất kỳ bộ lọc + sắp xếp + nhóm nào thành một view có tên. ⌘/Ctrl-K mở một launcher. Những đèn bạn không cần có thể tắt trong ⚙ Cài đặt → Đèn cảnh báo.
-- **Hành động theo lô** — chọn repo để fetch / pull (`--ff-only`) / push, hoặc chạy song song một lệnh shell trên khắp chúng (với bản xem trước dry-run và output theo từng repo). Một repo lỗi cũng không bao giờ làm gián đoạn những repo còn lại.
-- **Đào sâu vào một repo** — panel chi tiết cung cấp phân tích sức khỏe đầy đủ, chuyển / tạo / hủy nhánh, **commit tại chỗ** với diff trực tiếp, GitHub PR & CI theo yêu cầu, commit gần đây, stash, bản đồ nhiệt 12 tuần, và dọn dẹp một chạm các nhánh đã được merge — chỉ được đề xuất khi bạn đang ở `main`/`master`, vị trí duy nhất mà «đã merge» đồng nghĩa với «đã merge vào nhánh chính». Việc hủy thay đổi sẽ hoàn nguyên các tệp được theo dõi và xóa các tệp chưa theo dõi, nhưng không chạm vào nội dung submodule lẫn các repo git lồng nhau chưa được theo dõi; nếu còn sót gì, nó sẽ nói ra thay vì báo thành công.
-- **Luôn cập nhật** — cách làm mới mặc định là một lượt quét lại mỗi 30 phút cộng với lượt quét thủ công trên thanh công cụ. Tự động quét khi tệp thay đổi **mặc định tắt**, bạn tự bật trong bảng cài đặt: nó chỉ chạy cục bộ và không bao giờ chạm tới mạng, nhưng khi vài dự án cùng build một lúc thì bộ đệm thông báo của nhân hệ điều hành tràn liên tục, và mỗi lần tràn tốn một lượt quét lại — cái giá thường trực quá đắt cho một công cụ chỉ để liếc xem có gì thay đổi. Khi bật lên, trên Windows và macOS, mỗi thư mục quét chỉ cần một handle theo dõi đệ quy là bao trọn mọi repo bên dưới nó, nên việc thêm, xóa hay đổi tên một repo sẽ hiện ra trong vài giây; trên Linux các repo được theo dõi riêng lẻ và `watchLimit` (mặc định 200, 0 = không giới hạn) giới hạn số lượng, ưu tiên repo yêu thích và mới commit. Nếu tràn liên tục, các lượt quét bù sẽ giãn ra theo cấp số nhân (nhiều nhất 30 phút một lần) và không dựng lại bộ theo dõi nữa — chuyện đó chỉ xảy ra khi mục tiêu theo dõi thực sự biến mất. Một lượt quét lại mỗi 30 phút bù những gì bộ theo dõi bỏ sót, thanh công cụ hiển thị «quét lần cuối», và bảng cài đặt hiển thị mức phủ theo thời gian thực («đang theo dõi M/N»). Đổi tên hay di chuyển một repo vẫn giữ được thẻ, dấu sao, trạng thái lưu trữ và ghi chú của nó — repo-radar theo dõi danh tính, không chỉ đường dẫn. Việc đối chiếu diễn ra ở lượt quét **ngay sau** khi di chuyển, nên còn lại hai khe hở: một lần di chuyển chậm giữa các ổ đĩa trải qua hai lượt quét, mà ở giữa lại chen vào việc thêm/bớt một repo khác hoặc lượt quét lại định kỳ; và một lần di chuyển mà đích đến không được quét trong lượt đó — chuyển repo ra khỏi các thư mục quét rồi mãi sau mới thêm vị trí mới của nó làm thư mục quét là cách thường gặp nhất để rơi vào trường hợp này. Cả hai đều lùi về danh tính theo đường dẫn: repo trở lại như một thẻ mới, còn thẻ/dấu sao/lưu trữ/ghi chú của nó nằm lại dưới cái id mà nó không còn giữ. Fetch nền theo lịch là tùy chọn. Tab **Stats** (bản đồ nhiệt commit cả năm, hoạt động nhiều/ít nhất) và tab **Worklog** sao chép một khoảng ngày thành báo cáo tuần Markdown.
-- **Khởi tạo & di chuyển repo** — **+ New** gợi ý dự án được đánh số tiếp theo, chạy `git init`, viết một README, và đưa nó vào board; xuất / nhập manifest mang thiết lập của bạn giữa các máy.
+Dãy đèn phía trên chính là các loại cảnh báo — không remote, chưa push, chưa commit, tụt sau remote, còn stash. Tắt những cái bạn không quan tâm trong ⚙ Cài đặt.
 
-Giao diện là antd 6 với chủ đề buồng lái thiết bị (instrument-cockpit) tối, được bản địa hóa sang 18 ngôn ngữ (tự khớp với trình duyệt của bạn ở lần truy cập đầu tiên, RTL cho tiếng Ả Rập). Độ tương phản chữ được canh theo WCAG AA ở cả hai chủ đề.
+Còn hai tab nữa: **Thống kê** (bản đồ nhiệt commit một năm, kho sôi động nhất và im ắng nhất) và **Nhật ký làm việc** (chép một khoảng ngày thành báo cáo tuần dạng Markdown).
 
-## Chạy âm thầm ở chế độ nền
+Chủ đề buồng lái thiết bị tối màu, bản địa hóa sang 18 ngôn ngữ, độ tương phản chữ được canh theo WCAG AA ở cả chủ đề sáng lẫn tối.
 
-Đóng cửa sổ sẽ đưa repo-radar xuống khay hệ thống (tray) để lượt quét lại định kỳ, việc theo dõi tệp (nếu bạn đã bật), fetch theo lịch và cảnh báo GitHub tiếp tục chạy — nhấp biểu tượng khay để đưa board trở lại, hoặc thoát hẳn từ menu khay. (Trên Linux, nơi khay desktop không đáng tin cậy, đóng cửa sổ sẽ thoát luôn; dùng Khởi động cùng đăng nhập để giữ nó thường trú.)
+## Luôn cập nhật
 
-Khi thoát, repo-radar chờ tối đa 10 giây cho phần việc git đang chạy — một lượt pull hàng loạt, một stash bị hủy, một lượt fetch theo lịch — hoàn tất, để không có gì bị cắt giữa lúc đang ghi và bỏ lại một `.git/index.lock` cũ. Nếu khoảng thời gian đó không đủ, nó vẫn thoát và ghi điều đó vào log: đó là nơi duy nhất giải thích cho một `index.lock` mà bạn gặp về sau.
+Mặc định là quét lại dự phòng mỗi 30 phút cộng với nút quét thủ công trên thanh công cụ — cục bộ, êm, không dùng mạng.
 
-Bật **Khởi động cùng đăng nhập** trong ⚙ Cài đặt và nó khởi động không giao diện cùng phiên của bạn — không có cửa sổ cho đến khi bạn yêu cầu. Thông báo desktop tùy chọn chỉ kích hoạt khi có gì đó *mới* đến hàng đợi của bạn, ngay cả khi cửa sổ đang đóng. Việc nâng cấp cố ý để thủ công (không tự động cập nhật): chỉ cần chạy trình cài đặt mới đè lên bản cũ. Log được ghi vào `<config dir>/logs/repo-radar.log`.
+Quét tự động bằng theo dõi tệp **mặc định tắt**, bật trong cài đặt. Nó cũng chỉ chạy cục bộ, nhưng khi vài dự án cùng build thì bộ đệm thông báo của nhân hệ điều hành tràn liên tục, mỗi lần tràn lại tốn một lượt quét lại — cái giá thường trực quá đắt cho một công cụ chỉ để liếc xem có gì đổi. Bật lên thì kho mới thêm, bị xóa hay đổi tên hiện ra trong vài giây.
+
+Đổi tên hoặc di chuyển một kho, thẻ nhãn, dấu sao, trạng thái lưu trữ và ghi chú vẫn theo. repo-radar nhận ra một kho bằng thứ nằm bên trong nó, không phải bằng vị trí — nên thư mục bị dời vẫn là đúng dự án đó, không phải một cái mới.
+
+Fetch nền theo lịch là tùy chọn và là tính năng duy nhất tự đi ra mạng.
+
+## Chạy lặng lẽ ở nền
+
+Đóng cửa sổ sẽ thu repo-radar vào khay hệ thống, nên việc quét lại, theo dõi và cảnh báo GitHub vẫn tiếp tục. Nhấn biểu tượng khay để gọi bảng trở lại, hoặc thoát hẳn từ menu của nó.
+
+Khi thoát, nó chờ tối đa 10 giây cho phần việc git đang chạy — một lượt pull hàng loạt, một stash bị xóa — để không có gì bị cắt giữa chừng và bỏ lại `.git/index.lock` cũ. Nếu vẫn không kịp, nó vẫn thoát và ghi rõ trong nhật ký.
+
+Bật **Khởi động khi đăng nhập** thì nó chạy cùng phiên làm việc mà không hiện cửa sổ. Thông báo trên màn hình là tùy chọn và chỉ kêu khi có thứ *mới* rơi vào hàng đợi.
 
 ## Cấu hình
 
-Thư mục quét, thư mục loại trừ và lệnh mở đều sửa được trong ⚙ Cài đặt → Quét & lệnh mở; phần còn lại chỉ sửa tay trong tệp.
+Thư mục quét, thư mục loại trừ và lệnh mở đều sửa được trong ⚙ Cài đặt → Quét & lệnh mở. Phần còn lại nằm trong `~/.repo-radar/config.json`, thứ mà bạn hiếm khi phải mở — danh sách đầy đủ các trường, hai tệp bộ nhớ đệm bên cạnh và biến môi trường để chạy một thực thể thứ hai đều ở [tài liệu tham khảo cấu hình](../configuration.md).
 
-Mọi thứ giao diện chạm tới đều được lưu vào `~/.repo-radar/config.json` — bạn hiếm khi cần mở nó. Các trường quan trọng:
+## Giới hạn đã biết
 
-| Trường | Chức năng |
-| --- | --- |
-| `roots` / `excludes` / `manualRepos` | nơi quét (tìm `.git` sâu đến 6 cấp, không đi theo symlink), cái gì bỏ qua, và các repo được thêm ngoài các root — một mục `manualRepos` bị đổi tên hay di chuyển sẽ không được theo dõi theo danh tính như một repo được quét; thẻ của nó ở trạng thái lỗi cho đến khi bạn cập nhật đường dẫn ở đây, và nếu việc di chuyển đã qua hơn một lượt quét thì bản cập nhật đó đưa thẻ trở lại nhưng không đưa thẻ/dấu sao/lưu trữ/ghi chú trở lại |
-| `health` | `{ staleDays, disabledRules }` — chỉnh ngưỡng "stale" hoặc tắt từng kiểm tra riêng lẻ |
-| `open` | mẫu lệnh cho các nút editor / terminal / folder (`{path}` = đường dẫn repo) |
-| `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | hành vi nền — mặc định chỉ `autoScanMinutes` (30) được bật; ba mục còn lại, kể cả `autoWatch`, đều tắt. `watchLimit` (200, 0 = không giới hạn) **chỉ có hiệu lực trên Linux**, nơi các repo được theo dõi riêng lẻ; Windows và macOS dùng một handle theo dõi đệ quy cho mỗi thư mục quét và luôn bao trọn mọi repo |
-| `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | sắp xếp theo từng repo |
-
-Cạnh `config.json` còn hai tệp nữa, cả hai đều có thể xóa an toàn — repo-radar sẽ dựng lại, chỉ khác nhau về giá phải trả. `repo-cache.json` ghi nhớ các trường git «nặng» của từng repo (stash, tag, remote, nhánh đã merge…) gắn với một dấu vân tay của `.git`, nhờ đó một repo không thay đổi sẽ bỏ qua các lệnh git đó ở lượt quét tiếp theo; xóa nó chỉ khiến lượt quét kế tiếp chậm hơn một lần. `repo-identity.json` là sổ danh tính, nhờ nó mà một repo đã đổi tên hay di chuyển vẫn giữ được thẻ, dấu sao, trạng thái lưu trữ và ghi chú thay vì bị coi là một repo hoàn toàn mới. Ở đây mất mát là tức thì, không phải trì hoãn: bất kỳ repo nào đã đổi tên hay di chuyển **trước** khi tệp này mất sẽ nhận một id hoàn toàn mới ngay ở lượt quét kế tiếp, còn thẻ/dấu sao/lưu trữ/ghi chú của nó nằm lại dưới cái id mà nó không còn giữ. Những repo chưa từng đổi tên thì không bị ảnh hưởng, và từ lúc sổ này được dựng lại, các lần đổi tên về sau lại được bảo vệ.
-
-`REPO_RADAR_CONFIG` và `REPO_RADAR_PORT` (mặc định 17420) ghi đè đường dẫn cấu hình và cổng — đặt **cả hai** để chạy một instance thứ hai hoàn toàn độc lập. Server chỉ bind `127.0.0.1` và xác thực header Origin trên mọi yêu cầu API và WebSocket.
-
-Cổng mặc định được đặt cao hơn dải cổng động của hệ điều hành một cách có chủ đích: Windows mặc định dùng 49152–65535, nhưng thành 1024–15000 ngay khi cài Hyper-V/WSL2, và hệ thống giữ chỗ trọn từng khối trong dải đang hoạt động — cổng nằm trong đó sẽ bind thất bại với `EACCES`, và các khối này còn dịch chuyển sau mỗi lần khởi động lại.
-
-Nếu vẫn không bind được cổng **mặc định**, repo-radar chuyển sang ứng viên kế tiếp (`+1000`, `+2000`, `+3000`, rồi để hệ điều hành cấp) thay vì từ chối khởi động, ghi nhớ cổng đã dùng và tái sử dụng ở những lần chạy sau, đồng thời hiển thị nó cạnh số phiên bản trong ⚙ Cài đặt. Việc ghi nhớ quan trọng vì cổng là một phần origin của trang, còn bảng điều khiển lưu các khung nhìn đã lưu, nhật ký hoạt động, giao diện và ngôn ngữ trong bộ nhớ trình duyệt gắn theo origin — để cổng nhảy qua nhảy lại sẽ khiến dữ liệu đó như biến mất rồi hiện lại. Xóa `<thư mục cấu hình>/port-state.json` để quay về cổng mặc định.
-
-Cổng do bạn tự đặt qua `REPO_RADAR_PORT` không bao giờ bị thay — đó là cam kết với dấu trang, upstream reverse proxy và script của bạn, nên nếu không bind được thì nó báo lỗi rõ ràng. `npm run dev` cũng vậy, vì đích proxy của vite đã cố định từ lúc nạp cấu hình.
-
-## Phát triển
-
-```bash
-npm run dev     # vite + cửa sổ ứng dụng với hot reload
-npm test        # bộ test server + web + desktop và typecheck
-npm run dist    # build trình cài đặt vào dist-electron/
-```
-
-Stack: lớp vỏ Electron + Node + Hono (mọi thao tác git đều qua `spawn`, không phụ thuộc native), + Vite / React 19 / antd 6, với chokidar + WebSocket cho cập nhật trực tiếp. Server Hono chạy bên trong tiến trình main của Electron và cửa sổ tải nó qua `127.0.0.1`, nên UI hoàn toàn là HTTP + WebSocket thuần — giống hệt như khi chạy trong trình duyệt.
+- **Nâng cấp là thủ công có chủ đích.** Không tự động cập nhật: chạy trình cài mới đè lên bản cũ.
+- **Kho được dời sẽ được nhận lại ở lượt quét kế tiếp — lỡ lượt đó thì thẻ nhãn không đi theo.** Một lần dời chậm qua ổ đĩa khác, hoặc đích đến bạn chưa thêm vào thư mục quét, sẽ quay lại thành thẻ mới còn nhãn thì nằm lại thẻ cũ.
+- **Linux không có khay hệ thống đáng tin cậy**, nên đóng cửa sổ là thoát hẳn.
+- **Những kho bạn thêm lẻ từng cái, nằm ngoài thư mục quét, không được nhận diện theo cách này** — dời đi thì bạn tự trỏ lại đường dẫn mới.
+- **Bỏ thay đổi sẽ không đụng tới submodule và kho git lồng bên trong**, và nó nói rõ điều đó thay vì báo đã dọn sạch.
 
 ## Giới thiệu về 365 Open Source Plan
 
-Dự án **#027** của [365 Open Source Plan](https://github.com/rockbenben/365opensource) — một người + AI, hơn 300 dự án mã nguồn mở trong một năm. [Gửi ý tưởng của bạn →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)
+Dự án **#027** của [365 Open Source Plan](https://github.com/rockbenben/365opensource) — một người + AI, hơn 300 dự án mã nguồn mở trong một năm.
+
+[Gửi ý tưởng của bạn →](https://365.aishort.top/) · [Discord](https://discord.gg/PZTQfJ4GjX) · [Telegram](https://t.me/aishort_top)
