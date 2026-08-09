@@ -87,18 +87,21 @@ describe("RepoWatcher", () => {
   it("defers (not drops) changes arriving inside the cooldown window", async () => {
     const repo = makeRepo()
     const fired: string[] = []
+    const at: number[] = [] // 每次触发的时刻，用来断言「补触发确实等到了冷却结束」
     // 防抖 100ms，冷却 1200ms —— 快速可测
-    const watcher = new RepoWatcher((id) => fired.push(id), () => {}, 100, 1200, new PerRepoStrategy())
+    const watcher = new RepoWatcher((id) => { fired.push(id); at.push(Date.now()) }, () => {}, 100, 1200, new PerRepoStrategy())
     await watcher.setRoots([], [{ id: "R", path: repo }])
     await new Promise((r) => setTimeout(r, 300))
     writeFileSync(join(repo, "first.txt"), "1")
     await waitFor(() => fired.length === 1) // 第一次正常触发
     await new Promise((r) => setTimeout(r, 400)) // 仍在冷却期内
     writeFileSync(join(repo, "second.txt"), "2") // 冷却期内的真实变更
-    await new Promise((r) => setTimeout(r, 300))
-    expect(fired.length).toBe(1) // 尚未触发（被延迟，而非丢弃）
-    await waitFor(() => fired.length === 2, 3000) // 冷却结束后补触发
+    await waitFor(() => fired.length === 2, 3000) // 冷却结束后补触发（延迟，而非丢弃）
     expect(fired).toEqual(["R", "R"])
+    // 「延迟」这一半只能用两次触发的间隔来验：拿 sleep 一段再断言「还是 1 次」，等于用测试
+    // 自己的墙钟去追 1200ms 冷却——waitFor 是 100ms 轮询，起点本来就晚于真实触发，CI 一卡就
+    // 假失败（Windows runner 上实际炸过）。间隔 ≥ 冷却期则与调度延迟无关，只会更长不会更短
+    expect(at[1] - at[0]).toBeGreaterThanOrEqual(1150)
     await watcher.close()
   })
 
