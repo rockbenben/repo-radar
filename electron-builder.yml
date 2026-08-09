@@ -64,7 +64,8 @@ publish:
   provider: github
   owner: rockbenben
   repo: repo-radar
-  # 显式写明用草稿：三个平台的产物会陆续传到同一条草稿 release，全部到齐、核对无误后
-  # 再去 GitHub 网页手动点「Publish release」才对用户可见。不用 release（自动公开）是因为
-  # 一旦发出去，自动更新就会推给所有人——多一道人工确认更稳妥
+  # 显式写明用草稿：四个 runner 的产物陆续传到同一条 release，中途只有一半产物在里面，
+  # 这段时间不该对用户可见。全部到齐后由 .github/workflows/release.yml 的 publish job
+  # 自动翻成正式发布（gh release edit --draft=false），不需要人工点按钮。
+  # 不直接用 release（边传边公开）就是为了避免那个半成品窗口
   releaseType: draft

@@ -1,7 +1,8 @@
-# 打 v* tag 时打包，产物上传到同一条 GitHub Release 草稿（draft）。四个 job：Windows、macOS
-# 各一个 runner，Linux 拆成 x64/arm64 两个 runner（原因见下面矩阵里的注释）。
-# 草稿对普通用户不可见——全部传完、核对无误后，还需要有人去 GitHub 网页
-# 手动点「Publish release」才会真正对外发布（releaseType 见 electron-builder.yml）。
+# 打 v* tag 时打包，产物先上传到同一条 GitHub Release 草稿（draft）。四个 build job：
+# Windows、macOS 各一个 runner，Linux 拆成 x64/arm64 两个 runner（原因见下面矩阵里的注释）。
+# 四个全绿之后，publish job 自动把草稿翻成正式发布——不需要人去网页点按钮。
+# 中途仍然是草稿（releaseType 见 electron-builder.yml）：只传了一半的产物不该对用户可见，
+# 而任何一个平台构建失败，publish 就不会跑，草稿留在原地等人处理。
 # 产物：repo-radar Setup <version>.exe（Windows NSIS，双击安装）
 #      repo-radar-<version>-arm64.dmg / -x64.dmg（macOS，同一个 runner 上交叉出两个架构）
 #      repo-radar-<version>-x64.AppImage / -arm64.AppImage（Linux，两个 runner 各出各的）
@@ -64,3 +65,14 @@ jobs:
             dist-electron/*.AppImage
             dist-electron/latest*.yml
           if-no-files-found: ignore
+
+  # needs: build 在矩阵上是「四条腿全成功才跑」，正好是「产物到齐」的判据。
+  # --latest 显式指定：草稿的创建时间早于发布时间，不写的话 GitHub 有可能不把它算成最新版
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
