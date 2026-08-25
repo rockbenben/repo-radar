@@ -3,7 +3,10 @@ import type { RepoStatus } from "../types"
 export interface FilterState {
   query: string
   group: string | null
-  sort: "name" | "activity" | "opened"
+  // activity = 最近动过（工作区 mtime 与提交时间取晚者）；commit = 只看最后一次提交，
+  // 也就是卡片上直接显示的那个时间。两者在「改了一整天没提交」的仓库上会给出完全不同的次序，
+  // 而哪一种有用取决于你在问什么，所以都留着让用户切
+  sort: "name" | "activity" | "commit" | "opened"
   severity: "error" | "warn" | null
   tags?: string[] // 选中的标签，AND 语义：仓库须同时带全部标签
 }
@@ -43,6 +46,11 @@ export function applyFilter(repos: RepoStatus[], f: FilterState): RepoStatus[] {
     }
     if (f.sort === "activity") {
       return ts(b.lastActivity) - ts(a.lastActivity)
+    }
+    if (f.sort === "commit") {
+      // 刻意用 lastCommit.date（%aI）而不是服务端排序用的 %cI：这一档排的就是卡片上
+      // 那个「最后提交 x 天前」，用户能逐个对上。想问「什么时候真干的活」请用 activity
+      return ts(b.lastCommit?.date) - ts(a.lastCommit?.date)
     }
     return a.name.localeCompare(b.name)
   }

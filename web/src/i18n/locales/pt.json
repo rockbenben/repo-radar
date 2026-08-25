@@ -33,6 +33,7 @@
   "bar.add": "＋ Novo",
   "sort.opened": "Abertos recentemente",
   "sort.activity": "Ativos recentemente",
+  "sort.commit": "Commit recente",
   "sort.name": "Por nome",
   "group.folder": "Por pasta",
   "group.language": "Por linguagem",

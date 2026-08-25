@@ -33,6 +33,7 @@
   "bar.add": "＋ 추가",
   "sort.opened": "최근 열람순",
   "sort.activity": "최근 활동순",
+  "sort.commit": "최근 커밋순",
   "sort.name": "이름순",
   "group.folder": "폴더별",
   "group.language": "언어별",

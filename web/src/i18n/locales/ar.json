@@ -33,6 +33,7 @@
   "bar.add": "＋ جديد",
   "sort.opened": "المفتوحة مؤخرًا",
   "sort.activity": "النشطة مؤخرًا",
+  "sort.commit": "الأحدث التزامًا",
   "sort.name": "حسب الاسم",
   "group.folder": "حسب المجلد",
   "group.language": "حسب اللغة",

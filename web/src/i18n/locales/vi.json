@@ -33,6 +33,7 @@
   "bar.add": "＋ Thêm",
   "sort.opened": "Mở gần đây",
   "sort.activity": "Hoạt động gần đây",
+  "sort.commit": "Commit gần đây",
   "sort.name": "Theo tên",
   "group.folder": "Theo thư mục",
   "group.language": "Theo ngôn ngữ",

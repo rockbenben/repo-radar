@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { applyFilter } from "../src/lib/filter"
+import type { FilterState } from "../src/lib/filter"
 import type { RepoStatus } from "../src/types"
 
 function repo(over: Partial<RepoStatus>): RepoStatus {
@@ -74,14 +75,36 @@ describe("applyFilter", () => {
   })
 
   // 这个改动的全部意义：改了一整天却没提交的仓库，按提交口径会沉到「上周提交过」的那批下面，
-  // 而它恰恰是最该浮上来的那个。lastActivity 已在服务端与提交时间取过晚者，前端只按它排
-  it("ranks a repo with uncommitted work above one with a newer commit", () => {
+  // 而它恰恰是最该浮上来的那个。lastActivity 已在服务端与提交时间取过晚者，前端只按它排。
+  // 同一组数据在 commit 档下必须给出**相反**的次序——两档不是同义词，否则留两个没有意义
+  it("activity ranks uncommitted work first; commit ranks the newer commit first", () => {
     const rs = [
       repo({ id: "committed", name: "committed", lastCommit: { hash: "h", message: "m", author: "a", date: "2026-07-01T00:00:00Z" }, lastActivity: "2026-07-01T00:00:00Z" }),
       // 上次提交是一月，但工作区里躺着今天改的文件
       repo({ id: "working", name: "working", lastCommit: { hash: "h", message: "m", author: "a", date: "2026-01-01T00:00:00Z" }, lastActivity: "2026-08-25T09:00:00Z" }),
     ]
-    expect(applyFilter(rs, { query: "", group: null, sort: "activity", severity: null }).map((r) => r.id)).toEqual(["working", "committed"])
+    const ids = (sort: FilterState["sort"]) => applyFilter(rs, { query: "", group: null, sort, severity: null }).map((r) => r.id)
+    expect(ids("activity")).toEqual(["working", "committed"])
+    expect(ids("commit")).toEqual(["committed", "working"]) // 卡片上显示的「最后提交」是七月 > 一月
+  })
+
+  // commit 档排的是卡片上直接显示的那个时间（lastCommit.date），不是服务端排序用的 %cI——
+  // 用户要能把列表次序和自己看到的「x 天前」逐个对上
+  it("commit sort follows the date shown on the card, ignoring lastActivity", () => {
+    const rs = [
+      repo({ id: "a", name: "a", lastCommit: { hash: "h", message: "m", author: "a", date: "2026-01-01T00:00:00Z" }, lastActivity: "2026-12-01T00:00:00Z" }),
+      repo({ id: "b", name: "b", lastCommit: { hash: "h", message: "m", author: "a", date: "2026-06-01T00:00:00Z" }, lastActivity: "2026-06-01T00:00:00Z" }),
+    ]
+    expect(applyFilter(rs, { query: "", group: null, sort: "commit", severity: null }).map((r) => r.id)).toEqual(["b", "a"])
+  })
+
+  // 从未提交过的仓库（git init 之后还没 commit）在 commit 档里排最后，而不是靠 lastActivity 插队
+  it("commit sort puts repos with no commit last", () => {
+    const rs = [
+      repo({ id: "fresh", name: "fresh", lastActivity: "2026-08-25T09:00:00Z" }), // 有改动，无提交
+      repo({ id: "old", name: "old", lastCommit: { hash: "h", message: "m", author: "a", date: "2020-01-01T00:00:00Z" }, lastActivity: "2020-01-01T00:00:00Z" }),
+    ]
+    expect(applyFilter(rs, { query: "", group: null, sort: "commit", severity: null }).map((r) => r.id)).toEqual(["old", "fresh"])
   })
 
   // 服务端两个来源的 ISO 形式不同（mtime 是 `…Z`，`%aI` 带 `+08:00`），字符串比较会把

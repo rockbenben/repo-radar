@@ -33,6 +33,7 @@
   "bar.add": "＋ 新增",
   "sort.opened": "最近開啟",
   "sort.activity": "最近活躍",
+  "sort.commit": "最近提交",
   "sort.name": "按名稱",
   "group.folder": "按目錄",
   "group.language": "按語言",

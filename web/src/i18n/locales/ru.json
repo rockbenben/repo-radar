@@ -33,6 +33,7 @@
   "bar.add": "＋ Новый",
   "sort.opened": "Недавно открытые",
   "sort.activity": "Недавняя активность",
+  "sort.commit": "Недавние коммиты",
   "sort.name": "По имени",
   "group.folder": "По папке",
   "group.language": "По языку",

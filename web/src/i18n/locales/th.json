@@ -33,6 +33,7 @@
   "bar.add": "＋ ใหม่",
   "sort.opened": "เปิดล่าสุด",
   "sort.activity": "เคลื่อนไหวล่าสุด",
+  "sort.commit": "commit ล่าสุด",
   "sort.name": "ตามชื่อ",
   "group.folder": "ตามโฟลเดอร์",
   "group.language": "ตามภาษา",

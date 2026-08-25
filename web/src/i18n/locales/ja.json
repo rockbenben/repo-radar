@@ -33,6 +33,7 @@
   "bar.add": "＋ 新規",
   "sort.opened": "最近開いた順",
   "sort.activity": "最近の活動順",
+  "sort.commit": "最近のコミット順",
   "sort.name": "名前順",
   "group.folder": "フォルダ別",
   "group.language": "言語別",

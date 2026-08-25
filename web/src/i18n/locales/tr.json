@@ -33,6 +33,7 @@
   "bar.add": "＋ Yeni",
   "sort.opened": "Son açılan",
   "sort.activity": "Son etkin",
+  "sort.commit": "Son commit",
   "sort.name": "Ada göre",
   "group.folder": "Klasöre göre",
   "group.language": "Dile göre",

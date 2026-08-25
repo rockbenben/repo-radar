@@ -1125,6 +1125,7 @@ export default function App({
               options={[
                 { label: t("sort.opened"), value: "opened" },
                 { label: t("sort.activity"), value: "activity" },
+                { label: t("sort.commit"), value: "commit" },
                 { label: t("sort.name"), value: "name" },
               ]}
             />
