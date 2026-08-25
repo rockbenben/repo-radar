@@ -14,6 +14,7 @@ function repo(over: Partial<RepoStatus>): RepoStatus {
     ahead: 0, behind: 0, upstream: null, stashCount: 0,
     remotes: [{ name: "origin", url: "u" }],
     lastCommit: { hash: "h", message: "m", author: "a", date: new Date().toISOString() },
+    lastActivity: new Date().toISOString(),
     health: [], githubInbox: null, stashOldest: null, release: null, error: null, scannedAt: "", ...over,
   }
 }

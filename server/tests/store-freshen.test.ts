@@ -38,6 +38,7 @@ const makeCore = (unstaged: number): RepoCore => ({
   ahead: 0,
   behind: 0,
   upstream: null,
+  workedAt: null,
   oid: null,
 })
 const HEAVY: RepoHeavy = {

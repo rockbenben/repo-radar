@@ -6,7 +6,7 @@ const stub = (id: string, name: string): RepoStatus => ({
   id, path: id, name, group: "g", tags: [], favorite: false, branch: "main",
   displayName: null, description: null, language: null, archived: false, note: null, lastOpened: null, mergedBranches: [],
   dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
-  ahead: -1, behind: -1, upstream: null, stashCount: 0, remotes: [], lastCommit: null,
+  ahead: -1, behind: -1, upstream: null, stashCount: 0, remotes: [], lastCommit: null, lastActivity: null,
   health: [], githubInbox: null, stashOldest: null, release: null, error: null, scannedAt: "",
 })
 

@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { basename } from "node:path"
+import { statSync } from "node:fs"
+import { basename, join } from "node:path"
 import type { CommitInfo, DirtyCounts, RemoteInfo, RepoStatus } from "./types"
 import { mapLimit } from "./map-limit"
 import { readRepoMeta } from "./meta"
 import { detectLanguage } from "./lang"
+import { shouldIgnorePath } from "./watch-filter"
 
 export interface GitResult {
   stdout: string
@@ -32,7 +34,10 @@ const DEFAULT_TIMEOUT_MS = 30_000
  *
  * 它只关掉**非 ASCII** 的转义：含 `"` / `\` / 控制字符的路径仍会被引号包起来，那是必须保留的
  * 行为（否则带换行的文件名会把逐行解析的输出撑破），别改成任何「全量不转义」的写法。
- * 分支名和 tag 名不受 quotePath 影响（实测裸 UTF-8），所以范围只有 diff / ls-files / stash show。
+ * 分支名和 tag 名不受 quotePath 影响（实测裸 UTF-8），所以范围是 diff / ls-files / stash show，
+ * 外加 `status --porcelain=v2`——它的路径以前只用来计数，现在还要**回到磁盘上 stat**
+ * （见 worktreeTouchedAt）。不带的话中文/emoji 文件名是 `"\344\270\255…"`，join 出来的路径
+ * 在磁盘上不存在，stat 静默失败：一个满是中文文件名的仓库改了半天，「最近活跃」纹丝不动。
  */
 const QUOTE_PATH_OFF = ["-c", "core.quotePath=false"]
 
@@ -171,6 +176,35 @@ export interface ParsedStatus {
   // 指纹要用它判断「这个仓库自上轮以来有没有新提交」——白拿，不增加任何 git 调用。
   // 空仓库输出 `# branch.oid (initial)`，按 null 处理
   oid: string | null
+  /**
+   * 上面那些条目对应的**工作区相对路径**，供 worktreeTouchedAt 取 mtime。仓库干净时为空数组。
+   *
+   * 只列 git 认得的改动，于是「被 .gitignore 忽略的文件不算修改」是白拿的：`status` 不带
+   * `--ignored`，构建产物、.env、日志一条都不会出现在这里。想自己走目录树的话，这一条得
+   * 额外花一遍 `git check-ignore` 才能换回来。
+   */
+  paths: string[]
+}
+
+/**
+ * porcelain v2 里一条记录的路径**前面**有几个空格分隔字段。四种记录各不相同（git 2.48 实测）：
+ *   `1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>`                      → 8
+ *   `2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>\t<orig>`   → 9，新旧路径以 TAB 分隔
+ *   `u <XY> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>`            → 10
+ *   `? <path>`                                                          → 1
+ *
+ * 必须按「第 N 个字段之后的**全部**」取，不能 `split(" ")[N]`：路径里有空格是家常便饭
+ * （`sub dir/tracked file.txt`），那样取只会拿到第一个词，stat 到一个不存在的路径。
+ */
+const PATH_FIELD_OFFSET: Record<string, number> = { "1": 8, "2": 9, u: 10, "?": 1 }
+
+function entryPath(line: string): string | null {
+  const offset = PATH_FIELD_OFFSET[line[0]]
+  if (offset === undefined) return null
+  const rest = line.split(" ").slice(offset).join(" ")
+  // rename/copy（`2 `）把 `<path>\t<origPath>` 塞在同一段里。取新路径：旧路径已经不在磁盘上了
+  const path = rest.split("\t")[0]
+  return path === "" ? null : path
 }
 
 export function parseStatus(out: string): ParsedStatus {
@@ -180,6 +214,11 @@ export function parseStatus(out: string): ParsedStatus {
   let upstream: string | null = null
   let oid: string | null = null
   const dirty: DirtyCounts = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 }
+  const paths: string[] = []
+  const take = (line: string): void => {
+    const p = entryPath(line)
+    if (p !== null) paths.push(p)
+  }
   for (const line of out.split("\n")) {
     if (line.startsWith("# branch.oid ")) {
       const v = line.slice("# branch.oid ".length).trim()
@@ -199,13 +238,62 @@ export function parseStatus(out: string): ParsedStatus {
       const xy = line.split(" ")[1] // 两字符 XY，"." 表示该侧无变化
       if (xy[0] !== ".") dirty.staged++
       if (xy[1] !== ".") dirty.unstaged++
+      take(line)
     } else if (line.startsWith("u ")) {
       dirty.conflicted++
+      take(line)
     } else if (line.startsWith("? ")) {
       dirty.untracked++
+      take(line)
     }
   }
-  return { branch, ahead, behind, upstream, dirty, oid }
+  return { branch, ahead, behind, upstream, dirty, oid, paths }
+}
+
+/**
+ * 一个仓库一轮最多 stat 多少条路径。
+ *
+ * ponytail: 超出就截断（按 git 给的路径顺序，即字典序，**不是**按新旧）。取前 N 条的 max
+ * 是真实 mtime 的下界，而攒下几千条待提交改动的仓库你显然刚动过，落在哪一条上都不影响
+ * 「最近活跃」的排序结论。真要精确到条数无关，得换成把 mtime 一起交给 git 输出——
+ * porcelain v2 给的是 mode/hash，没有时间戳，那就是另一条路了。
+ */
+const TOUCHED_STAT_LIMIT = 200
+
+/**
+ * 工作区「最后一次被动过」的时间 = status 列出的那些路径里最新的 mtime。仓库干净 → null。
+ *
+ * 这是「最近活跃改看修改而不是提交」的全部实现，而它一个 git 进程都不额外花：路径是
+ * getRepoCore 那条本来就要跑的 status 顺带给的，这里只是回到磁盘上 stat 几条（实测干净仓库
+ * 0 条、日常有改动的仓库个位数到几十条，相对已经付掉的 ~50ms git spawn 可以忽略）。
+ *
+ * 刻意**不**走目录树：本机实测，跳过依赖/构建目录也要冷缓存 750ms / 仓库，而最久没动的那批
+ * 仓库必然是冷的——正是要排序的重点。不跳的话（34677 个文件）冷缓存 3s，还会把 node_modules
+ * 的 mtime 当成「刚刚很活跃」，一次 npm install 就能让全部仓库并列第一。
+ *
+ * 未跟踪的**目录**（`? dir/`）stat 的是目录本身：mtime 只反映直接子项的增删，改里面文件的
+ * 内容不动它。少报而不是多报，兜底是 lastCommit，可接受——展开成文件就退回上一段那条路了。
+ */
+export function worktreeTouchedAt(repoPath: string, paths: readonly string[]): string | null {
+  const now = Date.now()
+  let newest = 0
+  let stated = 0
+  for (const rel of paths) {
+    const abs = join(repoPath, rel)
+    // 没写 .gitignore 的仓库里 node_modules/dist 是**未跟踪**而不是被忽略，照样会出现在
+    // status 里。复用监听那份同名目录表，否则这类仓库每次构建都跳到「最近活跃」第一名
+    if (shouldIgnorePath(abs, [repoPath])) continue
+    if (++stated > TOUCHED_STAT_LIMIT) break
+    try {
+      const { mtimeMs } = statSync(abs)
+      // 未来时间一律不取：解压出来的归档、跨机器同步的时钟偏差都会留下 2099 年的 mtime，
+      // 而它会把那个仓库**永久**钉在「最近活跃」第一名，界面上无从解释也无从恢复
+      if (mtimeMs > newest && mtimeMs <= now) newest = mtimeMs
+    } catch {
+      // 已删除的文件（`1 .D`）在磁盘上不存在。删除发生的时间无从得知，交给 lastCommit 兜底
+    }
+  }
+  return newest === 0 ? null : new Date(newest).toISOString()
 }
 
 export function parseRemotes(out: string): RemoteInfo[] {
@@ -727,6 +815,13 @@ export interface RepoCore {
   behind: number
   upstream: string | null
   oid: string | null
+  /**
+   * 工作区未提交改动里最新的 mtime（ISO）；null = 干净。见 worktreeTouchedAt。
+   *
+   * 必须待在 core 而不是 heavy：heavy 按 `.git` 指纹缓存，而改一个工作区文件**不动 .git**
+   * ——指纹逐字节相同，缓存命中，这个值会一直停在你上次 commit/fetch 那一刻。
+   */
+  workedAt: string | null
 }
 
 /**
@@ -752,9 +847,17 @@ export interface RepoHeavy {
 /** 1 个 git 进程。status 失败（非 git 目录、git 缺失）直接抛出，由调用方决定如何降级。
  *  --no-optional-locks：读状态时不刷新/写 .git/index，避免触发文件监听的自反馈 */
 export async function getRepoCore(path: string): Promise<RepoCore> {
-  const status = await runGit(path, ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"])
+  const status = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"])
   const parsed = parseStatus(status.stdout)
-  return { branch: parsed.branch, dirty: parsed.dirty, ahead: parsed.ahead, behind: parsed.behind, upstream: parsed.upstream, oid: parsed.oid }
+  return {
+    branch: parsed.branch,
+    dirty: parsed.dirty,
+    ahead: parsed.ahead,
+    behind: parsed.behind,
+    upstream: parsed.upstream,
+    oid: parsed.oid,
+    workedAt: worktreeTouchedAt(path, parsed.paths),
+  }
 }
 
 /**
@@ -875,6 +978,17 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
  * git 操作为止。代价是每仓库每轮几次 existsSync/readFileSync 加一次 readdirSync，
  * 一个进程都不 spawn——当初并进 heavy 是图结构方便，不是为了省开销。
  */
+/**
+ * 两个 ISO 时间取晚的那个。**按绝对时间比，不能比字符串**：workedAt 由 mtime 转出，永远是
+ * UTC（`…Z`）；lastCommit.date 是 `%aI`，带本地时区偏移（`…+08:00`）。字符串比较跨这两种
+ * 形式必错——`2026-08-25T02:00:00Z` 比 `2026-08-25T09:00:00+08:00` 大，而两者是同一时刻。
+ */
+function latestOf(a: string | null, b: string | null): string | null {
+  if (a === null) return b
+  if (b === null) return a
+  return new Date(a).getTime() >= new Date(b).getTime() ? a : b
+}
+
 export function composeStatus(path: string, id: string, core: RepoCore, heavy: RepoHeavy): RepoStatus {
   const meta = readRepoMeta(path, heavy.remotes)
   return {
@@ -901,6 +1015,7 @@ export function composeStatus(path: string, id: string, core: RepoCore, heavy: R
     release: heavy.release,
     remotes: heavy.remotes,
     lastCommit: heavy.lastCommit,
+    lastActivity: latestOf(core.workedAt, heavy.lastCommit?.date ?? null),
     health: [],
     githubInbox: null,
     error: null,

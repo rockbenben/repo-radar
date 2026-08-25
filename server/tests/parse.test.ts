@@ -17,6 +17,7 @@ describe("parseStatus", () => {
       upstream: "origin/main",
       dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
       oid: "1234567890abcdef",
+      paths: [],
     })
   })
 
@@ -55,6 +56,30 @@ describe("parseStatus", () => {
       "",
     ].join("\n")
     expect(parseStatus(out).dirty).toEqual({ staged: 3, unstaged: 2, untracked: 1, conflicted: 1 })
+  })
+
+  // 路径要拿去 stat（worktreeTouchedAt），取错就是静默失效：stat 一个不存在的路径不报错，
+  // 只是「最近活跃」永远不动。这一组是 git 2.48 的真实输出，四种记录路径前的字段数各不相同
+  it("extracts the working-tree path from all four record types", () => {
+    const out = [
+      "# branch.oid 0320967b",
+      "# branch.head main",
+      "1 .D N... 100644 100644 000000 4bcfe98e 4bcfe98e gone.txt",
+      "2 R. N... 100644 100644 100644 61780798 61780798 R100 renamed to.txt\tren ame.txt",
+      "1 MM N... 100644 100644 100644 78981922 9ad2ebba sub dir/tracked file.txt",
+      "u UU N... 100644 100644 100644 100644 df967b96 ba2906d0 e45c9c26 con flict.txt",
+      "? node_modules/",
+      "? top level untracked.txt",
+      "",
+    ].join("\n")
+    expect(parseStatus(out).paths).toEqual([
+      "gone.txt",
+      "renamed to.txt", // rename 取**新**路径：旧路径已经不在磁盘上，stat 不到
+      "sub dir/tracked file.txt", // 路径含空格，不能 split(" ") 取某一项
+      "con flict.txt",
+      "node_modules/", // 未跟踪目录带尾分隔符；由 worktreeTouchedAt 负责剔除，不在这里
+      "top level untracked.txt",
+    ])
   })
 })
 

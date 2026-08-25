@@ -27,6 +27,61 @@ describe("getRepoCore", () => {
   })
 })
 
+describe("workedAt：最近活跃看的是「修改」而不是「提交」", () => {
+  it("干净仓库为 null——工作区与 HEAD 一致时，最后一次修改就是那次提交，交给 lastCommit", async () => {
+    expect((await getRepoCore(makeRepo())).workedAt).toBeNull()
+  })
+
+  it("有未提交改动时取那些文件的 mtime", async () => {
+    const repo = makeRepo({ dirty: true })
+    const workedAt = (await getRepoCore(repo)).workedAt
+    expect(workedAt).not.toBeNull()
+    expect(Math.abs(Date.now() - new Date(workedAt!).getTime())).toBeLessThan(60_000)
+  })
+
+  it("含空格与中文的文件名照样能 stat 到（靠 core.quotePath=false）", async () => {
+    const repo = makeRepo()
+    writeFileSync(join(repo, "中文 文件.txt"), "x")
+    // 不带 QUOTE_PATH_OFF 的话这里是 `"\344\270\255…"`，join 出来的路径不存在，stat 静默失败
+    expect((await getRepoCore(repo)).workedAt).not.toBeNull()
+  })
+
+  it("未跟踪的 node_modules 不算修改——没写 .gitignore 的仓库不该因为一次构建就跳到最前", async () => {
+    const repo = makeRepo()
+    mkdirSync(join(repo, "node_modules"), { recursive: true })
+    writeFileSync(join(repo, "node_modules", "pkg.js"), "x")
+    const core = await getRepoCore(repo)
+    expect(core.dirty.untracked).toBe(1) // git 确实报了它（没有 .gitignore，它只是未跟踪）
+    expect(core.workedAt).toBeNull() // 但它不构成「我动过这个项目」
+  })
+
+  it("被 .gitignore 忽略的文件不算修改", async () => {
+    const repo = makeRepo()
+    writeFileSync(join(repo, ".gitignore"), "build.log\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "ignore")
+    writeFileSync(join(repo, "build.log"), "noise")
+    expect((await getRepoCore(repo)).workedAt).toBeNull()
+  })
+
+  it("composeStatus 的 lastActivity 取「工作区 mtime」与「最后提交」里晚的那个", async () => {
+    const repo = makeRepo({ dirty: true })
+    const core = await getRepoCore(repo)
+    const { heavy } = await getRepoHeavy(repo, core)
+    const status = composeStatus(repo, "id", core, heavy)
+    // 提交在前、改文件在后，所以取的是工作区那一侧
+    expect(status.lastActivity).toBe(core.workedAt)
+    expect(new Date(status.lastActivity!).getTime()).toBeGreaterThanOrEqual(new Date(heavy.lastCommit!.date).getTime())
+  })
+
+  it("干净仓库的 lastActivity 回落到最后提交时间", async () => {
+    const repo = makeRepo()
+    const core = await getRepoCore(repo)
+    const { heavy } = await getRepoHeavy(repo, core)
+    expect(composeStatus(repo, "id", core, heavy).lastActivity).toBe(heavy.lastCommit!.date)
+  })
+})
+
 /** 有提交的普通仓库的 core 替身：只有 branch / oid 影响 heavy，别的字段 heavy 根本不看 */
 const liveCore = (branch: string | null = "main") => ({ branch, oid: "0".repeat(40) })
 

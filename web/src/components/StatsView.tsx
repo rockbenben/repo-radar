@@ -45,6 +45,8 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
 
   const total = days.reduce((sum, d) => sum + d.count, 0)
   const activeDays = days.filter((d) => d.count > 0).length
+  // 「空仓库」按**有没有提交过**判，不按 lastActivityDate：git init 完写了两个文件的目录
+  // 工作区是有 mtime 的，拿活跃口径判会把它算成活跃仓库，而这一排读数讲的是提交
   const nonEmpty = activity.filter((a) => a.lastCommitDate !== null)
   const empty = activity.length - nonEmpty.length
   const top = nonEmpty.slice(0, 15)
@@ -64,7 +66,7 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
     <button key={a.id} type="button" className="r rr-r-clk" onClick={() => onOpenRepo(a.id)} title={t("common.openRepoTip")}>
       <span className="rank">{i + 1}</span>
       <span className="nm">{a.displayName ?? a.name}</span>
-      <span className="ago">{a.lastCommitDate ? relativeTime(a.lastCommitDate) : t("stats.emptyRepo")}</span>
+      <span className="ago">{a.lastActivityDate ? relativeTime(a.lastActivityDate) : t("stats.emptyRepo")}</span>
     </button>
   )
 

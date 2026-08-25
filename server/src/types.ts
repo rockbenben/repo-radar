@@ -70,6 +70,11 @@ export interface RepoStatus {
   release: { tag: string; ahead: number; tagDate: string } | null
   remotes: RemoteInfo[]
   lastCommit: CommitInfo | null
+  // 「最近一次动过这个仓库」的 ISO 时间：工作区未提交改动的最新 mtime 与最后提交时间取晚者。
+  // null = 空仓库且工作区干净。排序/统计的「最近活跃」按它，**不按 lastCommit**——改了一天
+  // 没提交的仓库按提交时间会沉到「三个月前提交过」的那批下面，而它恰恰是最该浮上来的。
+  // 被 .gitignore 忽略的文件不算数（git status 本来就不报），构建产物不会伪造活跃。
+  lastActivity: string | null
   health: HealthIssue[]
   githubInbox: GithubInbox | null // 跨仓库「等我的」：PR/issue/CI（后台补全，无 GitHub 远程或未拉到为 null）
   error: string | null // git 命令失败时的摘要，正常为 null
@@ -104,5 +109,8 @@ export interface ActivityItem {
   id: string
   name: string
   displayName: string | null
+  lastActivityDate: string | null // ISO；排序与列表上显示的相对时间都按它。见 RepoStatus.lastActivity
+  // 仍然保留：统计面板的「空仓库」计数问的是「有没有提交过」，那是提交口径的问题，
+  // 不能被「工作区有未跟踪文件」顶掉——否则 git init 完写了两个文件的目录不再算空仓库
   lastCommitDate: string | null // ISO；null = 空仓库
 }

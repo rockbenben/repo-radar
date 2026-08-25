@@ -48,6 +48,9 @@ export interface RepoStatus {
   release: { tag: string; ahead: number; tagDate: string } | null // 最新 tag 之后堆的提交；null = 从未打 tag
   remotes: RemoteInfo[]
   lastCommit: CommitInfo | null
+  // 「最近一次动过这个仓库」：工作区未提交改动的最新 mtime 与最后提交时间取晚者；null = 空且干净。
+  // 「最近活跃」排序按它，不按 lastCommit。卡片上显示的「最后提交」仍然是 lastCommit，两回事
+  lastActivity: string | null
   health: HealthIssue[]
   githubInbox: GithubInbox | null // 跨仓库「等我的」：PR/issue/CI（后台补全，无 GitHub 远程或未拉到为 null）
   error: string | null
@@ -132,5 +135,6 @@ export interface ActivityItem {
   id: string
   name: string
   displayName: string | null
-  lastCommitDate: string | null // ISO；null = 空仓库
+  lastActivityDate: string | null // ISO；排序与显示的相对时间按它。见 RepoStatus.lastActivity
+  lastCommitDate: string | null // ISO；null = 空仓库。只用于「空仓库」计数，那是提交口径的问题
 }

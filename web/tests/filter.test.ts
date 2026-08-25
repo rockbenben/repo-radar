@@ -25,6 +25,7 @@ function repo(over: Partial<RepoStatus>): RepoStatus {
     stashCount: 0,
     remotes: [],
     lastCommit: null,
+    lastActivity: null,
     health: [],
     githubInbox: null,
     stashOldest: null,
@@ -38,8 +39,8 @@ function repo(over: Partial<RepoStatus>): RepoStatus {
 describe("applyFilter", () => {
   const repos = [
     repo({ id: "1", name: "alpha", path: "D:\\p\\alpha", group: "365", tags: ["web"] }),
-    repo({ id: "2", name: "beta", path: "D:\\p\\beta", group: "misc", lastCommit: { hash: "h", message: "m", author: "a", date: "2026-07-01T00:00:00Z" } }),
-    repo({ id: "3", name: "gamma", path: "D:\\p\\gamma", group: "365", favorite: true, lastCommit: { hash: "h", message: "m", author: "a", date: "2026-01-01T00:00:00Z" } }),
+    repo({ id: "2", name: "beta", path: "D:\\p\\beta", group: "misc", lastCommit: { hash: "h", message: "m", author: "a", date: "2026-07-01T00:00:00Z" }, lastActivity: "2026-07-01T00:00:00Z" }),
+    repo({ id: "3", name: "gamma", path: "D:\\p\\gamma", group: "365", favorite: true, lastCommit: { hash: "h", message: "m", author: "a", date: "2026-01-01T00:00:00Z" }, lastActivity: "2026-01-01T00:00:00Z" }),
   ]
 
   it("matches query against name, path and tags (case-insensitive)", () => {
@@ -68,8 +69,29 @@ describe("applyFilter", () => {
     expect(applyFilter(repos, { query: "", group: null, sort: "name", severity: null }).map((r) => r.id)).toEqual(["3", "1", "2"])
   })
 
-  it("sorts by recent activity, null lastCommit last", () => {
+  it("sorts by recent activity, null last", () => {
     expect(applyFilter(repos, { query: "", group: null, sort: "activity", severity: null }).map((r) => r.id)).toEqual(["3", "2", "1"])
+  })
+
+  // 这个改动的全部意义：改了一整天却没提交的仓库，按提交口径会沉到「上周提交过」的那批下面，
+  // 而它恰恰是最该浮上来的那个。lastActivity 已在服务端与提交时间取过晚者，前端只按它排
+  it("ranks a repo with uncommitted work above one with a newer commit", () => {
+    const rs = [
+      repo({ id: "committed", name: "committed", lastCommit: { hash: "h", message: "m", author: "a", date: "2026-07-01T00:00:00Z" }, lastActivity: "2026-07-01T00:00:00Z" }),
+      // 上次提交是一月，但工作区里躺着今天改的文件
+      repo({ id: "working", name: "working", lastCommit: { hash: "h", message: "m", author: "a", date: "2026-01-01T00:00:00Z" }, lastActivity: "2026-08-25T09:00:00Z" }),
+    ]
+    expect(applyFilter(rs, { query: "", group: null, sort: "activity", severity: null }).map((r) => r.id)).toEqual(["working", "committed"])
+  })
+
+  // 服务端两个来源的 ISO 形式不同（mtime 是 `…Z`，`%aI` 带 `+08:00`），字符串比较会把
+  // 同一时刻的两种写法排反。这两条恰好是逐字符比时顺序相反的一对
+  it("orders by absolute time across differing timezone offsets", () => {
+    const rs = [
+      repo({ id: "later", name: "later", lastActivity: "2026-07-01T05:00:00Z" }), // UTC 05:00
+      repo({ id: "earlier", name: "earlier", lastActivity: "2026-07-01T10:00:00+08:00" }), // 实为 UTC 02:00
+    ]
+    expect(applyFilter(rs, { query: "", group: null, sort: "activity", severity: null }).map((r) => r.id)).toEqual(["later", "earlier"])
   })
 
   it("matches query against displayName and description", () => {

@@ -277,6 +277,7 @@ export class RepoStore {
         release: null,
         remotes: [],
         lastCommit: null,
+        lastActivity: null,
         health: [],
         githubInbox: null,
         error: err instanceof Error ? err.message : String(err),

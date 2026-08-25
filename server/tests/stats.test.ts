@@ -80,6 +80,7 @@ describe("buildActivity", () => {
       dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
       ahead: 0, behind: 0, upstream: null, stashCount: 0, remotes: [],
       lastCommit: date ? { hash: "h", message: "m", author: "a", date } : null,
+      lastActivity: date,
       health: [], githubInbox: null, stashOldest: null, release: null, error: null, scannedAt: "",
     }) as RepoStatus
   it("sorts most-recent first, null last", () => {

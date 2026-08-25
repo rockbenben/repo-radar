@@ -47,18 +47,22 @@ export async function aggregateHeatmap(repos: { id: string; path: string }[], si
   return [...total.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, count }))
 }
 
+/** 「活跃」按 lastActivity 排（工作区 mtime 与最后提交取晚者），不按提交时间——改了一天没提交的
+ *  仓库按提交口径会沉到底下。lastCommitDate 一并带出，只供「空仓库」计数用，见 ActivityItem */
 export function buildActivity(repos: RepoStatus[]): ActivityItem[] {
   return repos
     .map((r) => ({
       id: r.id,
       name: r.name,
       displayName: r.displayName,
+      lastActivityDate: r.lastActivity,
       lastCommitDate: r.lastCommit?.date ?? null,
     }))
     .sort((a, b) => {
-      if (a.lastCommitDate === null) return b.lastCommitDate === null ? 0 : 1
-      if (b.lastCommitDate === null) return -1
-      // 按绝对时间比较：ISO 字符串带不同时区偏移时字符串比较会排错序
-      return new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime()
+      if (a.lastActivityDate === null) return b.lastActivityDate === null ? 0 : 1
+      if (b.lastActivityDate === null) return -1
+      // 按绝对时间比较：ISO 字符串带不同时区偏移时字符串比较会排错序，而这里必然混着两种形式
+      // ——lastActivity 可能来自 mtime（`…Z`）也可能来自 `%aI`（`…+08:00`）
+      return new Date(b.lastActivityDate).getTime() - new Date(a.lastActivityDate).getTime()
     })
 }
