@@ -150,6 +150,7 @@
   "card.nonMain": "non-main",
   "card.noUpstream": "Tanpa upstream",
   "card.emptyRepo": "Repo kosong",
+  "card.lastTouched": "Terakhir diubah {t}",
   "card.editor": "Editor",
   "card.terminal": "Terminal",
   "card.dir": "Folder",

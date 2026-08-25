@@ -1,4 +1,4 @@
-import { NO_SHOW_SIGNATURE, runGit } from "./git"
+import { NO_SHOW_SIGNATURE, runGit, sortableTime } from "./git"
 import { mapLimit } from "./map-limit"
 import type { ActivityItem, HeatmapDay, RepoStatus } from "./types"
 
@@ -59,10 +59,14 @@ export function buildActivity(repos: RepoStatus[]): ActivityItem[] {
       lastCommitDate: r.lastCommit?.date ?? null,
     }))
     .sort((a, b) => {
-      if (a.lastActivityDate === null) return b.lastActivityDate === null ? 0 : 1
-      if (b.lastActivityDate === null) return -1
-      // 按绝对时间比较：ISO 字符串带不同时区偏移时字符串比较会排错序，而这里必然混着两种形式
-      // ——lastActivity 可能来自 mtime（`…Z`）也可能来自 `%aI`（`…+08:00`）
-      return new Date(b.lastActivityDate).getTime() - new Date(a.lastActivityDate).getTime()
+      // 复用 sortableTime 而不是自己 new Date：它同时挡掉解析不出的值与落在未来的值。
+      // 直接相减的话 NaN 会让比较器失去传递性——受害的不只是那一行，整个列表的次序都可能
+      // 乱掉，进而挪动 slice(0,15) / slice(-10) 的边界，把无关仓库在两个榜单之间搬来搬去。
+      // 按绝对时间比也是必须的：这里必然混着两种 ISO 形式（mtime 的 `…Z` 与 %cI 的 `+08:00`）
+      const ta = sortableTime(a.lastActivityDate)
+      const tb = sortableTime(b.lastActivityDate)
+      if (Number.isNaN(ta)) return Number.isNaN(tb) ? 0 : 1
+      if (Number.isNaN(tb)) return -1
+      return tb - ta
     })
 }

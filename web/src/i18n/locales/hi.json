@@ -150,6 +150,7 @@
   "card.nonMain": "गैर-main",
   "card.noUpstream": "कोई upstream नहीं",
   "card.emptyRepo": "खाली repo",
+  "card.lastTouched": "अंतिम संपादन {t}",
   "card.editor": "एडिटर",
   "card.terminal": "टर्मिनल",
   "card.dir": "फ़ोल्डर",

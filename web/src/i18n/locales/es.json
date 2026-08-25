@@ -150,6 +150,7 @@
   "card.nonMain": "no-main",
   "card.noUpstream": "Sin upstream",
   "card.emptyRepo": "Repo vacío",
+  "card.lastTouched": "Última edición {t}",
   "card.editor": "Editor",
   "card.terminal": "Terminal",
   "card.dir": "Carpeta",

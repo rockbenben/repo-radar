@@ -150,6 +150,7 @@
   "card.nonMain": "non-main",
   "card.noUpstream": "업스트림 없음",
   "card.emptyRepo": "빈 저장소",
+  "card.lastTouched": "마지막 편집 {t}",
   "card.editor": "에디터",
   "card.terminal": "터미널",
   "card.dir": "폴더",

@@ -150,6 +150,7 @@
   "card.nonMain": "main değil",
   "card.noUpstream": "Upstream yok",
   "card.emptyRepo": "Boş depo",
+  "card.lastTouched": "Son düzenleme {t}",
   "card.editor": "Düzenleyici",
   "card.terminal": "Terminal",
   "card.dir": "Klasör",

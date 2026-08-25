@@ -150,6 +150,7 @@
   "card.nonMain": "non-main",
   "card.noUpstream": "上流なし",
   "card.emptyRepo": "空のリポジトリ",
+  "card.lastTouched": "最終編集 {t}",
   "card.editor": "エディタ",
   "card.terminal": "ターミナル",
   "card.dir": "フォルダ",

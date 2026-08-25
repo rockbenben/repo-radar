@@ -108,6 +108,24 @@ describe("applyFilter", () => {
     expect(applyFilter(rs, { query: "", group: null, sort: "commit", severity: null }).map((r) => r.id)).toEqual(["old", "fresh"])
   })
 
+  // 「最近打开」这一档的两行在这轮改动里都被重写过（字符串比较 → 绝对时间），而整个仓库
+  // 一条覆盖都没有。它有两层：先按打开时间，都没打开过再按最近活跃兜底
+  it("sorts by last opened, falling back to activity when never opened", () => {
+    const rs = [
+      repo({ id: "never-a", name: "never-a", lastActivity: "2026-01-01T00:00:00Z" }),
+      repo({ id: "opened-old", name: "opened-old", lastOpened: "2026-02-01T00:00:00Z" }),
+      repo({ id: "never-b", name: "never-b", lastActivity: "2026-08-01T00:00:00Z" }),
+      repo({ id: "opened-new", name: "opened-new", lastOpened: "2026-07-01T00:00:00Z" }),
+    ]
+    // 打开过的在前（按打开时间倒序），从未打开的在后（按最近活跃倒序）
+    expect(applyFilter(rs, { query: "", group: null, sort: "opened", severity: null }).map((r) => r.id)).toEqual([
+      "opened-new",
+      "opened-old",
+      "never-b",
+      "never-a",
+    ])
+  })
+
   // 服务端两个来源的 ISO 形式不同（mtime 是 `…Z`，`%aI` 带 `+08:00`），字符串比较会把
   // 同一时刻的两种写法排反。这两条恰好是逐字符比时顺序相反的一对
   it("orders by absolute time across differing timezone offsets", () => {

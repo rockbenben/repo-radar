@@ -150,6 +150,7 @@
   "card.nonMain": "hors-main",
   "card.noUpstream": "Sans upstream",
   "card.emptyRepo": "Dépôt vide",
+  "card.lastTouched": "Dernière modification {t}",
   "card.editor": "Éditeur",
   "card.terminal": "Terminal",
   "card.dir": "Dossier",

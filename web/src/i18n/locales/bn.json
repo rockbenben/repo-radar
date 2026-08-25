@@ -150,6 +150,7 @@
   "card.nonMain": "non-main",
   "card.noUpstream": "upstream নেই",
   "card.emptyRepo": "খালি রিপো",
+  "card.lastTouched": "সর্বশেষ সম্পাদনা {t}",
   "card.editor": "এডিটর",
   "card.terminal": "টার্মিনাল",
   "card.dir": "ফোল্ডার",

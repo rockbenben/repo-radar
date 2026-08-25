@@ -150,6 +150,7 @@
   "card.nonMain": "غير main",
   "card.noUpstream": "لا يوجد upstream",
   "card.emptyRepo": "مستودع فارغ",
+  "card.lastTouched": "آخر تعديل {t}",
   "card.editor": "المحرّر",
   "card.terminal": "الطرفية",
   "card.dir": "المجلد",

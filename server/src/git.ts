@@ -946,7 +946,8 @@ export interface RepoHeavy {
   mergedBranches: string[]
 }
 
-/** 1 个 git 进程。status 失败（非 git 目录、git 缺失）直接抛出，由调用方决定如何降级。
+/** 1 个 git 进程，外加至多 TOUCHED_STAT_LIMIT 次 lstat（异步、限并发、带总时限，见
+ *  worktreeTouchedAt）。status 失败（非 git 目录、git 缺失）直接抛出，由调用方决定如何降级。
  *  --no-optional-locks：读状态时不刷新/写 .git/index，避免触发文件监听的自反馈 */
 export async function getRepoCore(path: string): Promise<RepoCore> {
   const status = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"])

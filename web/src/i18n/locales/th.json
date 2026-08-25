@@ -150,6 +150,7 @@
   "card.nonMain": "ไม่ใช่ main",
   "card.noUpstream": "ไม่มี upstream",
   "card.emptyRepo": "รีโปว่าง",
+  "card.lastTouched": "แก้ไขล่าสุด {t}",
   "card.editor": "เอดิเตอร์",
   "card.terminal": "เทอร์มินัล",
   "card.dir": "โฟลเดอร์",

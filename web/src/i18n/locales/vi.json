@@ -150,6 +150,7 @@
   "card.nonMain": "không phải main",
   "card.noUpstream": "Không upstream",
   "card.emptyRepo": "Repo rỗng",
+  "card.lastTouched": "Sửa lần cuối {t}",
   "card.editor": "Trình soạn thảo",
   "card.terminal": "Terminal",
   "card.dir": "Thư mục",

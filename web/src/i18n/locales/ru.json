@@ -150,6 +150,7 @@
   "card.nonMain": "не main",
   "card.noUpstream": "Нет upstream",
   "card.emptyRepo": "Пустой репо",
+  "card.lastTouched": "Последнее изменение {t}",
   "card.editor": "Редактор",
   "card.terminal": "Терминал",
   "card.dir": "Папка",

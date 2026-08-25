@@ -134,6 +134,12 @@ export const RepoCard = memo(function RepoCard({
   // 全是 0，漏掉它这张卡就一边显示「✓ clean」一边挂着红色「N 个文件处于冲突状态」chip。
   // 与 DetailPanel 的同名计算必须同时改，否则会变成「卡片说脏、面板说干净」
   const changes = repo.dirty.staged + repo.dirty.unstaged + repo.dirty.untracked + repo.dirty.conflicted
+  // 工作区里比最后一次提交更新的改动时间；没有则 null（干净仓库两者相等，没什么可补充的）。
+  // 按绝对时间比而不是比字符串：两边的 ISO 形式不同（mtime 是 `…Z`，提交带 `+08:00`）
+  const touchedAt =
+    repo.lastActivity !== null && repo.lastCommit !== null && new Date(repo.lastActivity) > new Date(repo.lastCommit.date)
+      ? repo.lastActivity
+      : null
   const web = remoteWeb(repo.remotes)
   const desc = repo.description ?? (repo.displayName && repo.displayName !== repo.name ? repo.displayName : null)
   const chips = repo.health.filter((h) => !GLYPH_RULES.has(h.rule))
@@ -246,7 +252,13 @@ export const RepoCard = memo(function RepoCard({
               {repo.lastCommit.message}
               <span className="q">”</span>
             </span>
-            <span className="ago">{relativeTime(repo.lastCommit.date)}</span>
+            {/* 默认排序是「最近活跃」，而卡片上唯一的时间是**提交**时间——于是一张写着
+                「3 个月前」的卡片排在「昨天」上面，屏幕上没有任何东西解释这个次序。
+                工作区有更新的改动时，把那个时间挂进 title：不动版面、不加样式，
+                悬停就能看到排在前面的理由。相等时不挂，免得每张干净卡片都多一句废话 */}
+            <span className="ago" title={touchedAt === null ? undefined : t("card.lastTouched", { t: relativeTime(touchedAt) })}>
+              {relativeTime(repo.lastCommit.date)}
+            </span>
             <CommitPreview repoId={repo.id} changes={changes} />
           </>
         ) : (

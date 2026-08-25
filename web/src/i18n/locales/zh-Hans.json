@@ -150,6 +150,7 @@
   "card.nonMain": "非 main",
   "card.noUpstream": "未跟踪上游",
   "card.emptyRepo": "空仓库",
+  "card.lastTouched": "最后改动 {t}",
   "card.editor": "编辑器",
   "card.terminal": "终端",
   "card.dir": "目录",

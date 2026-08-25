@@ -150,6 +150,7 @@
   "card.nonMain": "非 main",
   "card.noUpstream": "未追蹤上游",
   "card.emptyRepo": "空倉庫",
+  "card.lastTouched": "最後改動 {t}",
   "card.editor": "編輯器",
   "card.terminal": "終端機",
   "card.dir": "目錄",
