@@ -1099,6 +1099,7 @@ export default function App({
               value={filter.group ?? ""}
               style={{ width: 124 }}
               prefix={<SelIcon kind="filter" />}
+              title={t("bar.groupFilterTip")}
               onChange={(v) => setFilter({ ...filter, group: v || null })}
               options={[{ label: t("bar.allGroups"), value: "" }, ...groups.map((g) => ({ label: g, value: g }))]}
             />
@@ -1121,12 +1122,16 @@ export default function App({
               value={filter.sort}
               style={{ width: 124 }}
               prefix={<SelIcon kind="sort" />}
+              title={t("bar.sortTip")}
               onChange={(v) => setFilter({ ...filter, sort: v as FilterState["sort"] })}
+              // 按预期使用频率排：最近活跃是默认档，最近打开垫底——它只在你点过卡片上的
+              // 编辑器/终端/目录按钮时才有数据，直接在编辑器里打开仓库不算，因此绝大多数
+              // 仓库那一栏是空的，实际能用上的人很少。语义见 bar.sortTip
               options={[
-                { label: t("sort.opened"), value: "opened" },
                 { label: t("sort.activity"), value: "activity" },
                 { label: t("sort.commit"), value: "commit" },
                 { label: t("sort.name"), value: "name" },
+                { label: t("sort.opened"), value: "opened" },
               ]}
             />
             <Select
@@ -1134,6 +1139,7 @@ export default function App({
               value={groupMode}
               style={{ width: 108 }}
               prefix={<SelIcon kind="group" />}
+              title={t("bar.groupModeTip")}
               onChange={(v) => setGroupMode(v)}
               options={[
                 { label: t("group.folder"), value: "folder" },
@@ -1147,6 +1153,7 @@ export default function App({
                 size="small"
                 style={{ width: 118 }}
                 placeholder={t("bar.view")}
+                title={t("bar.viewTip")}
                 value={viewName ?? undefined}
                 allowClear
                 onClear={() => setViewName(null)}
