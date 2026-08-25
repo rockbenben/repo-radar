@@ -105,8 +105,32 @@ describe("workedAt：最近活跃看的是「修改」而不是「提交」", ()
     const core = await getRepoCore(repo)
     const { heavy } = await getRepoHeavy(repo, core)
     const future = new Date(Date.now() + 400 * 86_400_000).toISOString()
-    const bogus = { ...heavy, lastCommit: { ...heavy.lastCommit!, date: future } }
+    const bogus = { ...heavy, committedAt: future, lastCommit: { ...heavy.lastCommit!, date: future } }
     expect(composeStatus(repo, "id", core, bogus).lastActivity).toBeNull()
+  })
+
+  // 排序看 %cI 而不是 %aI：cherry-pick / rebase / commit --amend 会重写提交却原样保留
+  // 作者时间。按 %aI 排的话,今天把三个月前的提交摘过来的仓库会显示成陈年老仓库,
+  // 还可能落进「最久没碰的 10 个」,而热力图(用 %cI)同时把今天这一格点亮
+  it("提交那侧看的是 committer 时间，cherry-pick 过来的老提交算今天的活儿", async () => {
+    const repo = makeRepo()
+    const core = await getRepoCore(repo)
+    const { heavy } = await getRepoHeavy(repo, core)
+    const picked = {
+      ...heavy,
+      lastCommit: { ...heavy.lastCommit!, date: "2026-01-01T00:00:00Z" }, // 作者时间：一月
+      committedAt: "2026-08-25T09:00:00Z", // 提交者时间：今天摘过来的
+    }
+    expect(composeStatus(repo, "id", core, picked).lastActivity).toBe("2026-08-25T09:00:00Z")
+  })
+
+  // committedAt 缺失（旧缓存条目、或格式被干扰）时回落到 %aI，别让排序整个塌成 null
+  it("committedAt 缺失时回落到作者时间", async () => {
+    const repo = makeRepo()
+    const core = await getRepoCore(repo)
+    const { heavy } = await getRepoHeavy(repo, core)
+    const legacy = { ...heavy, committedAt: null }
+    expect(composeStatus(repo, "id", core, legacy).lastActivity).toBe(heavy.lastCommit!.date)
   })
 
   // 损坏的 date 行会让 git 把 `%aI` 占位符原样吐出来。不设防的话它单向获胜（x >= NaN 恒假），

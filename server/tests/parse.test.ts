@@ -105,14 +105,27 @@ describe("parseRemotes", () => {
 })
 
 describe("parseLastCommit", () => {
-  it("parses null-separated log output", () => {
-    const out = ["abc123", "fix: message with spaces", "Alice", "2026-07-01T10:00:00+08:00"].join("\0")
+  // 作者时间与提交者时间分开取:显示用 %aI(与 git log 默认一致),排序用 %cI。
+  // cherry-pick 到今天的老提交正是这个样子——作者时间三个月前,提交者时间就是刚才
+  it("parses null-separated log output, keeping author and committer dates apart", () => {
+    const out = ["abc123", "fix: message with spaces", "Alice", "2026-04-01T10:00:00+08:00", "2026-07-01T10:00:00+08:00"].join("\0")
     expect(parseLastCommit(out + "\n")).toEqual({
-      hash: "abc123",
-      message: "fix: message with spaces",
-      author: "Alice",
-      date: "2026-07-01T10:00:00+08:00",
+      commit: {
+        hash: "abc123",
+        message: "fix: message with spaces",
+        author: "Alice",
+        date: "2026-04-01T10:00:00+08:00", // %aI，卡片上显示的那个
+      },
+      committedAt: "2026-07-01T10:00:00+08:00", // %cI，「最近活跃」按它
     })
+  })
+
+  // 旧格式的输出（少了第 5 段）不能把整条 lastCommit 打成 null：显示比排序重要，
+  // 排序那侧由 composeStatus 回落到 %aI
+  it("tolerates a missing committer date", () => {
+    const out = ["abc123", "m", "Alice", "2026-07-01T10:00:00+08:00"].join("\0")
+    expect(parseLastCommit(out)?.committedAt).toBeNull()
+    expect(parseLastCommit(out)?.commit.hash).toBe("abc123")
   })
 
   it("returns null for empty output", () => {

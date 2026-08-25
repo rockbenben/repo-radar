@@ -32,8 +32,13 @@ import { JsonStore } from "./json-store"
  * v3：mergedBranches 改成只在 HEAD 是主干（main/master）时才给列表，游离 HEAD 与 feature
  * 分支上一律为空——正是上面那段说的「停在游离 HEAD 的残局」，旧条目里存着的恰恰是那份
  * 会让人删掉自己正站着的分支的列表（形状没变，值变了）。
+ *
+ * v4：新增 committedAt（%cI），「最近活跃」的提交那侧从作者时间改成提交者时间。形状与语义
+ * 一起变，两条都得升版本。不升的话旧条目的 committedAt 是 undefined，lastActivity 会一直
+ * 回落到 %aI——而受影响最深的恰恰是缓存最容易命中的那批：rebase/cherry-pick 完就没再动过
+ * 的仓库，指纹不变、heavy 一次都不重算，错值原样留着，没有上界。
  */
-const CACHE_VERSION = 3
+const CACHE_VERSION = 4
 
 interface CacheEntry {
   v: number

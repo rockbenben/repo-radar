@@ -342,10 +342,22 @@ export function parseRemotes(out: string): RemoteInfo[] {
   return [...seen].map(([name, url]) => ({ name, url }))
 }
 
-export function parseLastCommit(out: string): CommitInfo | null {
-  const [hash, message, author, date] = out.trim().split("\0")
+/**
+ * `log -1` 的两个时间**都要**，因为它们回答的是两个不同的问题：
+ * - `%aI`（作者时间）→ commit.date，卡片上显示的「最后提交」。git log 默认显示的就是它，
+ *   界面跟着 git 走。
+ * - `%cI`（提交者时间）→ committedAt，只用来算 lastActivity。rebase / cherry-pick /
+ *   `commit --amend` 会重写提交却**原样保留作者时间**：把三个月前的提交 cherry-pick 到今天，
+ *   `%aI` 仍是三个月前，于是「刚干完活」的仓库在「最近活跃」里显示成陈年老仓库，还可能落进
+ *   「最久没碰的 10 个」。热力图早就为同一个理由用 %cI 并写明了原因（stats.ts），
+ *   两块面板读同一份数据却各按一个口径，屏幕上会自相矛盾。
+ */
+export function parseLastCommit(out: string): { commit: CommitInfo; committedAt: string | null } | null {
+  const [hash, message, author, date, committedAt] = out.trim().split("\0")
   if (!hash) return null
-  return { hash, message, author, date }
+  // committedAt 可能缺失（旧格式的输出、或 %cI 被 gitconfig 干扰）：让 latestOf 回落到 %aI，
+  // 而不是让整条 lastCommit 变成 null——显示比排序重要
+  return { commit: { hash, message, author, date }, committedAt: committedAt ?? null }
 }
 
 export interface RepoDetail {
@@ -878,6 +890,10 @@ export interface RepoHeavy {
   release: { tag: string; ahead: number; tagDate: string } | null
   remotes: RemoteInfo[]
   lastCommit: CommitInfo | null
+  /** 最后一次提交的**提交者**时间（%cI）；lastCommit.date 是作者时间（%aI）。两个都要的
+   *  理由见 parseLastCommit：rebase/cherry-pick/amend 保留作者时间，只有 %cI 反映「什么时候
+   *  干的活」。只用于 lastActivity，不显示 */
+  committedAt: string | null
   mergedBranches: string[]
 }
 
@@ -940,7 +956,7 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
     degraded = true
     return fallback
   }
-  const [stashInfo, release, remotes, lastCommit, mergedRaw] = await Promise.all([
+  const [stashInfo, release, remotes, commitPair, mergedRaw] = await Promise.all([
     // stash 条数 + 最老一条的时间（list 新→旧，最老在末行）——「搁了多久」提醒用。
     // 无 stash 时 0 退出 + 空输出，所以抛出一律是真失败
     runGit(path, ["stash", "list", "--format=%cI"])
@@ -975,7 +991,9 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
     })(),
     // 无远程时 0 退出 + 空输出，所以抛出一律是真失败——这正是 H2 里那条坏缓存的入口
     runGit(path, ["remote", "-v"]).then((r) => parseRemotes(r.stdout)).catch(() => degrade([] as RemoteInfo[])),
-    runGit(path, [...NO_SHOW_SIGNATURE, ...LOG_UTF8, "log", "-1", "--format=%H%x00%s%x00%an%x00%aI"])
+    // %cI 跟着 %aI 一起要：显示用作者时间、排序用提交者时间，理由见 parseLastCommit。
+    // 同一条命令多一个字段，不多花任何进程
+    runGit(path, [...NO_SHOW_SIGNATURE, ...LOG_UTF8, "log", "-1", "--format=%H%x00%s%x00%an%x00%aI%x00%cI"])
       .then((r) => parseLastCommit(r.stdout))
       // 空仓库无 HEAD 时 git log 非零退出，那是「还没有提交」这个正确答案；有提交却读不出来才是降级
       .catch(() => (hasCommits ? degrade(null) : null)),
@@ -991,7 +1009,9 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
       stashOldest: stashInfo.oldest,
       release,
       remotes,
-      lastCommit,
+      lastCommit: commitPair?.commit ?? null,
+      // 提交者时间（%cI），只喂给 lastActivity；显示走 lastCommit.date（%aI）。见 parseLastCommit
+      committedAt: commitPair?.committedAt ?? null,
       // 可安全清理的已合并分支。**只有站在主干上时才判得准**：不带 base 的 `--merged` 判的是
       // 「已合并进 HEAD」，站在 feature 上时它会把尚未并进主干的 develop 也算进来；游离 HEAD 时
       // 更糟——parseStatus 给出 branch=null，下面那道剔除当前分支的过滤恒真，于是**你正站着的
@@ -1073,7 +1093,9 @@ export function composeStatus(path: string, id: string, core: RepoCore, heavy: R
     release: heavy.release,
     remotes: heavy.remotes,
     lastCommit: heavy.lastCommit,
-    lastActivity: latestOf(core.workedAt, heavy.lastCommit?.date ?? null),
+    // 提交那侧用 committedAt（%cI）而不是 lastCommit.date（%aI）：见 parseLastCommit。
+    // committedAt 缺失时回落到 %aI，总比没有强
+    lastActivity: latestOf(core.workedAt, heavy.committedAt ?? heavy.lastCommit?.date ?? null),
     health: [],
     githubInbox: null,
     error: null,
