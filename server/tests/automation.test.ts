@@ -32,7 +32,12 @@ function configFile(patch: Partial<Config> = {}): string {
  */
 const allPathsAlive = (): boolean => false
 
-const repo = (id: string, opts: { favorite?: boolean; date?: string; archived?: boolean } = {}): RepoStatus =>
+// date 建的是干净仓库：工作区没有未提交改动时 lastActivity 就等于最后提交时间。
+// 需要把两个口径拆开时传 activity（「一直在改、还没提交」的仓库）
+const repo = (
+  id: string,
+  opts: { favorite?: boolean; date?: string; activity?: string; archived?: boolean } = {},
+): RepoStatus =>
   ({
     id,
     path: `/r/${id}`,
@@ -40,6 +45,7 @@ const repo = (id: string, opts: { favorite?: boolean; date?: string; archived?: 
     favorite: opts.favorite ?? false,
     archived: opts.archived ?? false,
     lastCommit: opts.date ? { date: opts.date } : null,
+    lastActivity: opts.activity ?? opts.date ?? null,
   }) as unknown as RepoStatus
 
 /** 临时改写 process.platform 探测平台分叉；finally 还原，不污染其它用例。
@@ -195,7 +201,7 @@ describe("applyWatch 的上限与取舍", () => {
   //
   // 收藏是用户明确说过「这个重要」的信号。只按提交时间排的话，一个 CI 机器人的提交
   // 就能把用户天天开的仓库挤出监听名额
-  it("名额不够时收藏优先于最近提交（逐仓库策略）", async () => {
+  it("名额不够时收藏优先于最近活跃（逐仓库策略）", async () => {
     const file = configFile({ watchLimit: 2 })
     const repos = [
       repo("bot", { date: "2026-07-27T10:00:00Z" }), // 最新，但没收藏
@@ -208,7 +214,21 @@ describe("applyWatch 的上限与取舍", () => {
     expect(automation.coverage()).toEqual({ watched: 2, total: 3 })
   })
 
-  // lastCommit.date 是带各自时区偏移的 ISO（git %aI）。字符串比较会按墙钟文本排错序：
+  // 按提交时间分配名额，被挤出去的恰好是「一直在改、还没提交」的那批——而没有监听目标就
+  // 没有 onEvent、没有 refreshOne，它们的 workedAt 只能等最长 30 分钟的兜底重扫，
+  // autoScanMinutes=0 时干脆等不到。越是你在动的仓库越看不见你在动它，一个自我实现的闭环
+  it("名额按最近活跃分配，不按最近提交（逐仓库策略）", async () => {
+    const file = configFile({ watchLimit: 1 })
+    const repos = [
+      repo("committed", { date: "2026-07-01T00:00:00Z" }), // 提交最新，但之后没再动过
+      repo("working", { date: "2026-01-01T00:00:00Z", activity: "2026-08-25T09:00:00Z" }), // 改了一整天没提交
+    ]
+    const { automation, watched } = make(file, repos)
+    await withPlatform("linux", () => automation.applyWatch(true))
+    expect(watched[0]).toEqual(["working"])
+  })
+
+  // lastActivity 可能来自 mtime（`…Z`）也可能来自 git %aI（带偏移）。字符串比较会按墙钟文本排错序：
   // "2026-07-27T10:00:00+08:00"（=02:00Z）的文本大于 "2026-07-27T03:00:00Z"，但其实更早
   it("按真实时间戳排序，不被时区偏移的墙钟文本骗过（逐仓库策略）", async () => {
     const file = configFile({ watchLimit: 1 })

@@ -72,7 +72,8 @@ describe("aggregateHeatmap", () => {
 })
 
 describe("buildActivity", () => {
-  const stub = (id: string, date: string | null): RepoStatus =>
+  // activity 默认跟 date 走（干净仓库就是这样），需要区分两个口径时显式传第三个参数
+  const stub = (id: string, date: string | null, activity: string | null = date): RepoStatus =>
     ({
       id, path: id, name: id, group: "g", tags: [], favorite: false,
       archived: false, note: null, lastOpened: null, mergedBranches: [],
@@ -80,7 +81,7 @@ describe("buildActivity", () => {
       dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
       ahead: 0, behind: 0, upstream: null, stashCount: 0, remotes: [],
       lastCommit: date ? { hash: "h", message: "m", author: "a", date } : null,
-      lastActivity: date,
+      lastActivity: activity,
       health: [], githubInbox: null, stashOldest: null, release: null, error: null, scannedAt: "",
     }) as RepoStatus
   it("sorts most-recent first, null last", () => {
@@ -93,5 +94,14 @@ describe("buildActivity", () => {
     const a = stub("a", "2026-07-01T05:00:00+00:00")
     const b = stub("b", "2026-07-01T10:00:00+08:00")
     expect(buildActivity([b, a]).map((r) => r.id)).toEqual(["a", "b"]) // a 更晚，排前
+  })
+  // 这一条钉住服务端这一半：上面两条里 lastActivity 与 lastCommit 恰好相等，排序改回按
+  // 提交时间也照样绿。这里两个口径故意相反——「改了一整天没提交」正是这个改动的全部理由
+  it("ranks by lastActivity, not by the last commit", () => {
+    const committed = stub("committed", "2026-07-01T00:00:00Z")
+    const working = stub("working", "2026-01-01T00:00:00Z", "2026-08-25T09:00:00Z")
+    const out = buildActivity([committed, working])
+    expect(out.map((r) => r.id)).toEqual(["working", "committed"])
+    expect(out[0].lastCommitDate).toBe("2026-01-01T00:00:00Z") // 空仓库计数仍走提交口径
   })
 })

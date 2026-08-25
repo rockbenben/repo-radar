@@ -84,16 +84,20 @@ export const intervalMs = (minutes: number): number => Math.min(Math.max(minutes
  *  必须先解析成时间戳再比：lastCommit.date 是带各自时区偏移的 ISO（git %aI），
  *  字符串比较会按墙钟文本排错序（worklog.ts 里同一个坑有详注）——UTC 的新提交会输给
  *  +08:00 的旧提交 */
-const commitTs = (r: RepoStatus): number => {
-  const t = r.lastCommit?.date ? Date.parse(r.lastCommit.date) : Number.NaN
+const activityTs = (r: RepoStatus): number => {
+  const t = r.lastActivity ? Date.parse(r.lastActivity) : Number.NaN
   return Number.isNaN(t) ? 0 : t
 }
 
-/** 监听名额不够时的取舍顺序：收藏优先，其次按最近提交。
+/** 监听名额不够时的取舍顺序：收藏优先，其次按最近活跃。
  *  收藏是用户明确标记过「这个重要」的信号，不该输给一个刚好被人提交过的没标记仓库——
- *  只按提交时间排的话，一个 CI 机器人的提交就能把用户天天开的仓库挤出监听名额 */
+ *  只按提交时间排的话，一个 CI 机器人的提交就能把用户天天开的仓库挤出监听名额。
+ *  同理这里看 lastActivity 而不是 lastCommit：按提交排的话，被挤出名额的恰好是「一直在改、
+ *  还没提交」的那批，而它们没有监听目标就再也不会被即时刷新（Linux 逐仓库策略下没有句柄 →
+ *  没有 onEvent → 没有 refreshOne），workedAt 只能等最长 30 分钟的兜底重扫，autoScanMinutes=0
+ *  时干脆等不到。那是个自我实现的闭环：越是你在动的仓库，越看不见你在动它 */
 const byWatchPriority = (a: RepoStatus, b: RepoStatus): number =>
-  a.favorite !== b.favorite ? (a.favorite ? -1 : 1) : commitTs(b) - commitTs(a)
+  a.favorite !== b.favorite ? (a.favorite ? -1 : 1) : activityTs(b) - activityTs(a)
 
 /**
  * 本轮**真正要建立监听句柄**的仓库（入参已排除归档）。

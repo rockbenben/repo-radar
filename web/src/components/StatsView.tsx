@@ -45,13 +45,17 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
 
   const total = days.reduce((sum, d) => sum + d.count, 0)
   const activeDays = days.filter((d) => d.count > 0).length
-  // 「空仓库」按**有没有提交过**判，不按 lastActivityDate：git init 完写了两个文件的目录
-  // 工作区是有 mtime 的，拿活跃口径判会把它算成活跃仓库，而这一排读数讲的是提交
+  // 上面那排读数讲的是**提交**（热力图、活跃天数），所以「空仓库」按有没有提交过判：
+  // git init 完写了两个文件的目录工作区是有 mtime 的，拿活跃口径判会把它算成活跃仓库
   const nonEmpty = activity.filter((a) => a.lastCommitDate !== null)
   const empty = activity.length - nonEmpty.length
-  const top = nonEmpty.slice(0, 15)
+  // 下面两个榜单按**活跃**筛，与看板卡片的排序同一口径——两处的标题在 18 种语言里逐字相同
+  // （sort.activity 与 stats.recentActive）。用提交口径筛的话，一个 git init 之后改了一整天
+  // 的仓库会在卡片区排第一、却在同名的榜单里查无此人，而榜单照样凑满 15 行，看不出少了谁
+  const dated = activity.filter((a) => a.lastActivityDate !== null)
+  const top = dated.slice(0, 15)
   const topIds = new Set(top.map((a) => a.id))
-  const stale = nonEmpty
+  const stale = dated
     .filter((a) => !topIds.has(a.id))
     .slice(-10)
     .reverse()

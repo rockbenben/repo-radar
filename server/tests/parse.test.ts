@@ -73,12 +73,14 @@ describe("parseStatus", () => {
       "",
     ].join("\n")
     expect(parseStatus(out).paths).toEqual([
-      "gone.txt",
-      "renamed to.txt", // rename 取**新**路径：旧路径已经不在磁盘上，stat 不到
-      "sub dir/tracked file.txt", // 路径含空格，不能 split(" ") 取某一项
-      "con flict.txt",
-      "node_modules/", // 未跟踪目录带尾分隔符；由 worktreeTouchedAt 负责剔除，不在这里
-      "top level untracked.txt",
+      { path: "gone.txt", untracked: false },
+      { path: "renamed to.txt", untracked: false }, // rename 取**新**路径：旧路径已经不在磁盘上，stat 不到
+      { path: "sub dir/tracked file.txt", untracked: false }, // 路径含空格，不能 split(" ") 取某一项
+      { path: "con flict.txt", untracked: false },
+      // 只有 `? ` 是 untracked。worktreeTouchedAt 的目录名过滤只对它们生效——已跟踪的
+      // build/ vendor/ bin/ 里的改动是真活儿，一视同仁地滤会把那些仓库永久判成不活跃
+      { path: "node_modules/", untracked: true },
+      { path: "top level untracked.txt", untracked: true },
     ])
   })
 })

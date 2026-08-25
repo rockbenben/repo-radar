@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { statSync } from "node:fs"
+import { lstat } from "node:fs/promises"
 import { basename, join } from "node:path"
 import type { CommitInfo, DirtyCounts, RemoteInfo, RepoStatus } from "./types"
 import { mapLimit } from "./map-limit"
@@ -179,11 +179,19 @@ export interface ParsedStatus {
   /**
    * 上面那些条目对应的**工作区相对路径**，供 worktreeTouchedAt 取 mtime。仓库干净时为空数组。
    *
-   * 只列 git 认得的改动，于是「被 .gitignore 忽略的文件不算修改」是白拿的：`status` 不带
-   * `--ignored`，构建产物、.env、日志一条都不会出现在这里。想自己走目录树的话，这一条得
-   * 额外花一遍 `git check-ignore` 才能换回来。
+   * 只列 git 认得的改动，于是「写进 .gitignore 的东西不算修改」是白拿的：`status` 不带
+   * `--ignored`，被忽略的构建产物、.env、日志一条都进不来。**但仓库没有 .gitignore 时
+   * 它们只是「未跟踪」而不是「被忽略」，git 照报不误**——那一半由 untracked 标记 +
+   * worktreeTouchedAt 的目录名过滤兜，见那里。想自己走目录树的话，连前一半都得额外花
+   * 一遍 `git check-ignore` 才能换回来。
    */
-  paths: string[]
+  paths: StatusPath[]
+}
+
+export interface StatusPath {
+  path: string
+  /** `? ` 记录（git 完全不认识这个文件）。`1 `/`2 `/`u ` 都是**已跟踪**文件的改动 */
+  untracked: boolean
 }
 
 /**
@@ -214,10 +222,10 @@ export function parseStatus(out: string): ParsedStatus {
   let upstream: string | null = null
   let oid: string | null = null
   const dirty: DirtyCounts = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 }
-  const paths: string[] = []
-  const take = (line: string): void => {
+  const paths: StatusPath[] = []
+  const take = (line: string, untracked = false): void => {
     const p = entryPath(line)
-    if (p !== null) paths.push(p)
+    if (p !== null) paths.push({ path: p, untracked })
   }
   for (const line of out.split("\n")) {
     if (line.startsWith("# branch.oid ")) {
@@ -244,7 +252,7 @@ export function parseStatus(out: string): ParsedStatus {
       take(line)
     } else if (line.startsWith("? ")) {
       dirty.untracked++
-      take(line)
+      take(line, true)
     }
   }
   return { branch, ahead, behind, upstream, dirty, oid, paths }
@@ -257,6 +265,15 @@ export function parseStatus(out: string): ParsedStatus {
  * 是真实 mtime 的下界，而攒下几千条待提交改动的仓库你显然刚动过，落在哪一条上都不影响
  * 「最近活跃」的排序结论。真要精确到条数无关，得换成把 mtime 一起交给 git 输出——
  * porcelain v2 给的是 mode/hash，没有时间戳，那就是另一条路了。
+ *
+ * 它约束的是**循环次数**而不只是 stat 次数：被目录名过滤跳过的条目也照样计数。只数 stat
+ * 的话这个上界形同虚设——一个 `go mod vendor` 之后的仓库、或者 .gitattributes 里新加一行
+ * `* text=auto` 把每个文件都标成 modified 的仓库，能拿几万条路径进来全部命中 continue，
+ * 于是每轮刷新都要跑几万次 resolve + relative + 正则切分（实测 5 万条 = 248ms），而且是
+ * 同步的，卡在同时要服务 HTTP/WS 的那条事件循环上。
+ *
+ * 截断顺序是安全的那一侧：git 先给已跟踪的（`1 `/`2 `/`u `），未跟踪的（`? `）排在最后，
+ * 所以先被看到的永远是「你改了已有文件」这类最能说明问题的条目。
  */
 const TOUCHED_STAT_LIMIT = 200
 
@@ -271,27 +288,47 @@ const TOUCHED_STAT_LIMIT = 200
  * 仓库必然是冷的——正是要排序的重点。不跳的话（34677 个文件）冷缓存 3s，还会把 node_modules
  * 的 mtime 当成「刚刚很活跃」，一次 npm install 就能让全部仓库并列第一。
  *
- * 未跟踪的**目录**（`? dir/`）stat 的是目录本身：mtime 只反映直接子项的增删，改里面文件的
- * 内容不动它。少报而不是多报，兜底是 lastCommit，可接受——展开成文件就退回上一段那条路了。
+ * 三类已知的**少报**，都退回 lastCommit，可接受：
+ * - 未跟踪的**目录**（`? dir/`）取的是目录自己的 mtime，只反映直接子项的增删，改里面文件
+ *   的内容不动它。展开成文件就退回上一段那条走目录树的路了。
+ * - 子模块（`1 <XY> S... <path>`）同理取到目录，而子模块的 `.git` 是**文件**、指向树外的
+ *   gitdir，所以在里面改文件、切 HEAD 都不动这个 mtime。以子模块为主的宿主仓库因此只能
+ *   按自己那条提交线排位。
+ * - 含 `"` / `\` / 控制字符的路径，git 即便 quotePath=false 也仍然加引号转义（见
+ *   QUOTE_PATH_OFF），这里原样拿去 join 会 stat 到一个不存在的路径。Windows 上这些字符
+ *   本来就不是合法文件名，Linux/macOS 上则是罕见但合法。
  */
-export function worktreeTouchedAt(repoPath: string, paths: readonly string[]): string | null {
+export async function worktreeTouchedAt(repoPath: string, paths: readonly StatusPath[]): Promise<string | null> {
+  const targets: string[] = []
+  let seen = 0
+  for (const { path, untracked } of paths) {
+    if (++seen > TOUCHED_STAT_LIMIT) break
+    const abs = join(repoPath, path)
+    // 目录名过滤**只对未跟踪条目生效**。没写 .gitignore 的仓库里 node_modules/dist 只是
+    // 「未跟踪」而不是「被忽略」，git 照报，不滤掉的话一次构建就能把仓库顶到第一名。
+    // 但已跟踪的同名目录是另一回事：受版本控制的 build/、Go 项目提交进仓库的 vendor/、
+    // 手写的 bin/ 里改一个文件是**货真价实的活儿**（本仓库自己就跟踪着 build/installer.nsh）。
+    // 一视同仁地滤，那些仓库会一边显示「1 处未提交改动」一边沉到「三个月前」那批里，
+    // 而且不会自愈——下一轮重扫算出同一个 null。git 用记录前缀分好了两者，白拿
+    if (untracked && shouldIgnorePath(abs, [repoPath])) continue
+    targets.push(abs)
+  }
+  if (targets.length === 0) return null
+  // 异步 stat + mapLimit，不用 statSync：上限 200 条，撞上网络盘（SMB 一次 stat 1–5ms，
+  // store.ts 明确支持网络盘上的仓库）就是把整条事件循环连同 HTTP/WS 和别的仓库的 git
+  // 超时定时器一起冻住半秒到一秒。实测本地反而略快（10.5µs/条 vs 11.0µs），没有取舍
   const now = Date.now()
+  const times = await mapLimit(targets, 8, (abs) =>
+    // lstat 而不是 stat：git 跟踪的是**软链本身**，改了软链的指向就是一次真实改动，而
+    // stat 会穿过去拿目标的 mtime（陈旧的目标会把这次改动盖掉，指向已失效则直接抛
+    // ENOENT，被下面当成「文件已删除」咽掉），目标在慢速网络路径上时还会一路阻塞
+    lstat(abs).then((s) => s.mtimeMs).catch(() => 0), // 已删除的文件（`1 .D`）在磁盘上不存在，删除时间无从得知
+  )
   let newest = 0
-  let stated = 0
-  for (const rel of paths) {
-    const abs = join(repoPath, rel)
-    // 没写 .gitignore 的仓库里 node_modules/dist 是**未跟踪**而不是被忽略，照样会出现在
-    // status 里。复用监听那份同名目录表，否则这类仓库每次构建都跳到「最近活跃」第一名
-    if (shouldIgnorePath(abs, [repoPath])) continue
-    if (++stated > TOUCHED_STAT_LIMIT) break
-    try {
-      const { mtimeMs } = statSync(abs)
-      // 未来时间一律不取：解压出来的归档、跨机器同步的时钟偏差都会留下 2099 年的 mtime，
-      // 而它会把那个仓库**永久**钉在「最近活跃」第一名，界面上无从解释也无从恢复
-      if (mtimeMs > newest && mtimeMs <= now) newest = mtimeMs
-    } catch {
-      // 已删除的文件（`1 .D`）在磁盘上不存在。删除发生的时间无从得知，交给 lastCommit 兜底
-    }
+  for (const t of times) {
+    // 未来时间一律不取：解压出来的归档、跨机器同步的时钟偏差都会留下 2099 年的 mtime，
+    // 而它会把那个仓库**永久**钉在「最近活跃」第一名，界面上无从解释也无从恢复
+    if (t > newest && t <= now) newest = t
   }
   return newest === 0 ? null : new Date(newest).toISOString()
 }
@@ -856,7 +893,7 @@ export async function getRepoCore(path: string): Promise<RepoCore> {
     behind: parsed.behind,
     upstream: parsed.upstream,
     oid: parsed.oid,
-    workedAt: worktreeTouchedAt(path, parsed.paths),
+    workedAt: await worktreeTouchedAt(path, parsed.paths),
   }
 }
 
@@ -969,6 +1006,38 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
 }
 
 /**
+ * 一个 ISO 时间**能不能拿来排序**，能则给出毫秒数，不能给 NaN。两条都不是理论情况：
+ * - 解析不出来：提交对象的 date 行损坏时（git fsck 报 badDate）`--format=%aI` 会把占位符
+ *   原样吐出来，literal `%aI` 就这么流进 lastCommit.date；`+99:99` 这种越界偏移 git 收下、
+ *   `new Date()` 给 NaN。放进比较里更糟的是它**单向获胜**（`x >= NaN` 恒假），而下游
+ *   relativeTime 对 NaN 的每个分支判断都不成立，最后落到「刚刚」——一个日期坏掉的仓库
+ *   会显示成全屏最新鲜的那个。
+ * - 落在未来：时钟跑偏的构建机、`git commit --date=`、导入/恢复的仓库。它会把仓库**永久**
+ *   钉在「最近活跃」第一名，而提交时间还躲在 `.git` 指纹缓存后面——仓库不动指纹就不变，
+ *   重扫和重启都不管用。worktreeTouchedAt 对 mtime 那侧早就这么防了，两个入参不能只防一个。
+ */
+function sortableTime(s: string | null): number {
+  if (s === null) return Number.NaN
+  const t = new Date(s).getTime()
+  return Number.isNaN(t) || t > Date.now() ? Number.NaN : t
+}
+
+/**
+ * 两个 ISO 时间取晚的那个；两个都不可用则 null（排到最后，安全的那一侧）。
+ *
+ * **按绝对时间比，不能比字符串**：workedAt 由 mtime 转出，永远是 UTC（`…Z`）；
+ * lastCommit.date 是 `%aI`，带本地时区偏移（`…+08:00`）。跨这两种形式字符串比较必错——
+ * `2026-08-25T01:00:00Z` 与 `2026-08-25T09:00:00+08:00` 是**同一时刻**，逐字符比却是后者大。
+ */
+function latestOf(a: string | null, b: string | null): string | null {
+  const ta = sortableTime(a)
+  const tb = sortableTime(b)
+  if (Number.isNaN(ta)) return Number.isNaN(tb) ? null : b
+  if (Number.isNaN(tb)) return a
+  return ta >= tb ? a : b
+}
+
+/**
  * 把 core + heavy 拼成看板用的完整状态。装饰字段（tags/favorite/…）留给 RepoStore.decorate。
  *
  * displayName / description / language 在这里现算，**不进 heavy 也就不进指纹缓存**：
@@ -978,17 +1047,6 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
  * git 操作为止。代价是每仓库每轮几次 existsSync/readFileSync 加一次 readdirSync，
  * 一个进程都不 spawn——当初并进 heavy 是图结构方便，不是为了省开销。
  */
-/**
- * 两个 ISO 时间取晚的那个。**按绝对时间比，不能比字符串**：workedAt 由 mtime 转出，永远是
- * UTC（`…Z`）；lastCommit.date 是 `%aI`，带本地时区偏移（`…+08:00`）。字符串比较跨这两种
- * 形式必错——`2026-08-25T02:00:00Z` 比 `2026-08-25T09:00:00+08:00` 大，而两者是同一时刻。
- */
-function latestOf(a: string | null, b: string | null): string | null {
-  if (a === null) return b
-  if (b === null) return a
-  return new Date(a).getTime() >= new Date(b).getTime() ? a : b
-}
-
 export function composeStatus(path: string, id: string, core: RepoCore, heavy: RepoHeavy): RepoStatus {
   const meta = readRepoMeta(path, heavy.remotes)
   return {

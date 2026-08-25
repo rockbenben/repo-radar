@@ -1,7 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
-import { composeStatus, getRepoCore, getRepoHeavy, getRepoStatus, repoId } from "../src/git"
+import { composeStatus, getRepoCore, getRepoHeavy, getRepoStatus, repoId, worktreeTouchedAt } from "../src/git"
 import { cleanupFixtures, git, makeRepo, makeRepoWithUpstream } from "./fixtures"
 
 afterAll(cleanupFixtures)
@@ -55,6 +55,23 @@ describe("workedAt：最近活跃看的是「修改」而不是「提交」", ()
     expect(core.workedAt).toBeNull() // 但它不构成「我动过这个项目」
   })
 
+  // 目录名过滤只能对**未跟踪**条目生效。本仓库自己就跟踪着 build/installer.nsh，Go 项目
+  // 把 vendor/ 提交进仓库更是常规做法——一视同仁地滤，这些仓库会一边显示「1 处未提交改动」
+  // 一边永远排在「三个月前提交过」的那批下面，而且不自愈：下一轮重扫算出同一个 null
+  it("已跟踪的 build/ vendor/ bin/ 里的改动算修改", async () => {
+    const repo = makeRepo()
+    for (const dir of ["build", "vendor", "bin"]) {
+      mkdirSync(join(repo, dir), { recursive: true })
+      writeFileSync(join(repo, dir, "keep.txt"), "v1")
+    }
+    git(repo, "add", "-A")
+    git(repo, "commit", "-m", "track them")
+    writeFileSync(join(repo, "build", "keep.txt"), "v2") // 改一个受版本控制的 build/ 文件
+    const core = await getRepoCore(repo)
+    expect(core.dirty.unstaged).toBe(1)
+    expect(core.workedAt).not.toBeNull()
+  })
+
   it("被 .gitignore 忽略的文件不算修改", async () => {
     const repo = makeRepo()
     writeFileSync(join(repo, ".gitignore"), "build.log\n")
@@ -79,6 +96,50 @@ describe("workedAt：最近活跃看的是「修改」而不是「提交」", ()
     const core = await getRepoCore(repo)
     const { heavy } = await getRepoHeavy(repo, core)
     expect(composeStatus(repo, "id", core, heavy).lastActivity).toBe(heavy.lastCommit!.date)
+  })
+
+  // 未来的提交时间比未来的 mtime 更毒：它躲在 .git 指纹缓存后面，仓库不动指纹就不变，
+  // 重扫和重启都刷不掉，那个仓库会永久钉在「最近活跃」第一名
+  it("落在未来的提交时间不参与排序，也不把仓库钉在第一名", async () => {
+    const repo = makeRepo()
+    const core = await getRepoCore(repo)
+    const { heavy } = await getRepoHeavy(repo, core)
+    const future = new Date(Date.now() + 400 * 86_400_000).toISOString()
+    const bogus = { ...heavy, lastCommit: { ...heavy.lastCommit!, date: future } }
+    expect(composeStatus(repo, "id", core, bogus).lastActivity).toBeNull()
+  })
+
+  // 损坏的 date 行会让 git 把 `%aI` 占位符原样吐出来。不设防的话它单向获胜（x >= NaN 恒假），
+  // 而前端 relativeTime 对 NaN 每个分支都不成立、最后落到「刚刚」——全屏最新鲜的那个
+  it("解析不出来的提交时间被丢掉，回落到工作区 mtime", async () => {
+    const repo = makeRepo({ dirty: true })
+    const core = await getRepoCore(repo)
+    const { heavy } = await getRepoHeavy(repo, core)
+    const bogus = { ...heavy, lastCommit: { ...heavy.lastCommit!, date: "%aI" } }
+    expect(composeStatus(repo, "id", core, bogus).lastActivity).toBe(core.workedAt)
+  })
+})
+
+describe("worktreeTouchedAt", () => {
+  it("上限约束的是循环次数，不只是 stat 次数——否则被过滤掉的条目可以无限多", async () => {
+    const repo = makeRepo()
+    // 5 万条全部命中目录名过滤。只数 stat 的话计数器停在 0、break 永不发生，
+    // 每轮刷新白跑 5 万次 resolve + relative + 正则切分（实测 248ms，且当时是同步的）
+    const flood = Array.from({ length: 50_000 }, (_, i) => ({ path: `node_modules/p${i}/x.js`, untracked: true }))
+    const t = Date.now()
+    expect(await worktreeTouchedAt(repo, flood)).toBeNull()
+    expect(Date.now() - t).toBeLessThan(200)
+  })
+
+  it("软链取的是软链自己的 mtime（lstat），指向失效也不算作「文件已删除」", async () => {
+    const repo = makeRepo()
+    try {
+      symlinkSync(join(repo, "nonexistent-target.txt"), join(repo, "dangling.lnk"))
+    } catch {
+      return // Windows 上非管理员/未开开发者模式建不了软链，跳过
+    }
+    // stat 会对失效软链抛 ENOENT（被当成「文件已删除」咽掉），lstat 照样读得到软链本身
+    expect(await worktreeTouchedAt(repo, [{ path: "dangling.lnk", untracked: true }])).not.toBeNull()
   })
 })
 
