@@ -43,6 +43,12 @@ const IGNORED_DIRS = new Set([
  */
 const DEPENDENCY_DIRS = new Set(["node_modules", "vendor", "venv", ".venv", ".gradle"])
 
+// 两张表都必须全小写：shouldIgnorePath / isStructuralSignal 拿 foldCase 之后的段去查，
+// 表里混进一个大写条目就是永远查不中，而且没有任何报错
+for (const d of [...IGNORED_DIRS, ...DEPENDENCY_DIRS]) {
+  if (d !== d.toLowerCase()) throw new Error(`忽略目录表必须全小写：${d}`)
+}
+
 /** 「没有 excludes」的默认值。共用一个冻结实例，免得每次调用都新建一个 Set */
 const EMPTY_SET: ReadonlySet<string> = new Set<string>()
 
@@ -70,7 +76,9 @@ function segmentsBelowRoot(p: string, roots: readonly string[]): string[] {
  * 忽略掉——同样是「静默不刷新」，比噪音严重得多。roots 为空时退化成整条路径匹配。
  */
 export function shouldIgnorePath(p: string, roots: readonly string[] = []): boolean {
-  return segmentsBelowRoot(p, roots).some((seg) => IGNORED_DIRS.has(seg))
+  // foldCase 而不是裸 has：Windows 上 MSBuild / Visual Studio / CMake 产出的是 Build\ Obj  // Bin\ Dist\，逐字节比一条都拦不住——而这正是本应用的主平台。跟着文件系统的大小写敏感性
+  // 走（win32 折叠、其余不折），Linux 上一个真叫 Build/ 的源码目录因此仍然照常监听
+  return segmentsBelowRoot(p, roots).some((seg) => IGNORED_DIRS.has(foldCase(seg)))
 }
 
 /** 路径的比较键：Windows 大小写不敏感，且同一目录可能以不同大小写/分隔符风格回报。

@@ -60,7 +60,7 @@ const repo = (over: Partial<RepoStatus>): RepoStatus => ({
   displayName: null, description: null, language: null, archived: false, note: null, lastOpened: null,
   mergedBranches: [], dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
   ahead: 0, behind: 0, upstream: null, stashCount: 0, stashOldest: null, release: null,
-  remotes: [{ name: "origin", url: "https://github.com/u/demo.git" }], lastCommit: null, lastActivity: null,
+  remotes: [{ name: "origin", url: "https://github.com/u/demo.git" }], lastCommit: null, committedAt: null, lastActivity: null,
   health: [], githubInbox: null, error: null, scannedAt: "2026-01-01T00:00:00Z",
   ...over,
 })

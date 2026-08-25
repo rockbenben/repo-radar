@@ -1,7 +1,7 @@
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
-import { composeStatus, getRepoCore, getRepoHeavy, getRepoStatus, repoId, worktreeTouchedAt } from "../src/git"
+import { composeStatus, getRepoCore, getRepoHeavy, getRepoStatus, parseStatus, repoId, TOUCHED_STAT_LIMIT, worktreeTouchedAt } from "../src/git"
 import { cleanupFixtures, git, makeRepo, makeRepoWithUpstream } from "./fixtures"
 
 afterAll(cleanupFixtures)
@@ -144,26 +144,94 @@ describe("workedAt：最近活跃看的是「修改」而不是「提交」", ()
   })
 })
 
-describe("worktreeTouchedAt", () => {
-  it("上限约束的是循环次数，不只是 stat 次数——否则被过滤掉的条目可以无限多", async () => {
-    const repo = makeRepo()
-    // 5 万条全部命中目录名过滤。只数 stat 的话计数器停在 0、break 永不发生，
-    // 每轮刷新白跑 5 万次 resolve + relative + 正则切分（实测 248ms，且当时是同步的）
-    const flood = Array.from({ length: 50_000 }, (_, i) => ({ path: `node_modules/p${i}/x.js`, untracked: true }))
-    const t = Date.now()
-    expect(await worktreeTouchedAt(repo, flood)).toBeNull()
-    expect(Date.now() - t).toBeLessThan(200)
+describe("上限与截断", () => {
+  // 上限必须挡在 parseStatus 里。只在消费方 break 的话，数组照样先被完整建出来——
+  // 5 万条记录 = 5 万个对象、实测 43ms 同步耗时，压在服务 HTTP/WS 的那条事件循环上
+  it("parseStatus 收集的路径数有上界，dirty 计数不受影响", () => {
+    const lines = ["# branch.oid abc", "# branch.head main"]
+    for (let i = 0; i < 500; i++) lines.push(`1 .M N... 100644 100644 100644 aaa bbb f${i}.txt`)
+    const p = parseStatus(lines.join("\n"))
+    expect(p.dirty.unstaged).toBe(500) // 计数照实算，一条不少
+    expect(p.paths.length).toBe(200) // 收集有上界
   })
 
-  it("软链取的是软链自己的 mtime（lstat），指向失效也不算作「文件已删除」", async () => {
+  // 名额被删除项吃光的话，「删了 250 个文件又改了一个」的仓库——屏幕上待办最多的那个——
+  // workedAt 反而是 null。git 按路径序输出，src/ 排在 zzz.md 前面，删除项必然先到
+  it("已删除的条目不占名额，后面真实改动的文件仍然算数", () => {
+    const lines = ["# branch.oid abc", "# branch.head main"]
+    for (let i = 0; i < 250; i++) lines.push(`1 .D N... 100644 100644 000000 aaa bbb src/gone${i}.txt`)
+    lines.push("1 .M N... 100644 100644 100644 aaa bbb zzz.md")
+    const p = parseStatus(lines.join("\n"))
+    expect(p.dirty.unstaged).toBe(251)
+    expect(p.paths.map((e) => e.path)).toEqual(["zzz.md"]) // 250 条删除全部剔除
+  })
+
+  // 上界挡在 parseStatus 里，所以喂给 worktreeTouchedAt 的数组长度天然受限。这一条钉住
+  // 那个契约本身，免得以后有人把上界挪回消费方又留下一个「先建 5 万个对象」的洞
+  it(`TOUCHED_STAT_LIMIT = ${TOUCHED_STAT_LIMIT}，且由 parseStatus 负责`, () => {
+    const lines = ["# branch.head main"]
+    for (let i = 0; i < TOUCHED_STAT_LIMIT * 2; i++) lines.push(`? f${i}.txt`)
+    expect(parseStatus(lines.join("\n")).paths.length).toBe(TOUCHED_STAT_LIMIT)
+  })
+})
+
+describe("目录名过滤只认「整个未跟踪目录」这一种形状", () => {
+  // 这是筛选的判据本身。用 untracked 当判据的话两个方向都会错：`git add -A` 之后
+  // node_modules 从 `? ` 变成 `1 A.`（untracked=false）就绕过了过滤；而已跟踪的 build/ 里
+  // **新建**一个文件仍报 `? build/new.nsh`（untracked=true）会被误杀——于是「改 build/ 里
+  // 已有的文件算活儿、在旁边新建一个不算」，一条自相矛盾的规则
+  it("`? node_modules/`（整目录折叠）被滤掉", async () => {
+    const repo = makeRepo()
+    mkdirSync(join(repo, "node_modules"), { recursive: true })
+    writeFileSync(join(repo, "node_modules", "dep.js"), "x")
+    expect(await worktreeTouchedAt(repo, [{ path: "node_modules/", dirEntry: true }])).toBeNull()
+  })
+
+  it("同名目录里的**文件**记录照常算数", async () => {
+    const repo = makeRepo()
+    mkdirSync(join(repo, "build"), { recursive: true })
+    writeFileSync(join(repo, "build", "new.nsh"), "x")
+    // 已跟踪的 build/ 里新加一个文件，git 报的是 `? build/new.nsh` 这条**文件**记录
+    expect(await worktreeTouchedAt(repo, [{ path: "build/new.nsh", dirEntry: false }])).not.toBeNull()
+  })
+
+  it("`git add -A` 之后暂存的 node_modules 仍然算数（判据是形状，不是跟踪状态）", async () => {
+    const repo = makeRepo()
+    mkdirSync(join(repo, "node_modules"), { recursive: true })
+    writeFileSync(join(repo, "node_modules", "dep.js"), "x")
+    git(repo, "add", "-A")
+    const core = await getRepoCore(repo)
+    // 你亲手 `git add` 了这些文件，那是一次明确的动作，工作区里也确实躺着 250 个待提交项。
+    // 这里如实反映，不去猜「他其实不想要」——猜错的代价是仓库永远排不上来
+    expect(core.dirty.staged).toBe(1)
+    expect(core.workedAt).not.toBeNull()
+  })
+})
+
+describe("worktreeTouchedAt", () => {
+  it("软链取的是软链自己的 mtime（lstat），指向失效也不算作「文件已删除」", async (ctx) => {
     const repo = makeRepo()
     try {
       symlinkSync(join(repo, "nonexistent-target.txt"), join(repo, "dangling.lnk"))
     } catch {
-      return // Windows 上非管理员/未开开发者模式建不了软链，跳过
+      // Windows 上非管理员且没开开发者模式时建不了软链。必须显式 skip——直接 return 的话
+      // vitest 报的是**通过**，于是这条守卫在本项目的主发布平台上零覆盖，而且看不出来
+      ctx.skip()
+      return
     }
     // stat 会对失效软链抛 ENOENT（被当成「文件已删除」咽掉），lstat 照样读得到软链本身
-    expect(await worktreeTouchedAt(repo, [{ path: "dangling.lnk", untracked: true }])).not.toBeNull()
+    expect(await worktreeTouchedAt(repo, [{ path: "dangling.lnk", dirEntry: false }])).not.toBeNull()
+  })
+
+  // 未来时间要留容差：mtimeMs 是浮点而 Date.now() 是整毫秒，刚写完就 stat 有 177/200 次
+  // mtimeMs > Date.now()；容器/虚拟机时钟快几秒也是常态。但 2099 年的归档时间戳照杀
+  it("刚写完的文件算数（浮点 mtime 不被当成未来），2099 年的不算", async () => {
+    const repo = makeRepo()
+    const f = join(repo, "just-written.txt")
+    writeFileSync(f, "x")
+    expect(await worktreeTouchedAt(repo, [{ path: "just-written.txt", dirEntry: false }])).not.toBeNull()
+    utimesSync(f, new Date(), new Date("2099-01-01T00:00:00Z"))
+    expect(await worktreeTouchedAt(repo, [{ path: "just-written.txt", dirEntry: false }])).toBeNull()
   })
 })
 

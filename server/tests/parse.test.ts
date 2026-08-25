@@ -73,15 +73,32 @@ describe("parseStatus", () => {
       "",
     ].join("\n")
     expect(parseStatus(out).paths).toEqual([
-      { path: "gone.txt", untracked: false },
-      { path: "renamed to.txt", untracked: false }, // rename 取**新**路径：旧路径已经不在磁盘上，stat 不到
-      { path: "sub dir/tracked file.txt", untracked: false }, // 路径含空格，不能 split(" ") 取某一项
-      { path: "con flict.txt", untracked: false },
-      // 只有 `? ` 是 untracked。worktreeTouchedAt 的目录名过滤只对它们生效——已跟踪的
-      // build/ vendor/ bin/ 里的改动是真活儿，一视同仁地滤会把那些仓库永久判成不活跃
-      { path: "node_modules/", untracked: true },
-      { path: "top level untracked.txt", untracked: true },
+      // gone.txt（`1 .D`）不在：已删除的文件 lstat 必然失败、贡献不了时间戳，收进来只会
+      // 白占 TOUCHED_STAT_LIMIT 的名额。删 250 个文件又改一个的仓库正栽在这上面
+      { path: "renamed to.txt", dirEntry: false }, // rename 取**新**路径：旧路径已经不在磁盘上
+      { path: "sub dir/tracked file.txt", dirEntry: false }, // 路径含空格，不能 split(" ") 取某一项
+      { path: "con flict.txt", dirEntry: false },
+      // dirEntry = git 把**整个未跟踪目录**折叠成了一条记录（路径以分隔符结尾）。
+      // 目录名过滤只认这一种形状，理由见 StatusPath.dirEntry
+      { path: "node_modules/", dirEntry: true },
+      { path: "top level untracked.txt", dirEntry: false },
     ])
+  })
+
+  // 删除态从 XY 判，两个方向都要认：`.D`（工作区删了）与 `D.`（暂存了删除）
+  it("skips deleted entries in both staged and unstaged form", () => {
+    const out = [
+      "# branch.head main",
+      "1 .D N... 100644 100644 000000 aaa bbb worktree-deleted.txt",
+      "1 D. N... 100644 000000 000000 aaa bbb staged-deleted.txt",
+      "1 .M N... 100644 100644 100644 aaa bbb alive.txt",
+      "",
+    ].join("\n")
+    const p = parseStatus(out)
+    // 计数与收集是两件独立的事：删除照样是未提交改动，卡片上的数字一个都不能少
+    expect(p.dirty.unstaged).toBe(2) // .D 的删除 + .M 的修改
+    expect(p.dirty.staged).toBe(1) // D. 的暂存删除
+    expect(p.paths.map((e) => e.path)).toEqual(["alive.txt"]) // 但只有它 lstat 得到
   })
 })
 

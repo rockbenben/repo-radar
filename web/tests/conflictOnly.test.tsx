@@ -20,7 +20,7 @@ const stub = (dirty: DirtyCounts): RepoStatus => ({
   id: "r1", path: "D:\\repos\\demo", name: "demo", group: "", tags: [], favorite: false, branch: "main",
   displayName: null, description: null, language: null, archived: false, note: null, lastOpened: null,
   mergedBranches: [], dirty, ahead: 0, behind: 0, upstream: null, stashCount: 0, stashOldest: null, release: null,
-  remotes: [], lastCommit: null, lastActivity: null, health: [], githubInbox: null, error: null, scannedAt: "",
+  remotes: [], lastCommit: null, committedAt: null, lastActivity: null, health: [], githubInbox: null, error: null, scannedAt: "",
 })
 
 function wrap(node: ReactNode) {

@@ -80,10 +80,10 @@ export interface Automation {
  *  只在 minutes > 0（功能开着）时调用，所以下限取 1 分钟不会把「关」变成「开」 */
 export const intervalMs = (minutes: number): number => Math.min(Math.max(minutes, 1), MAX_INTERVAL_MINUTES) * 60_000
 
-/** 最近提交的时间戳（毫秒）；没有提交/解析不了按最旧算。
- *  必须先解析成时间戳再比：lastCommit.date 是带各自时区偏移的 ISO（git %aI），
- *  字符串比较会按墙钟文本排错序（worklog.ts 里同一个坑有详注）——UTC 的新提交会输给
- *  +08:00 的旧提交 */
+/** 最近活跃的时间戳（毫秒）；没有/解析不了按最旧算。
+ *  必须先解析成时间戳再比：lastActivity 可能来自 mtime（`…Z`）也可能来自 git %cI（带时区
+ *  偏移），字符串比较会按墙钟文本排错序（worklog.ts 里同一个坑有详注）——UTC 的新时间会
+ *  输给 +08:00 的旧时间 */
 const activityTs = (r: RepoStatus): number => {
   const t = r.lastActivity ? Date.parse(r.lastActivity) : Number.NaN
   return Number.isNaN(t) ? 0 : t
@@ -122,8 +122,12 @@ const toWatched = (repos: readonly RepoStatus[]): WatchedRepo[] =>
 
 /** 一次重挂请求的指纹：roots + excludes + 真正要建目标的那批路径，也就是 setRoots 的三个入参。
  *  applyRepos 用它判断「这次要挂的和上次尝试过的是不是同一份」，见 lastHeal */
+// 路径**排序后**再拼：这把钥匙问的是「要挂的是不是同一批」，是个集合问题。而 pickWatched
+// 现在按 lastActivity 排序截断，随便存一个文件就能让前 200 名换一次序——不排序的话钥匙每次
+// 都不同，HEAL_RETRY_MS 那道 60 秒闸门永远不生效：inotify ENOSPC 之后每点一次 ⭐/标签
+// 都要 stop() + 重建整套句柄，而那段窗口最长 10 秒内所有仓库都收不到文件事件，事后也不补
 const mountKey = (roots: readonly string[], excludes: readonly string[], targets: readonly RepoStatus[]): string =>
-  JSON.stringify([roots, excludes, targets.map((r) => r.path)])
+  JSON.stringify([roots, excludes, [...targets.map((r) => r.path)].sort()])
 
 /**
  * 同一份挂不上的名单，隔多久才允许再挂一次（毫秒）。

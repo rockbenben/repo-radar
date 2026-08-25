@@ -27,9 +27,15 @@ const RULES: Record<string, Rule> = {
   behind: (r) => (r.behind > 0 ? { rule: "behind", severity: "info", message: `落后远程 ${r.behind} 个提交` } : null),
   "stash-left": (r) =>
     r.stashCount > 0 ? { rule: "stash-left", severity: "info", message: `有 ${r.stashCount} 条 stash 未处理` } : null,
+  // 按**提交者**时间（committedAt）而不是作者时间：18 种语言的短徽章都写着「N 天没提交」，
+  // 那是一句可证伪的话。今天把 210 天前的提交 cherry-pick 过来，作者时间仍是 210 天前——
+  // 按它算，卡片会一边排在「最近活跃」第一位、热力图一边点亮今天，一边挂着「210 天没提交」。
+  // 旧文案（「闲置 N 天」）含糊到能糊弄过去，新文案不行。老缓存条目没有 committedAt，
+  // 回落到作者时间（比不报强），见 repo-cache.ts 的 v4
   stale: (r, cfg) => {
-    if (!r.lastCommit) return null
-    const days = (Date.now() - new Date(r.lastCommit.date).getTime()) / 86400_000
+    const at = r.committedAt ?? r.lastCommit?.date ?? null
+    if (at === null) return null
+    const days = (Date.now() - new Date(at).getTime()) / 86400_000
     return days > cfg.health.staleDays
       ? { rule: "stale", severity: "info", message: `已 ${Math.floor(days)} 天没有提交` }
       : null

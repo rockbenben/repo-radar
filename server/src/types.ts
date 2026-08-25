@@ -70,6 +70,10 @@ export interface RepoStatus {
   release: { tag: string; ahead: number; tagDate: string } | null
   remotes: RemoteInfo[]
   lastCommit: CommitInfo | null
+  // 最后一次提交的**提交者**时间（%cI）；lastCommit.date 是作者时间（%aI）。
+  // stale 体检规则与 lastActivity 都按它算——rebase / cherry-pick / amend 保留作者时间，
+  // 只有 %cI 反映「提交是什么时候落下的」。null = 没有提交，或读不到
+  committedAt: string | null
   // 「最近一次动过这个仓库」的 ISO 时间：工作区未提交改动的最新 mtime 与最后提交时间取晚者。
   // null = 空仓库且工作区干净。排序/统计的「最近活跃」按它，**不按 lastCommit**——改了一天
   // 没提交的仓库按提交时间会沉到「三个月前提交过」的那批下面，而它恰恰是最该浮上来的。

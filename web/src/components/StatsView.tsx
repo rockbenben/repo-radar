@@ -50,8 +50,12 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
   const nonEmpty = activity.filter((a) => a.lastCommitDate !== null)
   const empty = activity.length - nonEmpty.length
   // 下面两个榜单按**活跃**筛，与看板卡片的排序同一口径——两处的标题在 18 种语言里逐字相同
-  // （sort.activity 与 stats.recentActive）。用提交口径筛的话，一个 git init 之后改了一整天
-  // 的仓库会在卡片区排第一、却在同名的榜单里查无此人，而榜单照样凑满 15 行，看不出少了谁
+  // （sort.activity 与 stats.recentActive）。用提交口径筛的话，两块地方对同一个仓库给出不同
+  // 答案，而榜单照样凑满 15 行，看不出少了谁。
+  //
+  // 注意举例时别拿「git init 之后还没提交、改了一整天」当典型：那种仓库整棵树是一条
+  // `? src/`，worktreeTouchedAt 只能取到目录 mtime——新建/删除文件算数，改文件内容不算
+  // （见 git.ts worktreeTouchedAt 的少报清单）。它仍然属于这里要照顾的一类，只是不完整
   const dated = activity.filter((a) => a.lastActivityDate !== null)
   const top = dated.slice(0, 15)
   const topIds = new Set(top.map((a) => a.id))

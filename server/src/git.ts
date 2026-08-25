@@ -181,17 +181,28 @@ export interface ParsedStatus {
    *
    * 只列 git 认得的改动，于是「写进 .gitignore 的东西不算修改」是白拿的：`status` 不带
    * `--ignored`，被忽略的构建产物、.env、日志一条都进不来。**但仓库没有 .gitignore 时
-   * 它们只是「未跟踪」而不是「被忽略」，git 照报不误**——那一半由 untracked 标记 +
-   * worktreeTouchedAt 的目录名过滤兜，见那里。想自己走目录树的话，连前一半都得额外花
-   * 一遍 `git check-ignore` 才能换回来。
+   * 它们只是「未跟踪」而不是「被忽略」，git 照报不误**——那一半由 dirEntry 标记兜，见
+   * worktreeTouchedAt。想自己走目录树的话，连前一半都得额外花一遍 `git check-ignore`。
+   *
+   * **已删除的条目不进这个数组**，长度上界是 TOUCHED_STAT_LIMIT——两条都在 take() 里挡掉，
+   * 而不是留给消费方，理由见那里。dirty 计数不受影响：计数与收集是两件独立的事。
    */
   paths: StatusPath[]
 }
 
 export interface StatusPath {
+  /** 工作区相对路径。整目录未跟踪时 git 折叠成 `dir/`（带尾分隔符），见 dirEntry */
   path: string
-  /** `? ` 记录（git 完全不认识这个文件）。`1 `/`2 `/`u ` 都是**已跟踪**文件的改动 */
-  untracked: boolean
+  /**
+   * 「git 把**整个未跟踪目录**折叠成了一条记录」（`? node_modules/`，路径以分隔符结尾）。
+   *
+   * 目录名过滤只认这一种形状，理由是它恰好圈住了要挡的那件事而不多沾：没写 .gitignore 的
+   * 仓库里，node_modules / dist 整个都没跟踪，git 就给一条 `? node_modules/`。而
+   * `? build/brand-new.nsh`（已跟踪的 build/ 里新加一个文件）是**文件**记录，照常算数——
+   * 按 untracked 标记来筛的话这一条会被误杀，于是「改 build/ 里已有的文件算活儿、在旁边
+   * 新建一个不算」，一条自相矛盾的规则。
+   */
+  dirEntry: boolean
 }
 
 /**
@@ -223,9 +234,22 @@ export function parseStatus(out: string): ParsedStatus {
   let oid: string | null = null
   const dirty: DirtyCounts = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 }
   const paths: StatusPath[] = []
-  const take = (line: string, untracked = false): void => {
+  /**
+   * 收集一条路径。两道闸门都在这里，**不能挪到消费方**：
+   * - 已删除的（XY 里带 D）直接不收。它们在磁盘上不存在，stat 必然失败、贡献不了任何
+   *   时间戳,却照样占满下面那个名额。git 按路径序输出,于是「删掉 src/ 下 250 个文件、
+   *   又改了一个 zzz.md」的仓库——屏幕上待办最多的那个——名额全被删除项吃光,
+   *   workedAt 反而是 null。
+   * - 名额上界。只在消费方 break 的话,数组照样先被完整建出来：实测 5 万条记录 = 5 万个
+   *   对象、43ms 同步耗时,压在同时服务 HTTP/WS 的那条事件循环上,而并发是 8 个仓库。
+   *   触发条件就是 TOUCHED_STAT_LIMIT 注释里点名的那些（.gitattributes 加 `* text=auto`、
+   *   autocrlf 翻转、go mod vendor、批量格式化）。
+   */
+  const take = (line: string, xy: string | null): void => {
+    if (paths.length >= TOUCHED_STAT_LIMIT) return
+    if (xy !== null && xy.includes("D")) return
     const p = entryPath(line)
-    if (p !== null) paths.push({ path: p, untracked })
+    if (p !== null) paths.push({ path: p, dirEntry: p.endsWith("/") || p.endsWith("\\") })
   }
   for (const line of out.split("\n")) {
     if (line.startsWith("# branch.oid ")) {
@@ -246,90 +270,115 @@ export function parseStatus(out: string): ParsedStatus {
       const xy = line.split(" ")[1] // 两字符 XY，"." 表示该侧无变化
       if (xy[0] !== ".") dirty.staged++
       if (xy[1] !== ".") dirty.unstaged++
-      take(line)
+      take(line, xy)
     } else if (line.startsWith("u ")) {
       dirty.conflicted++
-      take(line)
+      take(line, null) // 冲突中的文件一定在磁盘上（三方内容都写进去了），没有删除态
     } else if (line.startsWith("? ")) {
       dirty.untracked++
-      take(line, true)
+      take(line, null) // 未跟踪 = 存在，`? ` 记录不表示删除
     }
   }
   return { branch, ahead, behind, upstream, dirty, oid, paths }
 }
 
 /**
- * 一个仓库一轮最多 stat 多少条路径。
+ * 一条 status 记录最多收集多少条路径（见 parseStatus 的 take）。
  *
- * ponytail: 超出就截断（按 git 给的路径顺序，即字典序，**不是**按新旧）。取前 N 条的 max
- * 是真实 mtime 的下界，而攒下几千条待提交改动的仓库你显然刚动过，落在哪一条上都不影响
- * 「最近活跃」的排序结论。真要精确到条数无关，得换成把 mtime 一起交给 git 输出——
- * porcelain v2 给的是 mode/hash，没有时间戳，那就是另一条路了。
- *
- * 它约束的是**循环次数**而不只是 stat 次数：被目录名过滤跳过的条目也照样计数。只数 stat
- * 的话这个上界形同虚设——一个 `go mod vendor` 之后的仓库、或者 .gitattributes 里新加一行
- * `* text=auto` 把每个文件都标成 modified 的仓库，能拿几万条路径进来全部命中 continue，
- * 于是每轮刷新都要跑几万次 resolve + relative + 正则切分（实测 5 万条 = 248ms），而且是
- * 同步的，卡在同时要服务 HTTP/WS 的那条事件循环上。
- *
- * 截断顺序是安全的那一侧：git 先给已跟踪的（`1 `/`2 `/`u `），未跟踪的（`? `）排在最后，
- * 所以先被看到的永远是「你改了已有文件」这类最能说明问题的条目。
+ * ponytail: 超出就截断。git 按记录类型分组输出——已跟踪的（`1 `/`2 `/`u `）在前、未跟踪的
+ * （`? `）在后，组内按路径序——所以先收到的永远是「你改了已有文件」这类最能说明问题的条目。
+ * 已删除的条目在 take 里就被剔除，不占名额（它们 stat 必然失败，占了名额等于白扔）。
+ * 真要精确到条数无关，得让 git 把 mtime 一起输出，而 porcelain v2 只给 mode/hash——另一条路。
  */
-const TOUCHED_STAT_LIMIT = 200
+export const TOUCHED_STAT_LIMIT = 200
+
+/**
+ * lstat 那一批的总时限。**不设的话，一次网络盘掉线会让整块看板永久停摆**——不只是这一轮：
+ * store.doRefreshAll 的 `if (this.inFlight) return this.inFlight` 会把后续每一次重扫都挂到
+ * 这个永不 settle 的 promise 上，于是手动「重新扫描」、定时重扫、监听触发的结构重扫全部失效，
+ * 只能重启进程。runGit 早就为同一个理由带了 30s 超时并 kill 子进程；硬挂载的 NFS / 掉线的
+ * Windows 映射盘上，lstat 同样会不可中断地阻塞，这里必须有对等的兜底。
+ *
+ * 超时就当这一轮没读到（回落到提交时间），不抛错：读不到活跃时间是降级，不是故障。
+ */
+const TOUCHED_STAT_TIMEOUT_MS = 3_000
+
+/**
+ * 「未来时间」的容差。**不留容差会两头出错**，两头都实测过：
+ * - mtime 侧：`mtimeMs` 是浮点（NTFS 存 100ns 刻度），`Date.now()` truncate 到整毫秒，
+ *   刚写完就 stat 的文件有 177/200 次 mtimeMs > Date.now()。真实链路上隔着一次 ~50ms 的
+ *   git spawn，但 `now` 是在 await 之前采样的，stat 期间才落盘的文件照样被判成未来。
+ * - 提交侧：容器 / WSL2 / 虚拟机 / NAS 的时钟快几秒是常态。判成 NaN 的话 lastActivity 变
+ *   null，activityTs 把 null 当 0，那个仓库在 Linux 上直接丢掉监听名额 → 没有 onEvent →
+ *   没有 refreshOne → workedAt 再也不更新。正是 automation.ts 那段注释说这次改动要打破的
+ *   自我实现闭环，从「时钟快了」这个入口又走回去了。
+ *
+ * 5 分钟足够盖住上面两类，而解压归档 / 手写 `--date=` 留下的 2099 年时间戳照杀不误。
+ */
+const FUTURE_SLACK_MS = 5 * 60_000
+
+/** 这个时间戳能不能拿来排序：解析得出、且不在（容差之内的）未来。不能则 NaN */
+export function sortableTime(s: string | null | undefined): number {
+  if (s === null || s === undefined) return Number.NaN
+  const t = new Date(s).getTime()
+  return Number.isNaN(t) || t > Date.now() + FUTURE_SLACK_MS ? Number.NaN : t
+}
 
 /**
  * 工作区「最后一次被动过」的时间 = status 列出的那些路径里最新的 mtime。仓库干净 → null。
  *
  * 这是「最近活跃改看修改而不是提交」的全部实现，而它一个 git 进程都不额外花：路径是
- * getRepoCore 那条本来就要跑的 status 顺带给的，这里只是回到磁盘上 stat 几条（实测干净仓库
+ * getRepoCore 那条本来就要跑的 status 顺带给的，这里只是回到磁盘上 lstat 几条（实测干净仓库
  * 0 条、日常有改动的仓库个位数到几十条，相对已经付掉的 ~50ms git spawn 可以忽略）。
  *
  * 刻意**不**走目录树：本机实测，跳过依赖/构建目录也要冷缓存 750ms / 仓库，而最久没动的那批
  * 仓库必然是冷的——正是要排序的重点。不跳的话（34677 个文件）冷缓存 3s，还会把 node_modules
  * 的 mtime 当成「刚刚很活跃」，一次 npm install 就能让全部仓库并列第一。
  *
- * 三类已知的**少报**，都退回 lastCommit，可接受：
+ * 四类已知的**少报**，都退回 lastCommit，可接受：
  * - 未跟踪的**目录**（`? dir/`）取的是目录自己的 mtime，只反映直接子项的增删，改里面文件
- *   的内容不动它。展开成文件就退回上一段那条走目录树的路了。
+ *   的内容不动它。`git init` 之后还没提交、整棵树都是 `? src/` 的仓库因此只能拿到目录时间：
+ *   新建/删除文件算数，改文件内容不算。展开成文件就退回上一段那条走目录树的路了。
  * - 子模块（`1 <XY> S... <path>`）同理取到目录，而子模块的 `.git` 是**文件**、指向树外的
  *   gitdir，所以在里面改文件、切 HEAD 都不动这个 mtime。以子模块为主的宿主仓库因此只能
  *   按自己那条提交线排位。
  * - 含 `"` / `\` / 控制字符的路径，git 即便 quotePath=false 也仍然加引号转义（见
- *   QUOTE_PATH_OFF），这里原样拿去 join 会 stat 到一个不存在的路径。Windows 上这些字符
+ *   QUOTE_PATH_OFF），这里原样拿去 join 会 lstat 到一个不存在的路径。Windows 上这些字符
  *   本来就不是合法文件名，Linux/macOS 上则是罕见但合法。
+ * - 被别的进程独占锁住的文件（Windows 上构建中的 obj/、Unity 的 Library/）lstat 报
+ *   EPERM/EBUSY，与「已删除」一样按读不到处理。
  */
 export async function worktreeTouchedAt(repoPath: string, paths: readonly StatusPath[]): Promise<string | null> {
   const targets: string[] = []
-  let seen = 0
-  for (const { path, untracked } of paths) {
-    if (++seen > TOUCHED_STAT_LIMIT) break
-    const abs = join(repoPath, path)
-    // 目录名过滤**只对未跟踪条目生效**。没写 .gitignore 的仓库里 node_modules/dist 只是
-    // 「未跟踪」而不是「被忽略」，git 照报，不滤掉的话一次构建就能把仓库顶到第一名。
-    // 但已跟踪的同名目录是另一回事：受版本控制的 build/、Go 项目提交进仓库的 vendor/、
-    // 手写的 bin/ 里改一个文件是**货真价实的活儿**（本仓库自己就跟踪着 build/installer.nsh）。
-    // 一视同仁地滤，那些仓库会一边显示「1 处未提交改动」一边沉到「三个月前」那批里，
-    // 而且不会自愈——下一轮重扫算出同一个 null。git 用记录前缀分好了两者，白拿
-    if (untracked && shouldIgnorePath(abs, [repoPath])) continue
-    targets.push(abs)
+  for (const { path, dirEntry } of paths) {
+    // 只筛「整个未跟踪目录」这一种形状，理由见 StatusPath.dirEntry。
+    // 传相对路径而不是拼好的绝对路径：git 给的本来就是相对路径，shouldIgnorePath 拿绝对
+    // 路径还要 resolve 两次 + relative 一次把它还原回来，实测 9.5–12.2µs/次 vs 0.12µs，
+    // 判定结果完全相同（含 `node_modules/` 这种带尾分隔符的形式）
+    if (dirEntry && shouldIgnorePath(path)) continue
+    targets.push(join(repoPath, path))
   }
   if (targets.length === 0) return null
-  // 异步 stat + mapLimit，不用 statSync：上限 200 条，撞上网络盘（SMB 一次 stat 1–5ms，
+  // 异步 lstat + mapLimit，不用 lstatSync：上限 200 条，撞上网络盘（SMB 一次 stat 1–5ms，
   // store.ts 明确支持网络盘上的仓库）就是把整条事件循环连同 HTTP/WS 和别的仓库的 git
-  // 超时定时器一起冻住半秒到一秒。实测本地反而略快（10.5µs/条 vs 11.0µs），没有取舍
-  const now = Date.now()
-  const times = await mapLimit(targets, 8, (abs) =>
-    // lstat 而不是 stat：git 跟踪的是**软链本身**，改了软链的指向就是一次真实改动，而
-    // stat 会穿过去拿目标的 mtime（陈旧的目标会把这次改动盖掉，指向已失效则直接抛
-    // ENOENT，被下面当成「文件已删除」咽掉），目标在慢速网络路径上时还会一路阻塞
-    lstat(abs).then((s) => s.mtimeMs).catch(() => 0), // 已删除的文件（`1 .D`）在磁盘上不存在，删除时间无从得知
-  )
+  // 超时定时器一起冻住半秒到一秒。本地实测反而略快（10.5µs/条 vs 11.0µs）。
+  // 注意异步只解决「不阻塞事件循环」，解决不了「永远不返回」——那是 TOUCHED_STAT_TIMEOUT_MS
+  const cutoff = Date.now() + FUTURE_SLACK_MS
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const times = await Promise.race([
+    mapLimit(targets, 8, (abs) =>
+      // lstat 而不是 stat：git 跟踪的是**软链本身**，改了软链的指向就是一次真实改动，而
+      // stat 会穿过去拿目标的 mtime（陈旧的目标会把这次改动盖掉，指向已失效则直接抛
+      // ENOENT），目标在慢速网络路径上时还会一路阻塞
+      lstat(abs).then((st) => st.mtimeMs).catch(() => 0),
+    ),
+    new Promise<number[]>((resolve) => {
+      timer = setTimeout(() => resolve([]), TOUCHED_STAT_TIMEOUT_MS)
+    }),
+  ])
+  clearTimeout(timer)
   let newest = 0
-  for (const t of times) {
-    // 未来时间一律不取：解压出来的归档、跨机器同步的时钟偏差都会留下 2099 年的 mtime，
-    // 而它会把那个仓库**永久**钉在「最近活跃」第一名，界面上无从解释也无从恢复
-    if (t > newest && t <= now) newest = t
-  }
+  for (const t of times) if (t > newest && t <= cutoff) newest = t
   return newest === 0 ? null : new Date(newest).toISOString()
 }
 
@@ -1026,24 +1075,14 @@ export async function getRepoHeavy(path: string, core: Pick<RepoCore, "branch" |
 }
 
 /**
- * 一个 ISO 时间**能不能拿来排序**，能则给出毫秒数，不能给 NaN。两条都不是理论情况：
+ * 取晚的那个；两个都不可用则 null（排到最后，安全的那一侧）。不可用 = sortableTime 给 NaN，
+ * 两条来源都不是理论情况：
  * - 解析不出来：提交对象的 date 行损坏时（git fsck 报 badDate）`--format=%aI` 会把占位符
  *   原样吐出来，literal `%aI` 就这么流进 lastCommit.date；`+99:99` 这种越界偏移 git 收下、
  *   `new Date()` 给 NaN。放进比较里更糟的是它**单向获胜**（`x >= NaN` 恒假），而下游
  *   relativeTime 对 NaN 的每个分支判断都不成立，最后落到「刚刚」——一个日期坏掉的仓库
  *   会显示成全屏最新鲜的那个。
- * - 落在未来：时钟跑偏的构建机、`git commit --date=`、导入/恢复的仓库。它会把仓库**永久**
- *   钉在「最近活跃」第一名，而提交时间还躲在 `.git` 指纹缓存后面——仓库不动指纹就不变，
- *   重扫和重启都不管用。worktreeTouchedAt 对 mtime 那侧早就这么防了，两个入参不能只防一个。
- */
-function sortableTime(s: string | null): number {
-  if (s === null) return Number.NaN
-  const t = new Date(s).getTime()
-  return Number.isNaN(t) || t > Date.now() ? Number.NaN : t
-}
-
-/**
- * 两个 ISO 时间取晚的那个；两个都不可用则 null（排到最后，安全的那一侧）。
+ * - 落在未来：见 FUTURE_SLACK_MS。
  *
  * **按绝对时间比，不能比字符串**：workedAt 由 mtime 转出，永远是 UTC（`…Z`）；
  * lastCommit.date 是 `%aI`，带本地时区偏移（`…+08:00`）。跨这两种形式字符串比较必错——
@@ -1093,9 +1132,14 @@ export function composeStatus(path: string, id: string, core: RepoCore, heavy: R
     release: heavy.release,
     remotes: heavy.remotes,
     lastCommit: heavy.lastCommit,
+    committedAt: heavy.committedAt,
     // 提交那侧用 committedAt（%cI）而不是 lastCommit.date（%aI）：见 parseLastCommit。
-    // committedAt 缺失时回落到 %aI，总比没有强
-    lastActivity: latestOf(core.workedAt, heavy.committedAt ?? heavy.lastCommit?.date ?? null),
+    // **必须嵌套 latestOf，不能写成 `committedAt ?? lastCommit.date`**：`??` 只在 null 时
+    // 才回落，而「非 null」远不等于「可用」。实测 `GIT_COMMITTER_DATE="@0" git commit` 给出
+    // %aI=今天、%cI=1970-01-01——两个都非 null 且都解析得出，`??` 取 1970，于是今天刚提交过
+    // 的仓库排到全列表最后、进「最久没碰的 10 个」、在 Linux 上丢掉监听名额。
+    // 可复现路径：SOURCE_DATE_EPOCH 的可重现构建、svn2git / git-p4 / hg-git 导入
+    lastActivity: latestOf(core.workedAt, latestOf(heavy.committedAt, heavy.lastCommit?.date ?? null)),
     health: [],
     githubInbox: null,
     error: null,

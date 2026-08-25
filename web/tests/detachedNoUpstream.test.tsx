@@ -23,7 +23,7 @@ const base: RepoStatus = {
   mergedBranches: [], dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 0 },
   ahead: -1, behind: -1, upstream: null, stashCount: 0, stashOldest: null, release: null,
   remotes: [{ name: "origin", url: "https://example.invalid/x.git" }],
-  lastCommit: null, lastActivity: null, health: [], githubInbox: null, error: null, scannedAt: "",
+  lastCommit: null, committedAt: null, lastActivity: null, health: [], githubInbox: null, error: null, scannedAt: "",
 }
 
 function wrap(node: ReactNode) {

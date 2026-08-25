@@ -20,7 +20,11 @@ export interface FilterState {
  */
 const ts = (s: string | null | undefined): number => {
   const t = s == null ? NaN : new Date(s).getTime()
-  return Number.isNaN(t) ? 0 : t
+  // 未来时间同样归 0（排最后）。服务端只清洗了 lastActivity，lastCommit.date（%aI）是原样
+  // 发下来的——时钟跑偏的构建机、手写 `--date=` 都能留下 2099 年的提交，而它会把那个仓库
+  // 永久钉在「最近提交」第一名（卡片上写着「73 年后」），且躲在 .git 指纹缓存后面刷不掉。
+  // 容差与服务端 FUTURE_SLACK_MS 一致：容器/虚拟机的时钟快几秒是常态，不能一刀切
+  return Number.isNaN(t) || t > Date.now() + 5 * 60_000 ? 0 : t
 }
 
 export function applyFilter(repos: RepoStatus[], f: FilterState): RepoStatus[] {

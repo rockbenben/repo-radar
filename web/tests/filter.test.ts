@@ -26,6 +26,7 @@ function repo(over: Partial<RepoStatus>): RepoStatus {
     stashCount: 0,
     remotes: [],
     lastCommit: null,
+    committedAt: null,
     lastActivity: null,
     health: [],
     githubInbox: null,

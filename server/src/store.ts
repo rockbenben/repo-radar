@@ -277,6 +277,7 @@ export class RepoStore {
         release: null,
         remotes: [],
         lastCommit: null,
+        committedAt: null,
         lastActivity: null,
         health: [],
         githubInbox: null,

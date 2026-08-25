@@ -70,6 +70,7 @@ const repo = (inbox: GithubInbox): RepoStatus => ({
   ahead: 0, behind: 0, upstream: null, stashCount: 0, stashOldest: null, release: null,
   remotes: [{ name: "origin", url: "https://github.com/u/demo.git" }],
   lastCommit: { hash: "aaa", message: "m", author: "a", date: "2026-01-01T00:00:00Z" },
+  committedAt: "2026-01-01T00:00:00Z",
   lastActivity: "2026-01-01T00:00:00Z",
   health: [], githubInbox: inbox, error: null, scannedAt: "2026-01-01T00:00:00Z",
 })

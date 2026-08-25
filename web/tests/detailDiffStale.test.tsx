@@ -21,7 +21,7 @@ const stub = (dirty: DirtyCounts, hash = "aaa"): RepoStatus => ({
   id: "r1", path: "D:\\repos\\demo", name: "demo", group: "", tags: [], favorite: false, branch: "main",
   displayName: null, description: null, language: null, archived: false, note: null, lastOpened: null,
   mergedBranches: [], dirty, ahead: 0, behind: 0, upstream: null, stashCount: 0, stashOldest: null, release: null,
-  remotes: [], lastCommit: { hash, message: "m", author: "a", date: "2026-01-01T00:00:00Z" }, lastActivity: "2026-01-01T00:00:00Z",
+  remotes: [], lastCommit: { hash, message: "m", author: "a", date: "2026-01-01T00:00:00Z" }, committedAt: "2026-01-01T00:00:00Z", lastActivity: "2026-01-01T00:00:00Z",
   health: [], githubInbox: null, error: null, scannedAt: "",
 })
 const dirty = (unstaged: number): DirtyCounts => ({ staged: 0, unstaged, untracked: 0, conflicted: 0 })
