@@ -1097,7 +1097,7 @@ export default function App({
             <Select
               size="small"
               value={filter.group ?? ""}
-              style={{ width: 124 }}
+              className="rr-bar-sel"
               prefix={<SelIcon kind="filter" />}
               title={t("bar.groupFilterTip")}
               onChange={(v) => setFilter({ ...filter, group: v || null })}
@@ -1120,7 +1120,7 @@ export default function App({
             <Select
               size="small"
               value={filter.sort}
-              style={{ width: 124 }}
+              className="rr-bar-sel"
               prefix={<SelIcon kind="sort" />}
               title={t("bar.sortTip")}
               onChange={(v) => setFilter({ ...filter, sort: v as FilterState["sort"] })}
@@ -1137,7 +1137,7 @@ export default function App({
             <Select
               size="small"
               value={groupMode}
-              style={{ width: 108 }}
+              className="rr-bar-sel narrow"
               prefix={<SelIcon kind="group" />}
               title={t("bar.groupModeTip")}
               onChange={(v) => setGroupMode(v)}
@@ -1177,6 +1177,11 @@ export default function App({
             </Button>
           </>
         )}
+        {/* 读数 + 三个全局动作合成一个**整体**。此前它们是 .rr-bar 里的散兵，而 .rr-bar 是
+            单个 flex-wrap 行：900px（应用支持的最小宽度）下换行断在这一组中间，实测第三行
+            只剩「重新扫描/＋新增/⚙」共 157px，右侧空掉 742px。合成一组后整块一起换行，
+            右对齐仍然成立，也不再受各语言按钮宽度差异的摆布 */}
+        <div className="rr-bar-status">
         <span className="rr-readout">
           <span className="cell">
             <span className="v">{counts.fleet}</span>
@@ -1257,6 +1262,7 @@ export default function App({
         >
           ⚙
         </Button>
+        </div>
         {/* 设置从顶栏弹层改成弹窗：这里没有一项是高频操作（语言、告警灯、四个后台开关、扫描目录
             全是「设一次」），弹层「不打断上下文」的优势换不到东西；而它长到 644px 之后，在最小
             窗口（600 高）下已经必须滚动，且里面还有个按钮再开一层弹窗。

@@ -194,7 +194,11 @@ body{margin:0;background:radial-gradient(130% 90% at 100% -10%, rgba(var(--sig-r
 .rr-settings .rr-ver{margin-left:auto;font-family:var(--mono);font-size:12px;font-weight:650;font-variant-numeric:tabular-nums;
   color:var(--hi);border:1px solid var(--line);border-radius:6px;background:var(--readout-bg);padding:2px 9px;line-height:1.2}
 /* 读数簇：看板的核心仪表——大数字在上、微标签在下，装进仪表框；告警数（红/琥珀）只在 >0 时点亮 */
-.rr-readout{margin-left:auto;display:flex;align-items:stretch;font-family:var(--mono);
+/* 状态读数 + 全局动作：作为一个整体靠右，整块一起换行。margin-left:auto 从 .rr-readout
+   移到这里——留在读数上的话，换行后那一行只有读数被推到右边，动作按钮另起一行贴左，
+   900px 下实测就是「第三行 157px 内容、右侧空 742px」那个洞 */
+.rr-bar-status{margin-left:auto;display:flex;align-items:center;gap:8px}
+.rr-readout{display:flex;align-items:stretch;font-family:var(--mono);
   border:1px solid var(--line);border-radius:7px;background:var(--readout-bg);overflow:hidden}
 .rr-readout .cell{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
   padding:4px 15px;border-left:1px solid var(--line);line-height:1}
@@ -207,6 +211,25 @@ body{margin:0;background:radial-gradient(130% 90% at 100% -10%, rgba(var(--sig-r
 /* SCAN 格：值是词不是数（「3 分钟前」），字号收小、去等宽数字对齐即可；
    仍用 --hi 保持「这是读数值」的语义，与告警色留出明确区别 */
 .rr-readout .v.time{font-size:11px;font-weight:600;letter-spacing:0;font-variant-numeric:normal;white-space:nowrap}
+
+/* 窄窗口下把读数收紧一档。应用支持的最小宽度是 900（window-state.ts 的 MIN_WIDTH），
+   而顶栏是单个 flex-wrap 行：读数按 15px 内边距时，状态组 500px 挤不进第二行，整块被推到
+   第三行，顶栏吃掉 122px（600 高视口的 20%），第一张仓库卡片要到 75% 处才出现。
+   收到 8px 省下约 60px，实测刚好让状态组回到第二行。只减内边距、不删任何一格读数——
+   把 SCAN 或 CLEAN 藏起来才是真的丢信息，而这里丢的只是空白 */
+/* 三个看板下拉的宽度从内联样式挪到这里，好让窄窗口能收一档。宽度写死在 JSX 里时
+   媒体查询压根盖不住它（内联样式优先级更高），而这三个加起来 356px 正是第二行装不下
+   状态组的主因。收窄后标签可能被省略号截断——顶栏五个下拉都已经有 tooltip，
+   而且这是 900px 下的取舍：省一整行比完整显示「最近活跃」四个字更值 */
+.rr-bar-sel{width:124px}
+.rr-bar-sel.narrow{width:108px}
+
+@media (max-width:1200px){
+  .rr-readout .cell{padding:4px 8px}
+  .rr-bar{padding-left:14px;padding-right:14px;gap:8px}
+  .rr-bar-sel{width:106px}
+  .rr-bar-sel.narrow{width:96px}
+}
 
 /* ---- attention filter bar ---- */
 .rr-annun{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:11px 22px;border-bottom:1px solid var(--line);background:var(--panel2)}
@@ -383,7 +406,12 @@ button.rr-c-lang:hover{border-color:var(--edge-h);color:var(--text)}
 @media (hover:none){.rr-c-rail .seg{color:var(--dim)}}
 
 /* checkable filter tag (attention lamps use antd CheckableTag fallback styling if needed) */
-.rr-empty{grid-column:1/-1;text-align:center;color:var(--dim);font-size:13px;padding:64px 0}
+/* 空态在**剩余空间里居中**，而不是顶在距顶 64px 处。日志页实测：文字落在 108px，
+   下方 602px 全空（859 视口），像是内容没加载完而不是「这里本来就没有东西」。
+   min-height 用 vh 而不是 100%：这个类同时用在卡片网格里（grid-column:1/-1），
+   父高由内容决定，百分比在那里算不出东西 */
+.rr-empty{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:12px;text-align:center;color:var(--dim);font-size:13px;padding:48px 16px;min-height:min(46vh,340px)}
 .rr-empty.err{color:var(--crit)}
 
 /* ---- detail drawer ---- */
