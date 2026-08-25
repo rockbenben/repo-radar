@@ -438,7 +438,7 @@ export function DetailPanel({
           </button>
           {slot && <span className="rr-c-slot">{slot}</span>}
           <span className="mono nm">{titleName}</span>
-          {repo.archived && <span className="rr-d-arch">{t("card.excluded")}</span>}
+          {repo.archived && <span className="rr-d-arch">{t("card.archived")}</span>}
         </span>
       }
     >
@@ -693,9 +693,9 @@ export function DetailPanel({
               ghost={repo.archived}
               className="rr-d-pushend"
               onClick={() => onPatchMeta(repo.id, { archived: !repo.archived })}
-              title={t("detail.excludeTip")}
+              title={t("detail.archiveTip")}
             >
-              {repo.archived ? t("detail.unexclude") : t("detail.exclude")}
+              {repo.archived ? t("detail.unarchive") : t("detail.archive")}
             </Button>
           </div>
         </section>

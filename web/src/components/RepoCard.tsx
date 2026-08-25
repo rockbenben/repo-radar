@@ -171,7 +171,7 @@ export const RepoCard = memo(function RepoCard({
           </span>
         )}
         <span className="rr-c-name">{baseName}</span>
-        {repo.archived && <span className="rr-c-arch">{t("card.excluded")}</span>}
+        {repo.archived && <span className="rr-c-arch">{t("card.archived")}</span>}
         {repo.language && (
           <button
             className="rr-c-lang"

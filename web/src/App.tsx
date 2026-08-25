@@ -1607,9 +1607,9 @@ export default function App({
                     return !v
                   })
                 }
-                title={t("annun.excludedViewTip")}
+                title={t("annun.archivedViewTip")}
               >
-                {showArchived ? t("annun.backToRepos") : t("annun.excludedView", { n: counts.archived })}
+                {showArchived ? t("annun.backToRepos") : t("annun.archivedView", { n: counts.archived })}
               </Button>
             )}
           </span>
@@ -1794,7 +1794,7 @@ export default function App({
               visible.length === 0 && (
                 <div className="rr-empty">
                   {showArchived
-                    ? t("empty.noExcluded")
+                    ? t("empty.noArchived")
                     : attention || filter.query || filter.group || (filter.tags?.length ?? 0) > 0
                       ? t("empty.noMatch")
                       : t("empty.noRepos")}
