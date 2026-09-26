@@ -1,4 +1,4 @@
-import { theme, type ThemeConfig } from "antd"
+import { type ThemeConfig, theme } from "antd"
 
 // 方向 01「仪表舱」——把仪表舱配色映射到 antd 6 的 CSS variables 主题。
 // antd 组件只做交互与可达性底座；视觉层这里定 token，卡片等签名元素再用 CSS 变量深度定制。
