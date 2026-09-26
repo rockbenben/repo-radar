@@ -4,8 +4,8 @@ export type ConfigFileResolution =
   | { ok: true; configFile: string; isDefault: boolean }
   | { ok: false; error: string }
 
-/** 默认配置文件位置。单独导出，供 isDefault 判定与调用方共用同一份事实 */
-export function defaultConfigFile(home: string): string {
+/** 默认配置文件位置，isDefault 判定与调用方共用同一份事实 */
+function defaultConfigFile(home: string): string {
   return join(home, ".repo-radar", "config.json")
 }
 

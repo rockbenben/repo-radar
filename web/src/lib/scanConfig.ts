@@ -2,7 +2,7 @@
 // 不必挂载组件、也不必造五个 fetch 端点就能把三种失败态和字段缺失都测到。
 
 export type OpenCommands = { editor: string; terminal: string; explorer: string }
-export type ScanConfig = { roots: string[]; excludes: string[]; open: OpenCommands }
+type ScanConfig = { roots: string[]; excludes: string[]; open: OpenCommands }
 export type ScanConfigLoadResult = ({ status: "loaded" } & ScanConfig) | { status: "error"; message: string }
 
 // 数组里的元素**不过滤**：弹窗显示什么，保存时就整份写回哪些（mergeConfig 对 roots/excludes

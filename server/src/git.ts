@@ -115,7 +115,7 @@ export function splitLines(r: GitResult): string[] {
  * 其次最后一条非 hint:/Aborting 行——切分支被脏工作区挡住时 stderr 末行是没用的「Aborting」，
  * 真原因在首行 error: 里。都没有才退回末行 / String(err)。
  */
-export function gitErrMessage(err: unknown): string {
+function gitErrMessage(err: unknown): string {
   // 无 stderr（超时/spawn 失败）时用 err.message——String(err) 会把 "GitError:" 类名前缀带进用户可见文案
   if (!(err instanceof GitError) || err.stderr.trim() === "") return err instanceof Error ? err.message : String(err)
   const lines = err.stderr.trim().split("\n").map((s) => s.trim()).filter((s) => s !== "")
@@ -508,7 +508,7 @@ export async function createBranch(path: string, name: string): Promise<{ ok: bo
 }
 
 // code 与 CommitCode 同一约定：稳定枚举供前端按语言组装文案，message 保留中文原文作日志/回退
-export type DiscardCode = "discarded" | "outOfScope" | "unbornHead" | "error"
+type DiscardCode = "discarded" | "outOfScope" | "unbornHead" | "error"
 export interface DiscardResult {
   ok: boolean
   code: DiscardCode
@@ -875,7 +875,7 @@ export async function getRepoDiff(path: string): Promise<RepoDiff> {
 const COMMIT_TIMEOUT_MS = 120_000
 
 // code 是稳定枚举，供前端按语言组装文案；message 保留中文原文作日志/回退；detail 是 git 原始报错
-export type CommitCode = "committed" | "committedPushed" | "pushFailed" | "commitError"
+type CommitCode = "committed" | "committedPushed" | "pushFailed" | "commitError"
 export interface CommitResult {
   ok: boolean
   code: CommitCode

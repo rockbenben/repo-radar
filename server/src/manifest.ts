@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { RepoStatus } from "./types"
 
-export interface ManifestEntry {
+interface ManifestEntry {
   name: string
   path: string
   remote: string | null // origin（或首个）远程 URL

@@ -31,14 +31,14 @@ function runGh(cwd: string, args: string[]): Promise<GhResult> {
   })
 }
 
-export interface GithubPr {
+interface GithubPr {
   number: number
   title: string
   url: string
   isDraft: boolean
 }
 
-export interface GithubRun {
+interface GithubRun {
   status: string // queued | in_progress | completed
   conclusion: string | null // success | failure | cancelled | ...（未完成时 null）
   workflowName: string

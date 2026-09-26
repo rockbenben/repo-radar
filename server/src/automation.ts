@@ -6,7 +6,7 @@ import type { RepoWatcher, WatchedRepo } from "./watcher"
 
 /** 监听覆盖情况：total 是本该监听的仓库数（非归档），watched 取自 watcher 的真实覆盖数——
  *  不是配置算出来的应然值。某个 root 挂不上时，coverage 必须如实变低，不能装作全覆盖 */
-export interface WatchCoverage {
+interface WatchCoverage {
   watched: number
   total: number
 }

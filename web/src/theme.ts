@@ -7,7 +7,7 @@ import { theme, type ThemeConfig } from "antd"
 // 必须手动保持一致。它们服务不同的消费方：CSS 变量给我们自己的签名类，这里的常量给 antd
 // 生成组件色（colorPrimary/colorLink…）。曾经只改了 CSS 一侧，结果卡片上的分支名用了新色、
 // 仓库链接还是旧色——同一张卡两个蓝，正是这份重复造成的。改任何一个色，两处都要改。
-export const INSTRUMENT = {
+const INSTRUMENT = {
   ink: "#0b0e15",
   panel: "#111726",
   panel2: "#0d1220",
@@ -26,7 +26,7 @@ export const INSTRUMENT = {
 
 // 浅色「日照舱」——同一套仪表语汇，换成明亮的舱内照明：底白、深墨字，
 // 强调色加深提饱和以在白底上保持对比（深色版的亮绿/亮蓝在白底会发虚）。
-export const INSTRUMENT_LIGHT = {
+const INSTRUMENT_LIGHT = {
   ink: "#eceff4",
   panel: "#ffffff",
   panel2: "#f4f6fa",
@@ -45,8 +45,7 @@ export const INSTRUMENT_LIGHT = {
 
 export type ThemeMode = "dark" | "light"
 
-export const MONO = `ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace`
-export const SANS = `system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`
+const SANS = `system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`
 
 export function radarTheme(mode: ThemeMode): ThemeConfig {
   const p = mode === "dark" ? INSTRUMENT : INSTRUMENT_LIGHT

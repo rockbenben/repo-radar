@@ -1,7 +1,7 @@
 import { LOG_UTF8, NO_SHOW_SIGNATURE, runGit, splitLines } from "./git"
 import { mapLimit } from "./map-limit"
 
-export interface WorklogCommit {
+interface WorklogCommit {
   repoId: string
   repoName: string
   hash: string // 短 hash（7 位）
