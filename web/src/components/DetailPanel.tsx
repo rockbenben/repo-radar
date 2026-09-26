@@ -429,7 +429,7 @@ export function DetailPanel({
       styles={{ body: { padding: 0, maxHeight: "76vh", overflowY: "auto" } }}
       title={
         <span className="rr-d-title">
-          <button
+          <button type="button"
             className={`rr-d-fav${repo.favorite ? " on" : ""}`}
             onClick={() => onPatchMeta(repo.id, { favorite: !repo.favorite })}
             title={repo.favorite ? t("card.favOff") : t("card.favOn")}
@@ -506,16 +506,16 @@ export function DetailPanel({
         {/* 操作台：把卡片上最常用的动作（在编辑器/终端/资源管理器打开、复制路径、远程）搬进弹窗，与卡片底部导轨呼应 */}
         <div className="rr-d-console">
           <div className="rr-d-rail">
-            <button className="seg" onClick={() => onOpen(repo.id, "editor")} title={t("card.openWith", { label: t("card.editor") })}>
+            <button type="button" className="seg" onClick={() => onOpen(repo.id, "editor")} title={t("card.openWith", { label: t("card.editor") })}>
               {t("card.editor")}
             </button>
-            <button className="seg" onClick={() => onOpen(repo.id, "terminal")} title={t("card.openWith", { label: t("card.terminal") })}>
+            <button type="button" className="seg" onClick={() => onOpen(repo.id, "terminal")} title={t("card.openWith", { label: t("card.terminal") })}>
               {t("card.terminal")}
             </button>
-            <button className="seg" onClick={() => onOpen(repo.id, "explorer")} title={t("card.openWith", { label: t("card.dir") })}>
+            <button type="button" className="seg" onClick={() => onOpen(repo.id, "explorer")} title={t("card.openWith", { label: t("card.dir") })}>
               {t("card.dir")}
             </button>
-            <button className="seg" onClick={() => onCopyPath(repo.path)} title={t("card.copyTip", { path: repo.path })}>
+            <button type="button" className="seg" onClick={() => onCopyPath(repo.path)} title={t("card.copyTip", { path: repo.path })}>
               {t("card.copy")}
             </button>
           </div>
@@ -605,9 +605,8 @@ export function DetailPanel({
                     </div>
                   ) : (
                     diff.diff.split("\n").map((ln, i) => (
-                      <div
-                        key={i}
-                        className="ln"
+                      // biome-ignore lint/suspicious/noArrayIndexKey: diff 整份重取时全量重渲染，行序即身份
+                      <div key={i} className="ln"
                         style={{
                           color:
                             ln.startsWith("+") && !ln.startsWith("+++")
@@ -736,7 +735,7 @@ export function DetailPanel({
           <section>
             <h3>Stash</h3>
             {detail.stashes.map((s, i) => (
-              // key 带序号：极罕见地两条 stash 撞同一 sha 时也不会 React key 重复
+              // biome-ignore lint/suspicious/noArrayIndexKey: 序号兜底——极罕见地两条 stash 撞同一 sha 时 key 也不会重复
               <div key={`${s.sha}:${i}`} className="rr-d-stash">
                 <div className="line">
                   {s.branch && <span className="br">{t("stash.onBranch", { branch: s.branch })}</span>}

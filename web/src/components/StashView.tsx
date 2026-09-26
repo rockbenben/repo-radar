@@ -148,8 +148,8 @@ export function StashView({ onLog }: { onLog: (ok: boolean, text: string) => voi
           </div>
           {g.stashes.map((s, i) => {
             const k = skey(g.id, s.sha)
-            // key 带上序号：极罕见地两条 stash 撞同一 sha 时也不会 React key 重复（它们字节相同，勾选联动可接受）
             return (
+              // biome-ignore lint/suspicious/noArrayIndexKey: 序号兜底——两条 stash 撞同一 sha 时 key 也不会重复（它们字节相同，勾选联动可接受）
               <div className={`rr-stash-row${sel.has(k) ? " on" : ""}`} key={`${s.sha}:${i}`}>
                 <Checkbox checked={sel.has(k)} onChange={() => toggle(k)} />
                 <span className="age">{s.date ? relativeTime(s.date) : ""}</span>

@@ -131,10 +131,10 @@ export function ScanConfigEditor({
     <div className="rr-roots-list">
       {items.length === 0 && empty !== null && <div className="rr-roots-none">{empty}</div>}
       {items.map((p, i) => (
-        // eslint-disable-next-line react/no-array-index-key
+        // biome-ignore lint/suspicious/noArrayIndexKey: 路径可重复出现且整单编辑，行位即身份
         <div key={i} className="row">
           <span className="p">{p}</span>
-          <button className="rm" title={t("common.remove")} onClick={() => remove(i)}>
+          <button type="button" className="rm" title={t("common.remove")} onClick={() => remove(i)}>
             ✕
           </button>
         </div>

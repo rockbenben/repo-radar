@@ -10,7 +10,7 @@ import { StashView } from "./components/StashView"
 import { StatsView } from "./components/StatsView"
 import { WorklogView } from "./components/WorklogView"
 import { LANGS, useI18n } from "./i18n"
-import { resolveEmptyArea, type HasRootsState } from "./lib/emptyState"
+import { type HasRootsState, resolveEmptyArea } from "./lib/emptyState"
 import { applyFilter, type FilterState } from "./lib/filter"
 import { visibleLamps } from "./lib/lamps"
 import { daysSince, isGithubUrl } from "./lib/meta"
@@ -459,7 +459,7 @@ export default function App({
       void syncScanStatus()
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [syncScanStatus, applyScanResult])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1515,18 +1515,17 @@ export default function App({
             const n = attn[a.key]
             if (n === 0 || !lamps.includes(a.key)) return null
             return (
-              <span
+              <button
                 key={a.key}
+                type="button"
                 className={`rr-lamp ${a.sev}${attention === a.key ? " on" : ""}`}
                 onClick={() => setAttention(attention === a.key ? null : a.key)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === "Enter" && setAttention(attention === a.key ? null : a.key)}
+                aria-pressed={attention === a.key}
               >
                 <span className="dotm" />
                 <span className="lb">{t(a.labelKey)}</span>
                 <span className="ct">{n}</span>
-              </span>
+              </button>
             )
           })}
           <span style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1732,7 +1731,7 @@ export default function App({
               <div className="rr-faves">
                 <span className="hd">★ {t("fav.pinned")}</span>
                 {faves.map((r) => (
-                  <button key={r.id} className="rr-fave" title={t("fav.openTip", { name: r.name })} onClick={() => openRepo(r.id, "editor")}>
+                  <button type="button" key={r.id} className="rr-fave" title={t("fav.openTip", { name: r.name })} onClick={() => openRepo(r.id, "editor")}>
                     <span className="dot" style={{ background: favSev(r) }} />
                     {r.name}
                   </button>
@@ -1838,13 +1837,14 @@ export default function App({
         onCancel={() => setNewOpen(false)}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
-          <label className="mono" style={{ fontSize: 12, color: "var(--dim)" }}>
+          <label className="mono" style={{ fontSize: 12, color: "var(--dim)" }} htmlFor="rr-new-parent">
             {t("new.parentLabel")}
-            <Input value={newParent} onChange={(e) => setNewParent(e.target.value)} placeholder="D:\\...\\Projects\\365" />
+            <Input id="rr-new-parent" value={newParent} onChange={(e) => setNewParent(e.target.value)} placeholder="D:\\...\\Projects\\365" />
           </label>
-          <label className="mono" style={{ fontSize: 12, color: "var(--dim)" }}>
+          <label className="mono" style={{ fontSize: 12, color: "var(--dim)" }} htmlFor="rr-new-name">
             {t("new.nameLabel")}
             <Input
+              id="rr-new-name"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onPressEnter={submitNewProject}
@@ -1867,18 +1867,19 @@ export default function App({
         onCancel={() => setCloneOpen(false)}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
-          <label className="mono" style={{ fontSize: 12, color: "var(--dim)" }}>
+          <label className="mono" style={{ fontSize: 12, color: "var(--dim)" }} htmlFor="rr-clone-url">
             {t("clone.urlLabel")}
             <Input
+              id="rr-clone-url"
               value={cloneUrl}
               onChange={(e) => setCloneUrl(e.target.value)}
               placeholder="https://github.com/user/repo.git"
               autoFocus
             />
           </label>
-          <label className="mono" style={{ fontSize: 12, color: "var(--dim)" }}>
+          <label className="mono" style={{ fontSize: 12, color: "var(--dim)" }} htmlFor="rr-clone-parent">
             {t("clone.parentLabel")}
-            <Input value={cloneParent} onChange={(e) => setCloneParent(e.target.value)} placeholder="D:\\...\\Projects" />
+            <Input id="rr-clone-parent" value={cloneParent} onChange={(e) => setCloneParent(e.target.value)} placeholder="D:\\...\\Projects" />
           </label>
           <span className="mono" style={{ fontSize: 11, color: "var(--dim2)" }}>
             {t("clone.hint")}

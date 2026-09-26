@@ -1,5 +1,5 @@
-import { Button, Card, Checkbox, Popover } from "antd"
-import { memo, type MouseEvent, useEffect, useState } from "react"
+import { Card, Checkbox, Popover } from "antd"
+import { type MouseEvent, memo, useEffect, useState } from "react"
 import { gt, useT } from "../i18n"
 import { isSideBranch, langColor, remoteWeb } from "../lib/meta"
 import { relativeTime } from "../lib/time"
@@ -55,7 +55,7 @@ function CommitPreview({ repoId, changes }: { repoId: string; changes: number })
       title={<span className="mono" style={{ fontSize: 12 }}>{t("preview.title")}</span>}
       content={content}
     >
-      <button className="rr-c-peek" onClick={(e) => e.stopPropagation()} title={t("preview.title")}>
+      <button type="button" className="rr-c-peek" onClick={(e) => e.stopPropagation()} title={t("preview.title")}>
         ⋯
       </button>
     </Popover>
@@ -155,7 +155,7 @@ export const RepoCard = memo(function RepoCard({
         <span className="rr-c-check">
           <Checkbox checked={selected} onClick={stop} onChange={() => onToggleSelect(repo.id)} />
         </span>
-        <button
+        <button type="button"
           className={`rr-c-fav${repo.favorite ? " on" : ""}`}
           onClick={(e) => {
             stop(e)
@@ -173,7 +173,7 @@ export const RepoCard = memo(function RepoCard({
         <span className="rr-c-name">{baseName}</span>
         {repo.archived && <span className="rr-c-arch">{t("card.archived")}</span>}
         {repo.language && (
-          <button
+          <button type="button"
             className="rr-c-lang"
             title={t("card.filterLang", { lang: repo.language })}
             onClick={(e) => {
@@ -277,7 +277,7 @@ export const RepoCard = memo(function RepoCard({
         {repo.tags.length > 0 && (
           <span className="tags">
             {repo.tags.map((tag) => (
-              <button
+              <button type="button"
                 key={tag}
                 title={t("card.filterTag", { tag })}
                 onClick={(e) => {
@@ -295,11 +295,11 @@ export const RepoCard = memo(function RepoCard({
       <div className="rr-c-acts" onClick={stop}>
         <div className="rr-c-rail">
           {OPENS.map((o) => (
-            <button key={o.key} className="seg" title={t("card.openWith", { label: t(o.tk) })} onClick={() => onOpen(repo.id, o.key)}>
+            <button type="button" key={o.key} className="seg" title={t("card.openWith", { label: t(o.tk) })} onClick={() => onOpen(repo.id, o.key)}>
               {t(o.tk)}
             </button>
           ))}
-          <button className="seg" title={t("card.copyTip", { path: repo.path })} onClick={() => onCopyPath(repo.path)}>
+          <button type="button" className="seg" title={t("card.copyTip", { path: repo.path })} onClick={() => onCopyPath(repo.path)}>
             {t("card.copy")}
           </button>
         </div>

@@ -36,7 +36,7 @@ export function CockpitHero({
   const [refreshing, setRefreshing] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const mounted = useRef(true)
-  useEffect(() => () => void (mounted.current = false), [])
+  useEffect(() => () => { mounted.current = false }, [])
 
   const refresh = async () => {
     setRefreshing(true)
@@ -86,7 +86,7 @@ export function CockpitHero({
   if (!open) {
     return (
       <div className="rr-home closed">
-        <button className="rr-home-toggle" onClick={onToggle} title={t("cockpit.show")}>
+        <button type="button" className="rr-home-toggle" onClick={onToggle} title={t("cockpit.show")}>
           ▸
         </button>
         <div className="rr-home-slim">
@@ -107,7 +107,7 @@ export function CockpitHero({
 
   return (
     <div className="rr-home">
-      <button className="rr-home-toggle" onClick={onToggle} title={t("cockpit.hide")}>
+      <button type="button" className="rr-home-toggle" onClick={onToggle} title={t("cockpit.hide")}>
         ▾
       </button>
       <div className="rr-home-head">
@@ -115,7 +115,7 @@ export function CockpitHero({
           {t("home.needsYou")}
           {queue.length > 0 ? ` · ${queue.length}` : ""}
         </h4>
-        <button className={`rr-home-refresh${refreshing ? " on" : ""}`} onClick={refresh} disabled={refreshing} title={t("home.refresh")}>
+        <button type="button" className={`rr-home-refresh${refreshing ? " on" : ""}`} onClick={refresh} disabled={refreshing} title={t("home.refresh")}>
           ↻
         </button>
       </div>
@@ -126,7 +126,7 @@ export function CockpitHero({
           <div className="queue-list">
             {shown.map((q) => (
               <div key={q.r.id} className={`item ${q.sev}`}>
-                <button className="open" onClick={() => act(q)} title={itemTitle(q)}>
+                <button type="button" className="open" onClick={() => act(q)} title={itemTitle(q)}>
                   <span className="dot" />
                   <span className="nm mono">{label(q.r)}</span>
                   <span className="why">{reason(q)}</span>
@@ -134,18 +134,18 @@ export function CockpitHero({
                   {q.kind === "release" && q.age >= 2 && <span className="aged">{t("queue.sinceTag", { d: q.age })}</span>}
                 </button>
                 {q.kind === "unpushed" && (
-                  <button className="quick" onClick={() => onPush(q.r.id)} title={t("queue.push")}>
+                  <button type="button" className="quick" onClick={() => onPush(q.r.id)} title={t("queue.push")}>
                     ↑
                   </button>
                 )}
-                <button className="done" onClick={() => onDismiss(q)} title={t("queue.done")}>
+                <button type="button" className="done" onClick={() => onDismiss(q)} title={t("queue.done")}>
                   ✓
                 </button>
               </div>
             ))}
           </div>
           {queue.length > 10 && (
-            <button className="rr-home-more" onClick={() => setExpanded((v) => !v)}>
+            <button type="button" className="rr-home-more" onClick={() => setExpanded((v) => !v)}>
               {expanded ? t("home.showLess") : t("home.showAll", { n: queue.length })}
             </button>
           )}
