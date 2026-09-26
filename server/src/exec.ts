@@ -30,10 +30,13 @@ export function runCommand(cwd: string, command: string, timeoutMs = EXEC_TIMEOU
       settled = true
       clearTimeout(timer)
       if (graceTimer !== null) clearTimeout(graceTimer)
-      const trimmed = (out.length > OUTPUT_CAP ? "…" + out.slice(-OUTPUT_CAP) : out).trim()
-      if (!killed) return resolve({ ok: code === 0, code, output: trimmed })
+      const trimmed = (out.length > OUTPUT_CAP ? `…${out.slice(-OUTPUT_CAP)}` : out).trim()
       const note = orphaned ? `[超时 ${timeoutMs}ms 已终止；子进程可能仍在后台运行]` : `[超时 ${timeoutMs}ms 已终止]`
-      resolve({ ok: false, code, output: `${trimmed}\n${note}`.trim() })
+      if (killed) {
+        resolve({ ok: false, code, output: `${trimmed}\n${note}`.trim() })
+      } else {
+        resolve({ ok: code === 0, code, output: trimmed })
+      }
     }
 
     const timer = setTimeout(() => {

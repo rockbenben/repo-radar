@@ -1,7 +1,7 @@
-import { serve } from "@hono/node-server"
-import { createNodeWebSocket } from "@hono/node-ws"
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { serve } from "@hono/node-server"
+import { createNodeWebSocket } from "@hono/node-ws"
 import { createAutomation } from "./automation"
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config"
 import { DescCache } from "./desc-cache"
@@ -735,13 +735,16 @@ export function createBackend(options: BackendOptions): Backend {
     },
     stop() {
       // 幂等：托盘退出、窗口关闭、系统关机可能同时到达
-      return (stopped ??= (async () => {
-        if (intervalTimer) clearInterval(intervalTimer)
-        structure.stop() // 退出后不该再排一轮重扫
-        automation.stop()
-        inboxEmitter.clear() // 之前只增不减：同一进程反复 start/stop 会让订阅者无界增长，退出后也不该再收晚到的回调
-        await shutdown("backend.stop")
-      })())
+      if (stopped === null) {
+        stopped = (async () => {
+          if (intervalTimer) clearInterval(intervalTimer)
+          structure.stop() // 退出后不该再排一轮重扫
+          automation.stop()
+          inboxEmitter.clear() // 之前只增不减：同一进程反复 start/stop 会让订阅者无界增长，退出后也不该再收晚到的回调
+          await shutdown("backend.stop")
+        })()
+      }
+      return stopped
     },
   }
 }

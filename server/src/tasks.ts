@@ -1,7 +1,7 @@
 import { runCommand } from "./exec"
-import { runRepoAction, type RepoAction } from "./git"
-import { trackPending, withRepoLock } from "./queue"
+import { type RepoAction, runRepoAction } from "./git"
 import { mapLimit } from "./map-limit"
+import { trackPending, withRepoLock } from "./queue"
 import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
 
 export interface BatchDeps {

@@ -12,6 +12,7 @@ export function Heatmap({ days, weeks = 53, legend = false, fill = false }: { da
     <div className="rr-heat-wrap">
       <div className={`rr-heat${fill ? " fill" : ""}`}>
         {grid.map((col, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: 固定月列网格不重排，列序即身份
           <div key={i} className="col">
             {col.map((cell) => (
               <div

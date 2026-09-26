@@ -174,7 +174,7 @@ export function parseInboxResponse(
     const repo = j.data?.repository
     // pullRequests/issues 字段本身缺失 = 该字段被 GraphQL 错误置空（限流/权限），不是「0 个」——
     // 返回 null 保留旧缓存，绝不把查询失败落盘成 prs:0/issues:0 的假干净（会顶掉之前正确的数据，还带新 TTL）
-    if (!repo || !repo.pullRequests || !repo.issues) return null
+    if (!repo?.pullRequests || !repo.issues) return null
     // gh 非零退出 = 响应带 errors。此时 defaultBranchRef 为 null 分不清「真没有默认分支」还是「该字段被错误置空」——
     // 宁可整份丢弃保留旧缓存，别把 CI 红洗成 ciFailed:false 落盘（正常响应里它为 null 是合法的空仓库情形）
     if (code !== 0 && !repo.defaultBranchRef) return null

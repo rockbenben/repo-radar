@@ -1,14 +1,14 @@
-import { app } from "electron"
 import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { TRAY_FLAG } from "./cli"
+import { app } from "electron"
 import {
+  type AutostartMigrationState,
   loadMigrationState,
   saveMigrationState,
-  type AutostartMigrationState,
 } from "./autostart-state"
+import { TRAY_FLAG } from "./cli"
 
 /**
  * 开机自启。**OS 即事实源**：不落 config，读取时直接问系统，开关永远与现实一致。

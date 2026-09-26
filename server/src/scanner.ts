@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs"
+import { type Dirent, existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
 /** 从每个 root 往下最多走几层找仓库。导出给 watch-filter：递归监听下「一条未归属的事件
@@ -15,7 +15,7 @@ export function scan(roots: string[], excludes: string[]): string[] {
       found.push(dir)
       return // 不深入仓库内部，忽略嵌套仓库
     }
-    let entries
+    let entries: Dirent[]
     try {
       entries = readdirSync(dir, { withFileTypes: true })
     } catch {

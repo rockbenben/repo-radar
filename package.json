@@ -22,12 +22,15 @@
   "scripts": {
     "dev": "concurrently -n web,app \"npm run dev -w web\" \"npm run dev -w desktop\"",
     "test": "npm run typecheck -w server && npm run typecheck -w web && npm run typecheck -w desktop && npm test -w server && npm test -w web && npm test -w desktop",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
     "build": "npm run build -w web && npm run build -w desktop",
     "start": "npm run build && npm run start -w desktop",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
     "concurrently": "^10.0.3",
     "electron-builder": "^26.15.3"
   }

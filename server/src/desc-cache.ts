@@ -27,7 +27,7 @@ export class DescCache {
    */
   get(id: string, url: string | undefined): string | null {
     const e = this.store.get(id)
-    if (!e || !e.description) return null
+    if (!e?.description) return null
     if (url === undefined || e.url !== url) return null
     return e.description
   }

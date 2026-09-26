@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs"
+import { type Dirent, readdirSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 
 /**
@@ -66,7 +66,7 @@ function refDirProbes(gitDir: string): string[] | null {
     const dir = stack.pop()!
     dirs.push(dir)
     if (dirs.length > REF_DIR_LIMIT) return null
-    let entries
+    let entries: Dirent[]
     try {
       entries = readdirSync(dir, { withFileTypes: true })
     } catch {

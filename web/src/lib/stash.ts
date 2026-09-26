@@ -1,4 +1,4 @@
-import { App as AntdApp } from "antd"
+import type { App as AntdApp } from "antd"
 import type { TFunc } from "../i18n"
 
 const JSON_HEADERS = { "content-type": "application/json" }

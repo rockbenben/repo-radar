@@ -1,7 +1,7 @@
-import { watch as chokidarWatch, type FSWatcher } from "chokidar"
-import { existsSync, realpathSync, watch as fsWatch, type FSWatcher as NodeWatcher } from "node:fs"
+import { existsSync, watch as fsWatch, type FSWatcher as NodeWatcher, realpathSync } from "node:fs"
 import { isAbsolute, join, relative, sep } from "node:path"
-import { isUnderPath, pathKey, shouldIgnorePath, watchTargetLost, watcherErrorIsNoise } from "./watch-filter"
+import { watch as chokidarWatch, type FSWatcher } from "chokidar"
+import { isUnderPath, pathKey, shouldIgnorePath, watcherErrorIsNoise, watchTargetLost } from "./watch-filter"
 
 export interface WatchedRepo {
   id: string

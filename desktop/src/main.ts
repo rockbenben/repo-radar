@@ -1,22 +1,22 @@
-import { app, BrowserWindow, dialog, Menu, session, shell, Tray } from "electron"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { app, type BrowserWindow, dialog, Menu, session, shell, type Tray } from "electron"
+// 版本号唯一事实源是根 package.json（release CI 校验 git tag 与其 version 一致）；
+// desktop/package.json 故意不带 version 字段，不能用 app.getVersion()——未打包时它会
+// 回退成 Electron 自身的版本号（如 43.1.1）。esbuild 打包时会把这个 JSON import 内联进产物。
+import { version as appVersion } from "../../package.json"
 import { createBackend } from "../../server/src/backend"
 import { loadConfig } from "../../server/src/config"
 import { FileLog, installConsoleTee, logFilePath } from "../../server/src/logger"
 import { DEFAULT_PORT, PORT, PORT_IS_EXPLICIT } from "../../server/src/port"
 import { autostartExtra, cleanupLegacyEntries } from "./autostart"
+import { startsHidden } from "./cli"
 import { resolveConfigFile } from "./config-path"
 import { showNotification, summarizeInboxChanges } from "./notify"
 import { createQuit } from "./quit"
 import { createTray } from "./tray"
-import { createWindow, saveWindowState } from "./window"
-import { startsHidden } from "./cli"
 import { loadLastVersion, saveLastVersion } from "./version-state"
-// 版本号唯一事实源是根 package.json（release CI 校验 git tag 与其 version 一致）；
-// desktop/package.json 故意不带 version 字段，不能用 app.getVersion()——未打包时它会
-// 回退成 Electron 自身的版本号（如 43.1.1）。esbuild 打包时会把这个 JSON import 内联进产物。
-import { version as appVersion } from "../../package.json"
+import { createWindow, saveWindowState } from "./window"
 
 // REPO_RADAR_CONFIG 设置时必须是绝对路径。上一轮曾经用 path.resolve() 把相对路径按 cwd
 // 兜底展开，理由是下面 app.setPath("userData", ...) 对相对路径会直接抛 `Path must be

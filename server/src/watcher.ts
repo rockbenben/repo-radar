@@ -1,6 +1,6 @@
 import { resolve } from "node:path"
 import { isStructuralSignal, isUnderPath, pathKey, shouldIgnorePath, watcherErrorIsNoise } from "./watch-filter"
-import { defaultStrategy, type WatchStrategy, type WatchedRepo } from "./watch-strategy"
+import { defaultStrategy, type WatchedRepo, type WatchStrategy } from "./watch-strategy"
 
 export { isExcludedPath, isStructuralPath, isStructuralSignal, shouldIgnorePath, watcherErrorIsNoise } from "./watch-filter"
 export type { WatchedRepo }

@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, type ReactNode } from "react"
+import { createContext, type ReactNode, useContext, useMemo } from "react"
 
 // 18 种语言，与 ChatGPT-Shortcut 一致；code 用于 <html lang> 与 locale 文件名
 export const LANGS = [

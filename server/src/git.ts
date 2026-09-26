@@ -2,10 +2,10 @@ import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import { lstat } from "node:fs/promises"
 import { basename, join } from "node:path"
-import type { CommitInfo, DirtyCounts, RemoteInfo, RepoStatus } from "./types"
+import { detectLanguage } from "./lang"
 import { mapLimit } from "./map-limit"
 import { readRepoMeta } from "./meta"
-import { detectLanguage } from "./lang"
+import type { CommitInfo, DirtyCounts, RemoteInfo, RepoStatus } from "./types"
 import { shouldIgnorePath } from "./watch-filter"
 
 export interface GitResult {
@@ -125,7 +125,7 @@ function gitErrMessage(err: unknown): string {
 
 /** git 命令成功时的「最后一行有意义输出」：合并 stdout+stderr、去空行、取末行。 */
 function lastLine(r: GitResult): string {
-  const out = (r.stdout + "\n" + r.stderr).trim().split("\n").filter((l) => l !== "")
+  const out = (`${r.stdout}\n${r.stderr}`).trim().split("\n").filter((l) => l !== "")
   return out[out.length - 1] ?? ""
 }
 
@@ -247,7 +247,7 @@ export function parseStatus(out: string): ParsedStatus {
    */
   const take = (line: string, xy: string | null): void => {
     if (paths.length >= TOUCHED_STAT_LIMIT) return
-    if (xy !== null && xy.includes("D")) return
+    if (xy?.includes("D")) return
     const p = entryPath(line)
     if (p !== null) paths.push({ path: p, dirEntry: p.endsWith("/") || p.endsWith("\\") })
   }
@@ -717,7 +717,7 @@ export async function stashDiff(path: string, sha: string): Promise<string | nul
   // 直接把 sha（stash 是提交，git stash show 接受提交号）传给 stash show，不经 stash@{n}——
   // 免疫并发 drop/pop 造成的重新编号：即便这条刚被丢弃，提交对象仍在，diff 仍是它本身。失败则抛 →500。
   let diff = (await stashShow(path, ["-p"], sha)).stdout
-  if (diff.length > DIFF_MAX_CHARS) diff = diff.slice(0, DIFF_MAX_CHARS) + "\n… (diff 已截断)"
+  if (diff.length > DIFF_MAX_CHARS) diff = `${diff.slice(0, DIFF_MAX_CHARS)}\n… (diff 已截断)`
   return diff
 }
 
@@ -813,7 +813,7 @@ const ACTION_TIMEOUT_MS = 120_000
 export async function runRepoAction(path: string, action: RepoAction): Promise<{ ok: boolean; message: string }> {
   try {
     const r = await runGit(path, ACTION_ARGS[action], ACTION_TIMEOUT_MS)
-    const lines = (r.stdout + "\n" + r.stderr).trim().split("\n")
+    const lines = (`${r.stdout}\n${r.stderr}`).trim().split("\n")
     return { ok: true, message: lines[lines.length - 1] ?? "" }
   } catch (err) {
     if (err instanceof GitError && err.stderr.trim() !== "") {
@@ -864,7 +864,7 @@ export async function getRepoDiff(path: string): Promise<RepoDiff> {
     }
   }
   if (diff.length > DIFF_MAX_CHARS) {
-    diff = diff.slice(0, DIFF_MAX_CHARS) + "\n… (diff 已截断)"
+    diff = `${diff.slice(0, DIFF_MAX_CHARS)}\n… (diff 已截断)`
   }
   const untracked = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "ls-files", "--others", "--exclude-standard"])
     .then((r) => r.stdout.split("\n").filter((line) => line !== ""))
