@@ -19,7 +19,7 @@ Il remonte ce que vous oublieriez de vérifier :
 - **Les projets qui s'endorment** — trop longtemps sans y toucher, ou en retard de publication.
 - **Les dépôts perdus de vue** — tous sur un écran, cherchables, ouverts en un clic.
 
-Ce qui demande une action remonte en file d'attente : une entrée par dépôt, par urgence. Écartez d'un ✓ et cela reste écarté jusqu'à ce que quelque chose change vraiment.
+Ce qui demande une action remonte en file d'attente : une entrée par dépôt, par urgence. Écartez d'un ✓ et cela reste écarté jusqu'à ce que quelque chose change vraiment — seule exception : un stash écarté revient au bout de 30 jours, pour que celui que vous avez vraiment oublié ne disparaisse pas définitivement.
 
 ## Prise en charge
 
@@ -51,9 +51,9 @@ Une carte par dépôt — couleur de santé, branche, détail de l'arbre de trav
 - **Enregistrer une vue** — n'importe quel filtre + tri + regroupement, nommé et réutilisable.
 - **Agir en lot** — fetch / pull / push sur les dépôts sélectionnés, ou une même commande shell dans tous. Un dépôt en échec n'arrête jamais les autres.
 - **Travailler sur place** — le panneau de détail commite avec un diff en direct, change de branche, annule des modifications, nettoie les branches fusionnées et récupère PR & CI GitHub à la demande.
-- **Créer et déplacer** — **+ Nouveau** crée un dépôt et le place directement sur le tableau ; l'export / import de manifeste emporte votre configuration d'une machine à l'autre.
+- **Créer et déplacer** — **+ Nouveau** crée un dépôt et le place directement sur le tableau ; l'export / import du manifeste emporte la liste des dépôts — chemins, remotes, groupes, tags — sur une autre machine.
 
-Les voyants du haut sont les types d'alerte — sans remote, non poussé, non commité, en retard, stash restant. Éteignez ceux qui ne vous concernent pas dans ⚙ Paramètres.
+Les voyants du haut sont les types d'alerte — sans remote, HEAD détaché, non poussé, non commité, en retard, stash restant. Éteignez ceux qui ne vous concernent pas dans ⚙ Paramètres.
 
 Deux autres onglets : **Statistiques** (heatmap des commits sur un an, dépôts les plus et les moins actifs) et **Journal de travail** (copier une période en rapport hebdomadaire Markdown).
 
@@ -61,30 +61,30 @@ Un thème sombre façon cockpit d'instruments, localisé en 18 langues, contrast
 
 ## Rester à jour
 
-Par défaut : une réanalyse de secours toutes les 30 minutes, plus la réanalyse manuelle de la barre d'outils — local, discret, sans réseau.
+Par défaut : une réanalyse de secours toutes les 30 minutes, plus la réanalyse manuelle de la barre d'outils. Une réanalyse ne lit que l'état local de git — elle ne contacte jamais un remote pour découvrir ce qui a changé.
 
-L'analyse automatique par surveillance de fichiers est **désactivée par défaut**, à activer dans les réglages. Elle reste locale, mais quand plusieurs projets compilent en même temps le tampon de notifications du noyau déborde en continu, et chaque débordement coûte une réanalyse — un prix permanent trop élevé pour un outil qui sert à jeter un œil à ce qui a changé. Activée, les dépôts ajoutés, supprimés ou renommés apparaissent en quelques secondes.
+L'analyse automatique par surveillance de fichiers est **désactivée par défaut**, à activer dans les réglages. Elle reste locale, mais quand plusieurs projets compilent en même temps le tampon de notifications du noyau déborde en continu, et un débordement veut dire des événements perdus auxquels on ne peut plus se fier — seule réponse sûre : une réanalyse de plus, régulée par backoff exponentiel à une toutes les 30 minutes au plus. Malgré cela, un prix permanent trop élevé pour un outil qui sert à jeter un œil à ce qui a changé. Activée, les dépôts ajoutés, supprimés ou renommés apparaissent en quelques secondes.
 
 Renommez ou déplacez un dépôt : ses tags, favori, état d'archive et notes suivent. repo-radar reconnaît un dépôt à ce qu'il contient, pas à l'endroit où il se trouve — un dossier déplacé reste donc le même projet, pas un nouveau.
 
-Le fetch d'arrière-plan planifié est facultatif et la seule fonction qui sorte sur le réseau d'elle-même.
+Le fetch d'arrière-plan planifié est facultatif et c'est la seule fonction qui parle à vos remotes d'elle-même. La colonne GitHub est la seule chose qui sorte sur le réseau à la minuterie sans qu'on le demande : tant que la CLI `gh` est installée, PR, issues et CI s'actualisent via elle toutes les 12 minutes et après chaque réanalyse. Sans `gh`, ou sans remote GitHub, l'application reste entièrement locale.
 
 ## Tourne discrètement en arrière-plan
 
-Fermer la fenêtre range repo-radar dans la zone de notification : réanalyses, surveillance et alertes GitHub continuent. Cliquez sur l'icône pour rappeler le tableau, ou quittez depuis son menu.
+Fermer la fenêtre range repo-radar dans la zone de notification **sous Windows et macOS** : réanalyses, surveillance et alertes GitHub continuent ; sous Linux, la fenêtre ferme l'app, faute de zone de notification fiable. Sous Windows et Linux, un clic sur l'icône rappelle le tableau ; sous macOS, l'icône ouvre son menu, où c'est la première entrée — et où se trouve Quitter sur toutes les plateformes.
 
 À la fermeture, il attend jusqu'à 10 secondes le travail git en cours — un pull groupé, un stash supprimé — pour que rien ne soit coupé en pleine écriture et ne laisse un `.git/index.lock` périmé. Si cela ne suffit pas, il quitte quand même et le dit dans le journal.
 
-Activez **Lancer à l'ouverture de session** et il démarre sans fenêtre avec votre session. Les notifications de bureau sont facultatives et ne se déclenchent que quand quelque chose de *nouveau* entre dans votre file.
+Activez **Lancer à l'ouverture de session** et il démarre sans fenêtre avec votre session. Les notifications de bureau sont facultatives et ne se déclenchent que quand quelque chose de *nouveau* arrive dans la liste GitHub « en attente de vous » — une PR, une issue ou une CI en échec ; jamais au premier chargement.
 
 ## Configuration
 
-Répertoires à scanner, dossiers exclus et commandes d'ouverture se modifient dans ⚙ Paramètres → Analyse et commandes d'ouverture. Le reste vit dans `~/.repo-radar/config.json`, que vous ouvrirez rarement — la liste complète des champs, les deux fichiers de cache à côté et les variables d'environnement pour une seconde instance sont dans la [référence de configuration](../configuration.md).
+Répertoires à scanner, dossiers exclus et commandes d'ouverture se modifient dans ⚙ Paramètres → Analyse et commandes d'ouverture. Le reste vit dans `~/.repo-radar/config.json`, que vous ouvrez rarement ; les choix purement d'affichage (vues enregistrées, thème, langue, journal d'activité) vivent dans le stockage du navigateur. La liste complète des champs, les fichiers de cache à côté et les variables d'environnement pour une seconde instance sont dans la [référence de configuration](../configuration.md).
 
 ## Limites connues
 
 - **Les mises à jour sont manuelles par choix.** Pas d'auto-update : relancez le nouvel installeur par-dessus l'ancien.
-- **Un dépôt déplacé est reconnu à l'analyse suivante — s'il rate cette analyse, ses tags ne suivent pas.** Un déplacement lent entre volumes, ou une destination pas encore ajoutée comme répertoire à scanner, revient en carte neuve et laisse les tags sur l'ancienne.
+- **Un déplacement que l'analyse de reconnaissance rate laisse un indice, pas une perte silencieuse.** Quand la correspondance automatique échoue, la nouvelle carte propose *« probablement une copie déplacée de l'ancien chemin »* — cliquez sur **Migrer** et les étiquettes, l'étoile et les notes suivent le dépôt. Cela ne se déclenche que pour des dépôts analysés au moins une fois sur cette installation (le registre doit avoir vu leur remote) et jamais pour une destination que vous n'avez pas ajoutée comme répertoire à scanner.
 - **Linux n'a pas de zone de notification fiable**, donc fermer la fenêtre quitte l'application.
 - **Les dépôts ajoutés un par un, hors répertoire scanné, ne sont pas reconnus ainsi** — si vous en déplacez un, vous indiquez vous-même le nouveau chemin.
 - **Annuler les modifications ne touche ni aux sous-modules ni aux dépôts git imbriqués**, et le dit au lieu d'annoncer un nettoyage complet.

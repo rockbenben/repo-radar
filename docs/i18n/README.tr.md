@@ -21,7 +21,7 @@ Yoksa kontrol etmeyi unutacağınız şeyleri yüzeye çıkarır:
 - **Soğuyan projeler** — çok uzun süredir dokunulmamış ya da sürümü gecikmiş olanlar.
 - **Gözden kaçırdığınız depolar** — hepsi tek ekranda, aranabilir, tek tıkla açılır.
 
-İlgi bekleyen her şey kuyruk olarak yukarı çıkar: depo başına bir kayıt, aciliyet sırasına göre. ✓ ile kapatın, gerçekten bir şey değişene kadar geri gelmez.
+İlgi bekleyen her şey kuyruk olarak yukarı çıkar: depo başına bir kayıt, aciliyet sırasına göre. ✓ ile kapatın, gerçekten bir şey değişene kadar geri gelmez — tek istisna: kapatılan bir stash 30 gün sonra yeniden çıkar, böylece gerçekten unuttuğunuz bir stash kalıcı olarak kaybolmaz.
 
 ## Desteklenenler
 
@@ -53,9 +53,9 @@ Depo başına bir kart — sağlık rengi, dal, çalışma ağacı dökümü, ah
 - **Görünüm kaydetmek** — herhangi bir süzgeç + sıralama + gruplama, adlandırılıp yeniden kullanılır.
 - **Toplu iş yapmak** — seçili depolarda fetch / pull / push ya da hepsinde aynı kabuk komutu. Bir deponun hata vermesi diğerlerini asla durdurmaz.
 - **Yerinde çalışmak** — ayrıntı paneli canlı diff ile commit alır, dal değiştirir, değişiklikleri atar, birleştirilmiş dalları temizler ve GitHub PR & CI'yi istendiğinde çeker.
-- **Depo kurmak ve taşımak** — **+ Yeni** bir depo oluşturup doğrudan panoya koyar; manifest dışa / içe aktarımı kurulumunuzu başka makineye taşır.
+- **Depo kurmak ve taşımak** — **+ Yeni** bir depo oluşturup doğrudan panoya koyar; manifest dışa / içe aktarımı depo listenizi — yollar, remote'lar, gruplar, etiketler — başka bir makineye taşır.
 
-Üstteki lambalar uyarı türleridir — uzak yok, push edilmemiş, commit edilmemiş, uzaktan geride, stash kalmış. İlgilenmediklerinizi ⚙ Ayarlar'dan kapatın.
+Üstteki lambalar uyarı türleridir — uzak yok, ayrık HEAD, push edilmemiş, commit edilmemiş, uzaktan geride, stash kalmış. İlgilenmediklerinizi ⚙ Ayarlar'dan kapatın.
 
 İki sekme daha: **İstatistik** (bir yıllık commit ısı haritası, en hareketli ve en durgun depolar) ve **Çalışma günlüğü** (bir tarih aralığını Markdown haftalık rapor olarak kopyalar).
 
@@ -63,30 +63,30 @@ Koyu kokpit-enstrüman teması, 18 dile yerelleştirilmiş, metin kontrastı hem
 
 ## Güncel kalmak
 
-Varsayılan: 30 dakikada bir yedek yeniden tarama ve araç çubuğundaki elle tarama — yerel, sessiz, ağsız.
+Varsayılan: 30 dakikada bir yedek yeniden tarama ve araç çubuğundaki elle tarama. Yeniden tarama yalnızca yerel git durumunu okur — neyin değiştiğini anlamak için asla bir remote'a ulaşmaz.
 
-Dosya izlemeli otomatik tarama **varsayılan olarak kapalıdır**, ayarlardan açılır. O da yereldir, ama birkaç proje aynı anda derlenirken çekirdeğin bildirim tamponu sürekli taşar ve her taşma bir yeniden tarama demektir — "neyin değiştiğine bir bakayım" aracı için fazla yüksek bir sabit bedel. Açtığınızda eklenen, silinen veya adı değişen depolar saniyeler içinde görünür.
+Dosya izlemeli otomatik tarama **varsayılan olarak kapalıdır**, ayarlardan açılır. O da yereldir, ama birkaç proje aynı anda derlenirken çekirdeğin bildirim tamponu sürekli taşar ve taşma, o olayların kaybolup artık güvenilememesi demektir — tek güvenli yanıt bir yeniden tarama daha, üstel geri çekilmeyle en fazla 30 dakikada bire sınırlı. Yine de "neyin değiştiğine bir bakayım" aracı için fazla yüksek bir sabit bedel. Açtığınızda eklenen, silinen veya adı değişen depolar saniyeler içinde görünür.
 
 Bir deponun adını değiştirin ya da taşıyın; etiketleri, yıldızı, arşiv durumu ve notları kalır. repo-radar bir depoyu içindekinden tanır, durduğu yerden değil — taşınan bir klasör hâlâ aynı projedir, yenisi değil.
 
-Zamanlanmış arka plan fetch isteğe bağlıdır ve kendiliğinden ağa çıkan tek özelliktir.
+Zamanlanmış arka plan fetch isteğe bağlıdır ve kendiliğinden sizin remote'larınızla konuşan tek özelliktir. GitHub sütunu, istenmeden saatli olarak ağa çıkan tek şeydir: `gh` CLI kurulu olduğu sürece PR'lar, issue'lar ve CI onun üzerinden her 12 dakikada bir ve her yeniden taramadan sonra tazelenir. `gh` yoksa veya GitHub remote yoksa uygulama tamamen yereldir.
 
 ## Arka planda sessizce çalışır
 
-Pencereyi kapatmak repo-radar'ı tepsiye indirir; yeniden taramalar, izleme ve GitHub uyarıları sürer. Panoyu geri getirmek için tepsi simgesine tıklayın, gerçekten çıkmak için tepsi menüsünü kullanın.
+Windows ve macOS'ta pencereyi kapatmak repo-radar'ı tepsiye indirir; yeniden taramalar, izleme ve GitHub uyarıları sürer. Linux'ta pencereyi kapatmak uygulamayı kapatır — orada güvenilir bir tepsi yok. Windows ve Linux'ta tepsi simgesine tıklayınca pano geri gelir; macOS'ta simge kendi menüsünü açar ve bu onun ilk seçeneğidir — Çıkış da her platformda o menüde.
 
 Çıkarken hâlihazırda süren git işini — toplu pull, stash silme — en fazla 10 saniye bekler; böylece hiçbir şey yazmanın ortasında kesilip eski bir `.git/index.lock` bırakmaz. Yetmezse yine de çıkar ve bunu günlüğe yazar.
 
-**Oturum açılışında başlat**'ı açın; oturumunuzla birlikte penceresiz başlar. Masaüstü bildirimleri isteğe bağlıdır ve yalnızca kuyruğa *yeni* bir şey girdiğinde çalar.
+**Oturum açılışında başlat**'ı açın; oturumunuzla birlikte penceresiz başlar. Masaüstü bildirimleri isteğe bağlıdır ve yalnızca GitHub'daki sizi bekleyen listesine *yeni* bir şey geldiğinde çalar — PR, issue veya düşen CI; ilk yüklemede asla.
 
 ## Yapılandırma
 
-Tarama dizinleri, hariç tutulan klasörler ve açma komutları ⚙ Ayarlar → Tarama ve açma komutları altından düzenlenir. Gerisi `~/.repo-radar/config.json` içindedir ve nadiren açmanız gerekir — tüm alan listesi, yanındaki iki önbellek dosyası ve ikinci bir örnek çalıştırmak için ortam değişkenleri [yapılandırma referansında](../configuration.md).
+Tarama dizinleri, hariç tutulan klasörler ve açma komutları ⚙ Ayarlar → Tarama ve açma komutları altından düzenlenir. Gerisi `~/.repo-radar/config.json` içindedir ve nadiren açmanız gerekir — salt görüntüye dair seçimler (kaydedilmiş görünümler, tema, dil, etkinlik günlüğü) tarayıcı deposunda durur. Tüm alan listesi, yanındaki önbellek dosyaları ve ikinci bir örnek çalıştırmak için ortam değişkenleri [yapılandırma referansında](../configuration.md).
 
 ## Bilinen sınırlar
 
 - **Yükseltmeler bilinçli olarak elle yapılır.** Otomatik güncelleme yok: yeni yükleyiciyi eskisinin üzerine çalıştırın.
-- **Taşınan bir depo bir sonraki taramada tanınır — o taramayı kaçırırsa etiketleri peşinden gelmez.** Sürücüler arası yavaş bir taşıma ya da henüz tarama dizini olarak eklemediğiniz bir hedef, yeni bir kart olarak döner ve etiketler eski kartta kalır.
+- **Tanıyan taramanın kaçırdığı taşınma, sessiz bir kayıp değil bir ipucu bırakır.** Otomatik eşleşme tutmadığında yeni kart *«eski yolun taşınmış bir kopyasına benziyor»* sunar — **Taşı**'ya basın, etiketler, yıldız ve notlar peşinden gelsin. İpucu yalnızca bu kurulumda en az bir kez taranmış depolar için devreye girer (defter onların remote'unu görmüş olmalı) ve henüz tarama dizini olarak eklemediğiniz bir hedef için asla.
 - **Linux'ta güvenilir bir tepsi yok**, bu yüzden pencereyi kapatmak uygulamayı kapatır.
 - **Tarama dizini dışında tek tek eklenen depolar bu yolla tanınmaz** — birini taşırsanız yeni yolu siz gösterirsiniz.
 - **Değişiklikleri atmak alt modüllere ve iç içe git depolarına dokunmaz**; tertemiz bir sonuç bildirmek yerine bunu söyler.

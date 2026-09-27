@@ -19,7 +19,7 @@ Fa emergere ciò che altrimenti dimenticheresti di controllare:
 - **Progetti che si raffreddano** — non toccati da troppo tempo, o con una release in ritardo.
 - **Repo persi di vista** — tutti su una schermata, cercabili, aperti con un clic.
 
-Ciò che richiede un intervento sale in cima come coda: una voce per repo, per urgenza. Scarta con ✓ e resta fuori finché qualcosa non cambia davvero.
+Ciò che richiede un intervento sale in cima come coda: una voce per repo, per urgenza. Scarta con ✓ e resta fuori finché qualcosa non cambia davvero — con un'eccezione: uno stash scartato ricompare dopo 30 giorni, perché uno davvero dimenticato non scompaia per sempre.
 
 ## Compatibilità
 
@@ -51,9 +51,9 @@ Una scheda per repo — colore di salute, branch, dettaglio dell'albero di lavor
 - **Salvare una vista** — qualsiasi filtro + ordinamento + raggruppamento, con un nome e riutilizzabile.
 - **Agire in blocco** — fetch / pull / push sui repo selezionati, o uno stesso comando shell in tutti. Un repo che fallisce non ferma mai gli altri.
 - **Lavorare sul posto** — il pannello di dettaglio committa con diff dal vivo, cambia branch, scarta modifiche, ripulisce i branch già mergiati e recupera PR e CI di GitHub su richiesta.
-- **Creare e spostare repo** — **+ Nuovo** crea un repo e lo mette subito in plancia; export / import del manifest porta la tua configurazione su un'altra macchina.
+- **Creare e spostare repo** — **+ Nuovo** crea un repo e lo mette subito in plancia; export / import del manifest porta la lista dei repo — percorsi, remote, gruppi, tag — su un'altra macchina.
 
-Le spie in alto sono i tipi di allerta — nessun remote, non pushato, non committato, indietro rispetto al remote, stash residuo. Spegni quelle che non ti interessano in ⚙ Impostazioni.
+Le spie in alto sono i tipi di allerta — nessun remote, HEAD distaccata, non pushato, non committato, indietro rispetto al remote, stash residuo. Spegni quelle che non ti interessano in ⚙ Impostazioni.
 
 Altre due schede: **Statistiche** (heatmap dei commit su un anno, repo più e meno attivi) e **Diario di lavoro** (copia un intervallo di date come report settimanale in Markdown).
 
@@ -61,30 +61,30 @@ Tema scuro da plancia strumentale, localizzato in 18 lingue, contrasto del testo
 
 ## Restare aggiornati
 
-Di default: una riscansione di riserva ogni 30 minuti più quella manuale della barra — locale, silenziosa, senza rete.
+Di default: una riscansione di riserva ogni 30 minuti più quella manuale della barra. Una riscansione legge solo lo stato git locale — non contatta mai un remote per scoprire cosa è cambiato.
 
-La scansione automatica tramite monitoraggio dei file è **disattivata di default** e si attiva dalle impostazioni. È anch'essa solo locale, ma con più progetti che compilano insieme il buffer di notifiche del kernel va in overflow di continuo, e ogni overflow costa una riscansione — un prezzo fisso troppo alto per uno strumento con cui dai un'occhiata a cosa è cambiato. Attivata, i repo aggiunti, eliminati o rinominati compaiono in pochi secondi.
+La scansione automatica tramite monitoraggio dei file è **disattivata di default** e si attiva dalle impostazioni. È anch'essa solo locale, ma con più progetti che compilano insieme il buffer di notifiche del kernel va in overflow di continuo, e un overflow significa eventi persi di cui non ci si può più fidare — l'unica risposta sicura è un'altra riscansione, limitata con backoff esponenziale a una ogni 30 minuti al massimo. Anche così, un prezzo fisso troppo alto per uno strumento con cui dai un'occhiata a cosa è cambiato. Attivata, i repo aggiunti, eliminati o rinominati compaiono in pochi secondi.
 
 Rinomina o sposta un repo e mantiene tag, preferito, stato di archivio e note. repo-radar riconosce un repo da ciò che contiene, non da dove si trova: una cartella spostata resta lo stesso progetto, non uno nuovo.
 
-Il fetch pianificato in background è opzionale ed è l'unica funzione che esce in rete di propria iniziativa.
+Il fetch pianificato in background è opzionale ed è l'unica funzione che parla ai tuoi remote di iniziativa propria. La colonna GitHub è l'unica cosa che esce in rete a tempo senza che glielo chieda: finché la CLI `gh` è installata, PR, issue e CI si aggiornano via quella ogni 12 minuti e dopo ogni riscansione. Senza `gh`, o senza remote GitHub, l'app è totalmente locale.
 
 ## Gira in silenzio in background
 
-Chiudere la finestra ripone repo-radar nella tray, così riscansioni, monitoraggio e avvisi GitHub continuano. Clicca l'icona per richiamare la plancia, o esci dal menu della tray.
+Chiudere la finestra ripone repo-radar nella tray **su Windows e macOS**, così riscansioni, monitoraggio e avvisi GitHub continuano; su Linux la finestra chiude l'app, perché lì la tray non è affidabile. Su Windows e Linux un clic sull'icona richiama la plancia; su macOS l'icona apre il suo menu, dove quell'azione è la prima voce — e dove sta Esci su tutte le piattaforme.
 
 All'uscita attende fino a 10 secondi il lavoro git già in corso — un pull di gruppo, uno stash scartato — perché nulla venga troncato a metà scrittura lasciando un `.git/index.lock` vecchio. Se non basta esce comunque e lo scrive nel log.
 
-Attiva **Avvia all'accesso** e parte senza finestra insieme alla tua sessione. Le notifiche desktop sono opzionali e scattano solo quando qualcosa di *nuovo* entra nella coda.
+Attiva **Avvia all'accesso** e parte senza finestra insieme alla tua sessione. Le notifiche desktop sono opzionali e scattano solo quando qualcosa di *nuovo* arriva nel tuo «in attesa da te» su GitHub — una PR, una issue o una CI fallita, mai al primo caricamento.
 
 ## Configurazione
 
-Directory da scansionare, cartelle escluse e comandi di apertura si modificano da ⚙ Impostazioni → Scansione e comandi di apertura. Il resto sta in `~/.repo-radar/config.json`, che raramente devi aprire — l'elenco completo dei campi, i due file di cache accanto e le variabili d'ambiente per una seconda istanza sono nel [riferimento di configurazione](../configuration.md).
+Directory da scansionare, cartelle escluse e comandi di apertura si modificano da ⚙ Impostazioni → Scansione e comandi di apertura. Il resto sta in `~/.repo-radar/config.json`, che raramente devi aprire; le scelte puramente estetiche (viste salvate, tema, lingua, registro attività) vivono nell'archiviazione del browser. L'elenco completo dei campi, i file di cache accanto e le variabili d'ambiente per una seconda istanza sono nel [riferimento di configurazione](../configuration.md).
 
 ## Limiti noti
 
 - **Gli aggiornamenti sono manuali per scelta.** Niente auto-update: esegui il nuovo installer sopra il vecchio.
-- **Un repo spostato viene riconosciuto alla scansione successiva — se salta quella scansione, i tag non lo seguono.** Uno spostamento lento tra volumi, o una destinazione non ancora aggiunta come directory di scansione, torna come scheda nuova e lascia i tag su quella vecchia.
+- **Uno spostamento che sfugge alla scansione che riconosce lascia un indizio, non una perdita silenziosa.** Quando il riconoscimento automatico non riesce, la nuova scheda offre *«probabilmente una copia spostata del vecchio percorso»* — clicca **Migra** e tag, stella e note seguono il repo. Compare solo per repo scansionati almeno una volta su questa installazione (il registro deve aver visto il loro remote) e mai per una destinazione che non hai aggiunto come directory di scansione.
 - **Linux non ha una tray affidabile**, quindi chiudere la finestra chiude l'app.
 - **I repo aggiunti uno a uno, fuori da una directory di scansione, non vengono riconosciuti così** — se ne sposti uno, il nuovo percorso lo indichi tu.
 - **Scartare le modifiche non tocca submodule e repo git annidati**, e lo dice invece di dichiarare pulizia completa.
