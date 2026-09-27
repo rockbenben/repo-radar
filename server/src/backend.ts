@@ -42,7 +42,7 @@ export interface InboxChange {
   after: GithubInbox
 }
 
-/** before/after 是否完全一致（Minor 7）：InboxChange 这个名字承诺的是「变化」，
+/** before/after 是否完全一致：InboxChange 这个名字承诺的是「变化」，
  * 之前实际塞进去的是「本轮所有拉取成功的仓库」（含毫无变化的）——两者不该混为一谈，
  * 名字要跟内容对上。before 为 null（首次拿到缓存）永远不算「一致」。 */
 export function inboxEqual(before: GithubInbox | null, after: GithubInbox): boolean {
@@ -401,7 +401,7 @@ export function createBackend(options: BackendOptions): Backend {
       if (targets.length === 0) return
       if (!(await ghAvailable())) return
       const changes: InboxChange[] = []
-      // 6 并发：每次 gh graphql 约 1.8s（spawn+联网），并发拉满可把整轮从 ~37s 压到 ~18s；只读 API，不会触发写限流
+      // 6 并发：每次 gh graphql 约 1.8s（spawn+联网），并发拉满可把整轮压到约串行的 1/6；只读 API，不会触发写限流
       await mapLimit(targets, 6, async (t) => {
         try {
           // 传上次缓存的 PR 数与 issue 数：prOthers（PR 的 search 字段）与 mine（自己开的 issue 数）
@@ -449,7 +449,7 @@ export function createBackend(options: BackendOptions): Backend {
 
   let lastScanAt: string | null = null // 最近一次全量扫描完成时刻（ISO）；启动扫描跑完才有值
   // force 由信号自己带，不再无条件 true。true 的那一类是「这棵树已经死了」（EMFILE/EIO/
-  // FSEvents 失败、root 被删或改名，见 watch-strategy.ts 的 watchTargetLost）——重建监听是
+  // FSEvents 失败、root 被删或改名，见 watch-filter.ts 的 watchTargetLost）——重建监听是
   // 唯一能救回它的动作，收下又扔掉的话那个 root 下的仓库会在进程余下的生命周期里静默冻结，
   // 且不受兜底重扫开关保护（用户可能就是关着它）。
   // false 的那一类是「事件丢了但句柄还活着」（缓冲区溢出、看见不认识的路径）：目标集合一个
@@ -483,13 +483,13 @@ export function createBackend(options: BackendOptions): Backend {
   // 由下面的 rescanScheduler 按 force 算出（经 pendingRebuild 迟读合并，见 createRescanScheduler
   // 顶部注释——不是简单地把某次调用的 force 原样传下来）。两者背后是同一个判断：磁盘状态是否
   // 可能已经变化到「监听目标本身」需要用新眼光看待，而不是仅仅「有几个仓库的字段变了」：
-  //   - 结构变化/溢出信号（树可能已经死了，见 watch-strategy.ts 的 watchTargetLost）、
+  //   - 结构变化/溢出信号（树可能已经死了，见 watch-filter.ts 的 watchTargetLost）、
   //     clone/新建项目（服务端自己刚在磁盘上添了一个新仓库）、启动时的第一轮 —— 都是 force=true，
   //     监听目标集合本身可能变了，必须重建才能把新目标纳入/把死掉的树救回来；
   //   - 周期定时器、手动点「重扫」—— force=false，大概率什么都没变，applyRepos 足够，
-  //     这正是本任务要消灭的「每 30 分钟无条件重建几千个句柄」那笔开销
+  //     这正是要消灭的「每 30 分钟无条件重建几千个句柄」那笔开销
   // 误把这两条路合并成一条的后果：要么结构变化时收不到重建（死掉的树永久冻结，见 automation.ts
-  // 的 applyWatch 文档），要么每轮重扫都重建（本任务白改）
+  // 的 applyWatch 文档），要么每轮重扫都重建（监听收窄就白做了）
   async function doRescanAndWatch(rebuildWatch: boolean): Promise<RepoStatus[]> {
     const repos = await store.refreshAll((scanned, total) => hub.broadcast("scan:progress", { scanned, total }))
     if (rebuildWatch) {
@@ -502,7 +502,7 @@ export function createBackend(options: BackendOptions): Backend {
     inboxCache.prune(ids)
     repoCache.prune(ids)
     // 账本的 30 天年龄护栏尤其要命：条目一剪，那批仓库回来时会被当成全新仓库，
-    // 标签/收藏/归档全丢——正是本轮要消灭的行为。护栏在 JsonStore.pruneStale 里
+    // 标签/收藏/归档全丢——正是要靠这道护栏消灭的行为。护栏在 JsonStore.pruneStale 里
     identity.prune(ids)
     // 扫描完成时刻：界面据此显示「上次扫描 …」。只在全量扫描后更新——文件监听的单仓库
     // refreshOne 不算「扫描」，把它算进来会让这个时间永远显示「刚刚」，等于没有信息量。
@@ -541,7 +541,7 @@ export function createBackend(options: BackendOptions): Backend {
   // 三种情况（结构变化/溢出、clone/新建项目、启动首轮）恰好都是「监听目标集合本身可能变了」，
   // 而 force=false 的周期定时器/手动重扫恰好是「大概率没变」，两个判断背后是同一件事，
   // 不必也不该为「要不要重建监听」再引入第二个独立参数。排队/共乘/force 的合并语义都在
-  // createRescanScheduler 里，抽出来是因为它有个只在特定时序下才现身的缺陷类别（评审 I1）
+  // createRescanScheduler 里，抽出来是因为它有个只在特定时序下才现身的缺陷类别
   const rescanScheduler = createRescanScheduler<RepoStatus[]>({ run: doRescanAndWatch, scanTargets })
   const rescanAndWatch = (force = false): Promise<RepoStatus[]> => rescanScheduler.trigger(force)
 

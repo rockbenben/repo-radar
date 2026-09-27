@@ -379,7 +379,7 @@ describe("getRepoHeavy 的降级判定", () => {
   })
 })
 
-// 拆分不得改变对外结果：这是本任务唯一真正重要的断言
+// 拆分不得改变对外结果：这是这个拆分唯一真正重要的断言
 describe("composeStatus 与 getRepoStatus 等价", () => {
   it("手工组合的结果与 getRepoStatus 一致", async () => {
     const repo = makeRepo({ dirty: true, stash: true })

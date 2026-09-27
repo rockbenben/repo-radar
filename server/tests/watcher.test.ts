@@ -571,7 +571,7 @@ describe("RepoWatcher — 归属映射", () => {
   })
 
   /**
-   * A1：被 `config.excludes` 排除的仓库不进 `scan()`，因此永远不在归属表里——它的每一次
+   * 被 `config.excludes` 排除的仓库不进 `scan()`，因此永远不在归属表里——它的每一次
    * 写入都走未归属分支。watcher 不知道 excludes 的话，那是一个**永不关闭的水龙头**：
    * 按 60 秒冷却无限触发 force=true 的全量重扫 + 完整 applyWatch 拆建。冷却只是限速。
    */

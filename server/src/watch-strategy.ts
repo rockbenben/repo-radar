@@ -214,7 +214,7 @@ export class PerRepoStrategy implements WatchStrategy {
       // 与递归策略同一条分流（watchTargetLost：出事的是监听目标本身、或路径不明，就算失守）。
       // 这里**一个** FSWatcher 管着所有仓库，所以 ENOSPC（inotify 上限，73+ 仓库时是真实
       // 场景）和 EMFILE 打掉的是整个实例：所有仓库一起停止刷新，日志一行，无人重建。
-      // 只调 onError 不调 onOverflow 的话，Task 7 为 win/mac 建的自愈链在 Linux 上就是断的
+      // 只调 onError 不调 onOverflow 的话，先前为 win/mac 建的自愈链在 Linux 上就是断的
       if (watchTargetLost(e, targets)) {
         h.onOverflow(`per-repo watch lost at ${e.path ?? "?"}: ${e.code ?? e.message}`, true) // 同上
       }

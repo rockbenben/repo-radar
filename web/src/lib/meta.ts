@@ -30,13 +30,13 @@ export function isGithubUrl(url: string): boolean {
 
 const MAIN_BRANCHES = new Set(["main", "master"])
 /** 当前不在主分支（且非游离 HEAD）时为 true——提示"你还开着功能分支" */
+export function isSideBranch(branch: string | null): boolean {
+  return branch !== null && !MAIN_BRANCHES.has(branch)
+}
+
 // stash 描述里 "WIP on <branch>: " / "On <branch>: " 前缀与旁边分支徽标重复，去掉更清爽
 export function cleanStashMessage(m: string): string {
   return m.replace(/^(?:WIP on|On) [^:]+:\s*/, "") || m
-}
-
-export function isSideBranch(branch: string | null): boolean {
-  return branch !== null && !MAIN_BRANCHES.has(branch)
 }
 
 /** 距上次提交的天数；null lastCommit → null */

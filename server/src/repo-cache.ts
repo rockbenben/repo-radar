@@ -11,7 +11,7 @@ import { JsonStore } from "./json-store"
  * repo-cache.json 的 schema 版本。**RepoHeavy 的形状**、
  * **或任何一个 heavy 字段的算法/语义**一变，就必须 +1。
  *
- * 逐字段校验 heavy 在这里是行不通的（它有六个字段、还嵌着 release/remotes/lastCommit
+ * 逐字段校验 heavy 在这里是行不通的（它有七个字段、还嵌着 release/remotes/lastCommit
  * 三个对象），而不校验的后果是致命的：这个文件已经在用户磁盘上了，形状必然会变，
  * 而旧条目只要通过校验，composeStatus 就会把缺掉的字段原样复制成 undefined，
  * 前端一句 `repo.mergedBranches.length` 当场抛 TypeError —— 整块白板，服务端零报错，

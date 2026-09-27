@@ -2,7 +2,7 @@ import { BrowserWindow, screen, shell } from "electron"
 import { loadState, MIN_HEIGHT, MIN_WIDTH, saveState, type WindowState } from "./window-state"
 
 /**
- * 缺陷 4：拦下来的导航（will-navigate 拦截的站外跳转、setWindowOpenHandler 拦下的
+ * 拦下来的导航（will-navigate 拦截的站外跳转、setWindowOpenHandler 拦下的
  * target="_blank"/window.open）之前被原样交给 shell.openExternal——它会按系统协议关联
  * 启动对应程序，不做协议限制的话，页面里的 file:/ms-msdt:/smb: 等自定义协议会被原样
  * 交给操作系统处理，等于把"点一下链接"变成任意协议触发的入口。这个应用的所有外链
@@ -92,7 +92,7 @@ export interface WindowOptions {
 export function saveWindowState(win: BrowserWindow, stateFile: string): void {
   // 已销毁的窗口查询 bounds 要么拿不到有意义的值、要么直接抛异常——跳过，保留磁盘上已有的状态
   if (win.isDestroyed()) return
-  // 缺陷 3：最小化的窗口在 Windows 上 getBounds()/getNormalBounds() 常常返回占位坐标
+  // 最小化的窗口在 Windows 上 getBounds()/getNormalBounds() 常常返回占位坐标
   // （典型值如 x=-32000,y=-32000,width=160,height=28），isMaximized() 也是 false——不是
   // 用户想要恢复的布局。用户最大化 -> 最小化 -> 从托盘退出，这条路径若不跳过就会把这份
   // 占位值当成"最后的好状态"存下去，尺寸小于 MIN_WIDTH/MIN_HEIGHT 还会被下次加载时的

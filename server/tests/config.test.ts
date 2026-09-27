@@ -264,13 +264,13 @@ describe("notifications 字段", () => {
   })
 })
 
-// 缺陷 4：legacyAutostartMigrated 曾被错误地放进这份用户可见、可通过 PUT /api/config 修改的
+// legacyAutostartMigrated 曾被错误地放进这份用户可见、可通过 PUT /api/config 修改的
 // 配置——它是纯粹的桌面端一次性迁移状态（SEA 时代自启意图是否已经迁移过），用户在自己的
 // config.json 里看到一个看不懂的内部字段，还能通过公开 API 把它改坏，进而干扰
 // desktop/src/autostart.ts 的迁移判定。已挪到 desktop/src/autostart-state.ts 管理的桌面端
 // 专属状态文件，这里只负责确认它已经从用户配置的 schema 里彻底移除，且老配置文件里可能
 // 残留的这个字段会被静默剔除（与 openMode 走同一套 DROPPED_FIELDS 机制），不再声明、不再校验。
-describe("legacyAutostartMigrated 已移除出用户配置（缺陷 4：挪到桌面端专属状态文件）", () => {
+describe("legacyAutostartMigrated 已移除出用户配置（挪到桌面端专属状态文件）", () => {
   it("默认配置里不再有这个字段", () => {
     expect("legacyAutostartMigrated" in DEFAULT_CONFIG).toBe(false)
   })

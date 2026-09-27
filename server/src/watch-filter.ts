@@ -35,7 +35,7 @@ const IGNORED_DIRS = new Set([
  * 这几个目录里会出现**真正的 git 克隆**——npm 装 git 依赖、composer `--prefer-source`、
  * `pip install -e git+…` 落在 venv 的 src/ 下、gradle 的 vcsWorkingDirs。于是这里的 `.git`
  * 创建事件**不是**「用户新建了一个仓库」，一次 `npm ci` 就能连发几十条，每条都会触发一轮
- * force=true 的全量重扫（refreshAll + 全部监听句柄拆建）——正是本轮重构要消灭的开销。
+ * force=true 的全量重扫（refreshAll + 全部监听句柄拆建）——正是监听路径收窄要消灭的开销。
  *
  * 其余的（obj/bin/target/dist/build/out/.next/…）是构建产物目录：构建工具从不创建 `.git`，
  * 放行这个信号不会引入任何噪音，却能救回一类真实场景——扫描根下有个普通目录恰好叫

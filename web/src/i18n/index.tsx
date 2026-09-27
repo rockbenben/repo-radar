@@ -25,7 +25,7 @@ export const LANGS = [
 export type LangCode = (typeof LANGS)[number]["code"]
 
 type Dict = Record<string, string>
-// 打包全部 locale JSON（每个约 100+ 短串，体量小）；缺失的语言在 t() 里回退
+// 打包全部 locale JSON（每个约 380 短串，体量小）；缺失的语言在 t() 里回退
 const modules = import.meta.glob<{ default: Dict }>("./locales/*.json", { eager: true })
 const DICTS: Record<string, Dict> = {}
 for (const [path, mod] of Object.entries(modules)) {

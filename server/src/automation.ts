@@ -49,14 +49,14 @@ export function pathGone(path: string): boolean {
  *
  * 抽出来是因为这三件事共用一组容易写错的约束（间隔夹逼、只重装真变了的、上限截断要
  * 如实说出来），散在 createBackend 那个几百行的闭包里时，每加一处就得把这些约束重新
- * 想一遍——两轮评审里有一半的缺陷出在这。
+ * 想一遍——而这几条约束的边界恰恰最容易写错。
  */
 export interface Automation {
   /** 建立/重建监听句柄：开关切换、启动、以及「结构变化/溢出」这类必须重建才能救回的场景走这里。
    *  代价是拆了重建一遍，改造前每轮兜底重扫都无条件走这里，是实测里最贵的一笔周期性开销——
    *  普通重扫已经改走 applyRepos，不要在新代码里对着「仅仅是重扫」的场景调它 */
   applyWatch(enabled: boolean, repos?: RepoStatus[]): Promise<void>
-  /** 重扫后调用：更新监听器的「路径 → id」映射。这是本任务的性能收益所在——普通重扫
+  /** 重扫后调用：更新监听器的「路径 → id」映射。这是它相对 applyWatch 的性能收益所在——普通重扫
    *  （周期定时器 / 手动点重扫）大概率什么都没变，拆几千个句柄再建一遍纯属浪费。
    *  唯一会碰句柄的情况是「有仓库本该被覆盖却没被覆盖」（新克隆的仓库、挂不上的 root），
    *  那时补一次 applyWatch——没有它，那些仓库到进程结束都拿不到监听句柄，见实现里的注释 */
@@ -108,7 +108,7 @@ const byWatchPriority = (a: RepoStatus, b: RepoStatus): number =>
  *
  * 抽出来是因为 applyRepos 判断「覆盖够不够」时必须用**同一个分母**：拿未截断的仓库总数当
  * 分母的话，Linux 上任何一个设了 watchLimit 的用户都会每轮重扫重挂一次监听——截断是预期内
- * 的短缺，不是需要补救的降级，那正好把本轮重构省下来的开销原样还回去
+ * 的短缺，不是需要补救的降级，那正好把监听路径收窄省下来的开销原样还回去
  */
 function pickWatched(active: RepoStatus[], cfg: Config): RepoStatus[] {
   return usesPerRepoWatching() && cfg.watchLimit > 0 && active.length > cfg.watchLimit
@@ -173,7 +173,7 @@ export function createAutomation(deps: AutomationDeps): Automation {
   // 上一次 applyWatch 是否有目标没建成（EMFILE 等瞬时故障——RecursiveRootStrategy.start
   // 对单个 root/仓库的失败是内部吞掉的，不向上抛，只是不把它放进返回的 ok 列表；coveredRepoCount
   // 比请求的名单短，是「有目标没建成」唯一测得到的信号）。applyWatchLogged 把这类错误咽掉时，
-  // 原先靠的是「下一轮扫描的 applyWatch 会重试」——本任务把周期路径收窄成 applyRepos 之后，
+  // 原先靠的是「下一轮扫描的 applyWatch 会重试」——在周期路径收窄成 applyRepos 之后，
   // 那句承诺不再自动成立，得由这个标志接手：periodic/手动重扫改走 applyRepos 了，但仍要有人
   // 在「真的降级了」时补一次重挂，否则「配置说开着、监听其实没挂上」会一直装作正常
   let watchDegraded = false
@@ -188,10 +188,10 @@ export function createAutomation(deps: AutomationDeps): Automation {
   /**
    * 覆盖率的**分母**：这批仓库里，本该真的有监听的有几个。
    *
-   * 路径已经失效的仓库要减掉。它们会一直留在仓库列表里（Task 9 有意为之：不能让卡片静默
+   * 路径已经失效的仓库要减掉。它们会一直留在仓库列表里（有意为之：不能让卡片静默
    * 消失，要产出一张「路径已失效」的错误卡片），而任何策略都挂不上一个不存在的路径，于是
    * `coveredRepoCount()` 永远小于仓库数——`watchDegraded` 与 applyRepos 的补挂条件被**永久
-   * 闩住**，每一轮重扫都触发一次注定失败的 applyWatch（拆了重建全部句柄），正好是本轮重构
+   * 闩住**，每一轮重扫都触发一次注定失败的 applyWatch（拆了重建全部句柄），恰好是监听路径收窄
    * 要消灭的那笔开销，只是换了个理由回来。一个死掉的 manualRepo 就够了。
    *
    * 只在快路径没命中之后才调用：它每个仓库要付一次 stat，而绝大多数轮次根本走不到这里
@@ -242,7 +242,7 @@ export function createAutomation(deps: AutomationDeps): Automation {
     if (chosen.length < all.length) {
       const scanMin = cfg.autoScanMinutes
       log(
-        `[repo-radar] 仓库数 ${all.length} 超过监听上限 ${cfg.watchLimit}，只监听收藏和最近提交的 ${chosen.length} 个` +
+        `[repo-radar] 仓库数 ${all.length} 超过监听上限 ${cfg.watchLimit}，只监听收藏和最近活跃的 ${chosen.length} 个` +
           (scanMin > 0
             ? `，其余靠每 ${scanMin} 分钟的兜底重扫刷新 / watching ${chosen.length} of ${all.length} repos; the rest refresh via the ${scanMin}-min periodic rescan`
             : `。兜底重扫当前是关的：其余仓库不会自动刷新，请开启兜底重扫或调高监听上限 / watching ${chosen.length} of ${all.length} repos; periodic rescan is OFF, the rest will NOT refresh automatically`),
@@ -275,14 +275,14 @@ export function createAutomation(deps: AutomationDeps): Automation {
     // 只比数量等于让它在唯一有意义的场景里 100% 失效。别再改回数量比较
     //
     // 快路径：没降级、且每个仓库都已被覆盖。绝大多数周期重扫走这里，连配置文件都不必读——
-    // 本任务省下来的那笔「每轮都重建几千个句柄」的开销不会因为下面的自愈又搭进去
+    // 监听路径收窄省下来的那笔「每轮都重建几千个句柄」的开销不会因为下面的自愈又搭进去
     if (!watchDegraded && all.every((r) => watcher.isCovered(r.path))) return
     const cfg = loadConfig(configFile)
     // 尊重用户当下的开关：这期间可能已经手动关掉了监听，不擅自把它重新打开
     if (!cfg.autoWatch) return
     // 名单取 pickWatched 而不是 all，且路径已失效的算「不必覆盖」：watchLimit 截断与死掉的
     // manualRepo 都是预期内的短缺，不是需要补救的降级。拿 all 当名单的话，Linux 上任何设了
-    // 上限的用户、以及任何有一个失效 manualRepo 的用户，都会每轮重扫重挂一次，等于本轮重构白改。
+    // 上限的用户、以及任何有一个失效 manualRepo 的用户，都会每轮重扫重挂一次，等于监听收窄白做。
     // gone 只对**没被覆盖**的那些付 stat（`||` 短路），正常轮次一次 syscall 都不多
     const chosen = pickWatched(all, cfg)
     if (!watchDegraded && chosen.every((r) => watcher.isCovered(r.path) || gone(r.path))) return
@@ -347,7 +347,7 @@ export function createAutomation(deps: AutomationDeps): Automation {
     // roots/manualRepos 变了 → 监听目标本身变了，只有重建能让新目标生效。
     // autoWatch 与 watchLimit 同样保留在触发条件里（未采用「只看 roots/manualRepos」的更窄
     // 写法）：这两个字段若经由整份 PUT /api/config 变化却不落实，得到的都是「配置说的和实际
-    // 跑的不一样」，正是本任务最该防的那类「装作还在监听」——
+    // 跑的不一样」，正是监听收窄最该防的那类「装作还在监听」——
     //   - autoWatch：配置说开着、实际监听没启动；
     //   - watchLimit：值落了盘、面板也显示了新上限，但 applyWatch 从不被调用，Linux 上超出
     //     旧上限的仓库直到进程结束都不被监听。它虽有专属的 setWatchLimit 端点，但那只覆盖

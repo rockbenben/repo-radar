@@ -242,7 +242,7 @@ export function parseStatus(out: string): ParsedStatus {
    *   workedAt 反而是 null。
    * - 名额上界。只在消费方 break 的话,数组照样先被完整建出来：实测 5 万条记录 = 5 万个
    *   对象、43ms 同步耗时,压在同时服务 HTTP/WS 的那条事件循环上,而并发是 8 个仓库。
-   *   触发条件就是 TOUCHED_STAT_LIMIT 注释里点名的那些（.gitattributes 加 `* text=auto`、
+   *   触发条件是大批量制造未跟踪/改写记录的操作（.gitattributes 加 `* text=auto`、
    *   autocrlf 翻转、go mod vendor、批量格式化）。
    */
   const take = (line: string, xy: string | null): void => {
@@ -294,7 +294,7 @@ export const TOUCHED_STAT_LIMIT = 200
 
 /**
  * lstat 那一批的总时限。**不设的话，一次网络盘掉线会让整块看板永久停摆**——不只是这一轮：
- * store.doRefreshAll 的 `if (this.inFlight) return this.inFlight` 会把后续每一次重扫都挂到
+ * store.refreshAll 的 `if (this.inFlight) return this.inFlight` 会把后续每一次重扫都挂到
  * 这个永不 settle 的 promise 上，于是手动「重新扫描」、定时重扫、监听触发的结构重扫全部失效，
  * 只能重启进程。runGit 早就为同一个理由带了 30s 超时并 kill 子进程；硬挂载的 NFS / 掉线的
  * Windows 映射盘上，lstat 同样会不可中断地阻塞，这里必须有对等的兜底。
@@ -310,7 +310,7 @@ const TOUCHED_STAT_TIMEOUT_MS = 3_000
  *   git spawn，但 `now` 是在 await 之前采样的，stat 期间才落盘的文件照样被判成未来。
  * - 提交侧：容器 / WSL2 / 虚拟机 / NAS 的时钟快几秒是常态。判成 NaN 的话 lastActivity 变
  *   null，activityTs 把 null 当 0，那个仓库在 Linux 上直接丢掉监听名额 → 没有 onEvent →
- *   没有 refreshOne → workedAt 再也不更新。正是 automation.ts 那段注释说这次改动要打破的
+ *   没有 refreshOne → workedAt 再也不更新。正是 automation.ts 的 byWatchPriority 注释说要打破的
  *   自我实现闭环，从「时钟快了」这个入口又走回去了。
  *
  * 5 分钟足够盖住上面两类，而解压归档 / 手写 `--date=` 留下的 2099 年时间戳照杀不误。

@@ -116,7 +116,7 @@ const INBOX_QUERY_ME =
   `mine:issues(states:OPEN,filterBy:{createdBy:$me}){totalCount}} prOthers:search(query:$prq,type:ISSUE){issueCount}}`
 
 // 当前登录用户名：只在真拿到时才记死；失败不缓存（下次重试，避免一次抖动永久关掉自开 issue 过滤）。
-// viewerInFlight 去重首轮并发（60 个仓库同时开跑时只查一次登录名）。
+// viewerInFlight 去重首轮并发（同一批仓库并发开跑时只查一次登录名）。
 let viewerLogin: string | undefined
 let viewerInFlight: Promise<string | null> | null = null
 async function ensureViewer(): Promise<string | null> {

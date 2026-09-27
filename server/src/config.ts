@@ -56,7 +56,7 @@ export const DEFAULT_CONFIG: Config = {
 
 /** 已废弃、但老配置文件里可能还留着的字段。合并时直接剔除——留着会让「配置里写了却不生效」
  *  变成查不出原因的谜，而配置文件应当如实反映程序真正会读的东西
- *  legacyAutostartMigrated（缺陷 4）：SEA 时代自启迁移标记曾被错误地放进这份用户可见/
+ *  legacyAutostartMigrated：SEA 时代自启迁移标记曾被错误地放进这份用户可见/
  *  可通过 PUT /api/config 修改的配置——已挪到 desktop/src/autostart-state.ts 管理的桌面端
  *  专属状态文件，这里只负责把老配置文件里残留的这个字段清掉，不再声明、不再校验 */
 const DROPPED_FIELDS = ["openMode", "legacyAutostartMigrated"] as const

@@ -14,7 +14,7 @@ vi.mock("electron", () => ({
   shell: { openExternal: () => {} },
 }))
 
-// 缺陷 6：窗口尺寸在真正的退出路径（quit() -> app.exit()）上从不保存，因为持久化原先只挂在
+// 窗口尺寸在真正的退出路径（quit() -> app.exit()）上从不保存，因为持久化原先只挂在
 // close 事件上，而 app.exit() 是强制终止、根本不触发 close。main.ts 现在会在 beforeExit 里
 // 主动调用这里导出的 saveWindowState() 补存一次——这条测试锁住 saveWindowState 本身的行为：
 // 不依赖 electron 的 BrowserWindow 构造函数（那需要真正的 Electron 运行时），只用一个
@@ -65,7 +65,7 @@ describe("saveWindowState", () => {
     expect(state.width).toBe(1100)
   })
 
-  // 缺陷 3：最小化的窗口在 Windows 上 getBounds()/getNormalBounds() 常返回占位坐标
+  // 最小化的窗口在 Windows 上 getBounds()/getNormalBounds() 常返回占位坐标
   // （如 x=-32000,y=-32000,width=160,height=28），isMaximized() 也是 false——直接存下来会把
   // window-state.json 写成垃圾，下次加载时 sanitizeState 因尺寸小于 MIN_WIDTH/MIN_HEIGHT
   // 丢弃它，窗口回退到默认 1280x860 居中，用户之前精心摆好的布局被无声抹掉。

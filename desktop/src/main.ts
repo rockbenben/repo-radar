@@ -18,7 +18,7 @@ import { createTray } from "./tray"
 import { loadLastVersion, saveLastVersion } from "./version-state"
 import { createWindow, saveWindowState } from "./window"
 
-// REPO_RADAR_CONFIG 设置时必须是绝对路径。上一轮曾经用 path.resolve() 把相对路径按 cwd
+// REPO_RADAR_CONFIG 设置时必须是绝对路径。早先曾用 path.resolve() 把相对路径按 cwd
 // 兜底展开，理由是下面 app.setPath("userData", ...) 对相对路径会直接抛 `Path must be
 // absolute`；但那把「响亮的失败」换成了「静默地按一个不可预期的目录去找配置文件」——
 // 打包应用启动时的 cwd 由系统决定（双击桌面图标、任务计划程序启动等场景下可能是
@@ -144,7 +144,7 @@ function bootstrap(): void {
   // 提到 bootstrap 顶层：showWindow() 建窗口时要用，quit() 的 beforeExit 收尾补存时也要用，
   // 两处必须用同一份路径，不能各算一遍
   const windowStateFile = join(configDir, "window-state.json")
-  // 缺陷 4：SEA 自启迁移标记不再存进用户可见的 config.json（那是公开 API 能改的用户配置），
+  // SEA 自启迁移标记不再存进用户可见的 config.json（那是公开 API 能改的用户配置），
   // 改成与 window-state.json 同级的桌面端专属状态文件，见 desktop/src/autostart-state.ts
   const autostartStateFile = join(configDir, "autostart-state.json")
   // 升级后清一次 HTTP 缓存的依据文件（见 version-state.ts 的说明）：窗口经 HTTP 加载前端，
@@ -162,8 +162,8 @@ function bootstrap(): void {
   // 后端绑定完成的信号。窗口 URL 里烧的是 backend.port，而这个值在 listen 回调里才定下来
   // （端口回退可能要试好几轮）。second-instance / activate 是在 whenReady 之前就注册的，
   // 用户在启动过程中再双击一次图标就会在绑定完成前调到 showWindow()，把回退前的端口烧进
-  // 窗口 URL——createWindow 不做重试也不重载，结果是永久白屏 ERR_CONNECTION_REFUSED，
-  // 只能杀进程。因此建窗口前先等这个 promise。
+  // 窗口 URL——window.ts 的 did-fail-load 重试只会拿同一个旧 URL 反复重载（对旧地址的死循环
+  // 重试是救不回的白屏），因此建窗口前先等这个 promise。
   let markBackendReady!: () => void
   let markBackendFailed!: (err: unknown) => void
   const backendReady = new Promise<void>((res, rej) => {
@@ -218,7 +218,7 @@ function bootstrap(): void {
     },
   })
 
-  // 唯一退出出口：托盘菜单、系统关机/注销、（后续）/api/shutdown 全部走这里
+  // 唯一退出出口：托盘菜单、系统关机/注销、/api/shutdown 全部走这里
   const quit = createQuit({
     stopBackend: () => backend.stop(),
     beforeExit: () => {

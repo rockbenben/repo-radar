@@ -10,11 +10,11 @@ vi.mock("electron", () => ({
   shell: { openExternal: () => {} },
 }))
 
-// 缺陷 4：will-navigate 与 setWindowOpenHandler 拦下来的导航之前被原样交给
+// will-navigate 与 setWindowOpenHandler 拦下来的导航之前被原样交给
 // shell.openExternal——它会按系统协议关联启动对应程序，不做协议限制的话，恶意页面里的
 // file:/ms-msdt:/smb: 等自定义协议会被原样交给操作系统处理。修法是只放行 http/https
 // （这个应用的外链全是 GitHub 网页），两个入口共用同一个判定函数，不写两份。
-describe("isAllowedExternalUrl — 是否可以放行给 shell.openExternal（缺陷 4）", () => {
+describe("isAllowedExternalUrl — 是否可以放行给 shell.openExternal", () => {
   it("http/https 放行", () => {
     expect(isAllowedExternalUrl("https://github.com/rockbenben/repo-radar")).toBe(true)
     expect(isAllowedExternalUrl("http://example.com")).toBe(true)
@@ -38,7 +38,7 @@ describe("isAllowedExternalUrl — 是否可以放行给 shell.openExternal（�
 // will-navigate 判断"是否离开了站内"要比较解析后的 origin，不能用字符串前缀比较——
 // 那种写法会被 `http://127.0.0.1:17420@evil.example/` 这类带 userinfo 的地址骗过去
 // （@ 前面只是用户信息，真正的 host 是 evil.example）
-describe("isSameOrigin — will-navigate 的同源判定（缺陷 4 覆盖要求之一）", () => {
+describe("isSameOrigin — will-navigate 的同源判定（覆盖要求之一）", () => {
   const baseOrigin = "http://127.0.0.1:17420"
 
   it("完全同源：协议+host+端口都一致", () => {

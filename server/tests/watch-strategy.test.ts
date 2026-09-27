@@ -261,7 +261,7 @@ describe("PerRepoStrategy", () => {
   })
 
   /**
-   * A3：start 原先返回的是「路径存在的」而不是「chokidar 真正挂上的」——它从不 await `ready`。
+   * start 原先返回的是「路径存在的」而不是「chokidar 真正挂上的」——它从不 await `ready`。
    * inotify 耗尽（ENOSPC，73+ 仓库时是真实场景）或 EMFILE 时所有路径都存在，于是设置面板
    * 显示**全覆盖**而实际一个仓库都收不到事件，用户看到卡片不动时唯一的诊断面在说「一切正常」。
    *
@@ -320,7 +320,7 @@ describe("PerRepoStrategy", () => {
     await s.stop()
   })
 
-  // Task 7 为 win/mac 建的自愈链（失守 → onOverflow → 重扫补票 + 重建句柄）必须延伸到 Linux。
+  // 先前为 win/mac 建的自愈链（失守 → onOverflow → 重扫补票 + 重建句柄）必须延伸到 Linux。
   // 不延伸的后果：ENOSPC（inotify 上限，73+ 仓库时是真实场景）或 EMFILE 打掉整个实例，
   // 所有仓库一起冻结、日志一行、无人重建，而 coverage 还在报满覆盖。
   // 内核错误没法在测试里稳定复现（要真把 inotify 上限打满），直接在实例上 emit 一条——

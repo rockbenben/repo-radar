@@ -154,7 +154,7 @@ describe("RepoStore + 身份账本", () => {
    * 一次普通改名就丢标签/收藏/归档/便签。「ino 不可用时靠补算出来的根提交认回老 id」那条
    * 验收在 repo-identity.test.ts（那里才能把 ino 摁成 "0"），这里钉的是 store 这一侧的接线
    */
-  it("新建的空仓库提交第一个 commit 后，账本补上根提交（E3）", async () => {
+  it("新建的空仓库提交第一个 commit 后，账本补上根提交", async () => {
     const parent = isolatedDir("rr-root-")
     const repo = join(parent, "brand-new")
     // 与 createProject 一模一样：mkdir + git init + 写 README，**不提交**

@@ -1,4 +1,4 @@
-// 顶栏告警灯的显示偏好：存的是**关掉的**那几盏（逗号分隔，读写见 App.tsx 的 pref/savePref）。
+// 顶栏告警灯的显示偏好：存的是**关掉的**那几盏（逗号分隔，读写见 lib/prefs.ts 的 pref/savePref）。
 // 抽成纯函数是为了能不挂载整个 App 就测——App.tsx 拉进 antd 和全部组件，为几行字符串逻辑
 // 起一个 jsdom + 假 WebSocket + 五个 fetch 端点的壳子不划算（同 lib/scanConfig.ts 的理由）。
 

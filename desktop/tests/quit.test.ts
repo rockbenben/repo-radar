@@ -34,7 +34,7 @@ describe("createQuit — 唯一退出出口", () => {
     expect(exit).toHaveBeenCalledOnce()
   })
 
-  // 缺陷 5：main.ts 的 whenReady .catch（backend.start() 已成功之后才可能抛出的异常，
+  // main.ts 的 whenReady .catch（backend.start() 已成功之后才可能抛出的异常，
   // 比如打包时图标缺失导致 new Tray() 抛出）要能走完整收尾、同时仍然用退出码 1 表示失败，
   // 不能为了收尾而悄悄把失败伪装成正常退出（0）
   it("退出码可传参：完整收尾后仍能以非 0 退出码退出", async () => {

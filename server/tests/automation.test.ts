@@ -69,8 +69,8 @@ async function withPlatform<T>(platform: string, fn: () => Promise<T>): Promise<
  *  它只按上一次真正建立的 okRoots 计数，setRepos 更新的映射表不影响这个数。这样一来，
  *  已有的 watchLimit 截断类断言（coverage 应等于 chosen.length）不用改写。
  *
- *  `roots` 参数也如实记下来（评审 I3）：只数 setRoots 被调用了几次，抓不住「roots 传的是不是
- *  空数组」这类退化——把 automation.ts 里 `watcher.setRoots(cfg.roots, …)` 悄悄改回 Task 7
+ *  `roots` 参数也如实记下来：只数 setRoots 被调用了几次，抓不住「roots 传的是不是
+ *  空数组」这类退化——把 automation.ts 里 `watcher.setRoots(cfg.roots, …)` 悄悄改回早期
  *  遗留的占位 `watcher.setRoots([], …)`，call 数不变、这里所有原本只查 watched/closes 的用例
  *  仍然全绿，但 Windows/macOS 上会变成一个 scan root 都没被监听——必须有用例去查 setRoots
  *  实际收到的 roots 内容，不能只数它被调用的次数 */
@@ -405,7 +405,7 @@ describe("applyConfig 只重装真变了的", () => {
     saveConfig(file, { ...prev, roots: ["/new"] })
     await automation.applyConfig({ ...prev, roots: ["/new"] }, prev)
     expect(watched).toHaveLength(1)
-    // 只数调用次数抓不住「roots 传的是不是空数组」这类退化（评审 I3）：Task 7 遗留的占位
+    // 只数调用次数抓不住「roots 传的是不是空数组」这类退化：早期遗留的占位
     // watcher.setRoots([], …) 调用次数与这里完全一样，call 数断言不会变红，但 Windows/macOS 上
     // 递归策略会因为 roots 是空数组而一个 scan root 都不建立监听，仓库只能靠各自的 manualRepo
     // 句柄兜底（数量多时等于白做了「一个 root 一个句柄」这件事）
@@ -423,7 +423,7 @@ describe("applyConfig 只重装真变了的", () => {
 
   // autoWatch 保留在触发条件里（未收窄成「只看 roots/manualRepos」）：这个开关若经由整份
   // PUT /api/config 变化却不落实，会出现「配置说开着、实际监听没启动」——界面上关不掉、
-  // 也开不了监听，正是本任务最该防的「装作还在监听」，比少一次重装的代价大得多
+  // 也开不了监听，正是这条链最该防的「装作还在监听」，比少一次重装的代价大得多
   it("autoWatch 变了也要重装，即便是走整份 PUT /api/config 而不是专属 /api/watch", async () => {
     const file = configFile({ autoWatch: true })
     const { automation, closes } = make(file, [repo("a")])
@@ -458,7 +458,7 @@ describe("start / stop", () => {
   })
 })
 
-// 本任务的主线：重扫不再无条件重建监听句柄。上一个任务交接过来的约束 A 明确要求普通重扫
+// 这个模块的主线：重扫不再无条件重建监听句柄。已定约束明确要求普通重扫
 // 与结构变化/溢出触发的重扫走两条不同的收尾路径——这里只钉 automation 这一层「两个方法各干
 // 各的事」；「backend.ts 到底在哪种重扫上调哪个方法」是 backend.test.ts 的事
 describe("重扫不重建监听", () => {
@@ -573,7 +573,7 @@ describe("新出现的仓库必须拿到监听句柄（G1）", () => {
       log: () => {},
     })
 
-  it("递归策略：普通重扫（哪怕多出了新仓库）一次句柄都不重建——本轮重构的性能收益全在这里", async () => {
+  it("递归策略：普通重扫（哪怕多出了新仓库）一次句柄都不重建——这次收窄的性能收益全在这里", async () => {
     const cw = coverageWatcher("recursive")
     const a = auto(configFile({ autoWatch: true, roots: ["/r"] }), cw, [repo("a"), repo("b")])
     await a.applyWatch(true)
@@ -618,7 +618,7 @@ describe("新出现的仓库必须拿到监听句柄（G1）", () => {
   })
 
   // 分母必须是「本该建成的那些」（截断之后），不是仓库总数。拿总数当分母的话，Linux 上任何
-  // 设了 watchLimit 的用户都会每轮重扫重挂一次——把本轮重构省下的开销原样还回去
+  // 设了 watchLimit 的用户都会每轮重扫重挂一次——把这次收窄省下的开销原样还回去
   it("逐仓库策略 + watchLimit 截断：覆盖数天然低于仓库总数，但不得因此每轮重挂", async () => {
     const cw = coverageWatcher("per-repo")
     const repos = [repo("a"), repo("b"), repo("c")]
@@ -644,10 +644,10 @@ describe("新出现的仓库必须拿到监听句柄（G1）", () => {
  * **唯一**会重算 pickWatched 的入口，那个仓库在这个进程余生一个监听目标都不会有，界面还零反馈
  *（coverage 打 ⭐ 前后都是同一个数）。判据必须是「该覆盖的这批路径是不是都真的被覆盖了」。
  *
- * 断言必须落在**监听目标名单的内容**上：只断言「applyWatch 被调用了」正是上一轮那条假收益的
+ * 断言必须落在**监听目标名单的内容**上：只断言「applyWatch 被调用了」正是先前那条假收益的
  * 同款错误——调用次数在这个场景里根本不变，那种断言在修好之前之后都是绿的
  */
-describe("名额占满时打 ⭐ 必须真的换进监听名单（E1）", () => {
+describe("名额占满时打 ⭐ 必须真的换进监听名单", () => {
   it("逐仓库策略 + 名额已满：被 ⭐ 的仓库进了监听目标名单", async () => {
     const cw = coverageWatcher("per-repo")
     const outside = { favorite: true, date: "2026-05-01T00:00:00Z" }
@@ -686,7 +686,7 @@ describe("名额占满时打 ⭐ 必须真的换进监听名单（E1）", () => 
  * Linux 上那是把唯一那个 chokidar 实例关掉再建，还要 await waitForReady（最长 10 秒），
  * 那段窗口里所有仓库都收不到任何文件事件，且不补票
  */
-describe("降级被闩住时不得跟着用户点击反复拆建监听（E2）", () => {
+describe("降级被闩住时不得跟着用户点击反复拆建监听", () => {
   /** 「路径还在、但就是挂不上」的目标：pathGone 只认 ENOENT，它留在分母里 → 永久降级 */
   function stuckWatcher(unmountable: string[]) {
     let mapped: WatchedRepo[] = []
@@ -803,12 +803,12 @@ describe("底层问题修好之后，重扫必须能把监听救回来（G2）",
   })
 })
 
-// 评审 I2：applyWatchLogged / PUT /api/config 把监听器的失败咽掉时，原先靠的是「下一轮扫描的
-// applyWatch 会重试」——本任务把周期路径收窄成 applyRepos 之后，那句承诺不再自动成立。
+// applyWatchLogged / PUT /api/config 把监听器的失败咽掉时，原先靠的是「下一轮扫描的
+// applyWatch 会重试」——周期路径收窄成 applyRepos 之后，那句承诺不再自动成立。
 // 「有目标没建成」（RecursiveRootStrategy 对单个 root 的失败是内部吞掉的，不向上抛异常，只是
 // 不把它放进返回的 ok 列表）记进 watchDegraded，由 applyRepos 在下一轮周期/手动重扫时补一次
 // 便宜的重挂——只有真的降级时才付这笔重建的代价，绝大多数重扫这个分支根本不会进
-describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）", () => {
+describe("watchDegraded 自愈：periodic 路径的便宜重挂", () => {
   it("applyWatch 有目标没建成时标记降级，下一次 applyRepos 会补一次重挂", async () => {
     let setRootsCalls = 0
     let ok: string[] = []
@@ -913,7 +913,7 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂（评审 I2）",
 })
 
 /**
- * A1：`excludes` 只能经由 `setRoots` 进 watcher（那是它唯一的入口）。不交出去的话，被排除的
+ * `excludes` 只能经由 `setRoots` 进 watcher（那是它唯一的入口）。不交出去的话，被排除的
  * 仓库不进 `scan()`、因而永远不在归属表里，它的每一次写入都走「未归属 → 结构变化」分支——
  * 一个**永不关闭的水龙头**：按 60 秒冷却无限触发 force=true 的全量重扫 + 完整 applyWatch 拆建
  */
@@ -949,10 +949,10 @@ describe("excludes 要交到 watcher 手上（A1）", () => {
 })
 
 /**
- * A2：路径失效的仓库会一直留在仓库列表里（Task 9 有意为之：不能让卡片静默消失，要产出一张
+ * 路径失效的仓库会一直留在仓库列表里（有意为之：不能让卡片静默消失，要产出一张
  * 「路径已失效」的错误卡片），而任何策略都挂不上一个不存在的路径。把它留在覆盖率的**分母**
  * 里的后果是 `watchDegraded` 与 applyRepos 的补挂条件被**永久闩住**：每一轮重扫都触发一次
- * 注定失败的 applyWatch（拆了重建全部句柄）——正是本轮重构要消灭的开销，只是换了个理由回来。
+ * 注定失败的 applyWatch（拆了重建全部句柄）——正是这次收窄要消灭的开销，只是换了个理由回来。
  */
 describe("已知路径失效的仓库不进覆盖率分母（A2）", () => {
   /** 路径失效的仓库任何策略都挂不上：逐仓库策略下 chokidar 前的 existsSync 预过滤把它剔掉，

@@ -558,7 +558,7 @@ describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）",
     // try/finally：下面任何一条断言抛出都会跳过 mockRestore，把 RepoWatcher.prototype 上的
     // 间谍泄漏给同文件后续用例——一条失败会连带诬告一批无关用例，排查起来比原始失败还难
     try {
-      // 手动点「重扫」：force=false，本任务的性能收益所在——只该改映射表，不该碰句柄
+      // 手动点「重扫」：force=false，收窄后的性能收益所在——只该改映射表，不该碰句柄
       await fetch(`http://127.0.0.1:${b.port}/api/scan`, { method: "POST" })
       expect(setReposSpy).toHaveBeenCalled()
       expect(setRootsSpy).not.toHaveBeenCalled()
@@ -588,7 +588,7 @@ describe("doRescanAndWatch 收尾按 force 走两条不同的路（约束 A）",
   })
 })
 
-// 评审 I1：force=true 的请求如果落在一个 force=false 轮次「已排队但还没开跑」的窗口里，
+// force=true 的请求如果落在一个 force=false 轮次「已排队但还没开跑」的窗口里，
 // 旧写法会被那一轮悄悄吞掉——约束 A 从另一个口子漏回来（死句柄不再发任何事件，之后也不会
 // 再有信号来救它）。这里不需要真实的 backend/HTTP：SerialQueue.share 排的任务必然要等一个
 // 微任务才真正开跑（tail.then 的回调不会同步执行），所以两次同步的 trigger() 调用——不在
@@ -667,7 +667,7 @@ describe("createRescanScheduler — force 与已排队轮次的交错（约束 A
   })
 })
 
-// 关停竞态（本轮重构引入）：重扫的收尾会走 applyWatch → watcher.setRoots，那是「重新建立监听」。
+// 关停竞态（监听收窄引入）：重扫的收尾会走 applyWatch → watcher.setRoots，那是「重新建立监听」。
 // 改造前的收尾无条件重装监听，关停时谁先谁后无所谓；现在退出要真正把监听关掉，就必须先等重扫链
 // 排空——否则 closeWatcher 关完之后，那一轮在飞的重扫又把句柄建回来，而这批句柄再没有人会去关。
 // drainOps 覆盖不到这条链：它排空的是每仓库的 git 操作锁（withRepoLock），重扫链不走那把锁。

@@ -37,7 +37,7 @@ describe("Backend.onInboxChanged", () => {
   })
 })
 
-// 缺陷 7：上面 Backend.onInboxChanged 的测试只验证了「没发生任何拉取时」的形状——真正的投递
+// 上面 Backend.onInboxChanged 的测试只验证了「没发生任何拉取时」的形状——真正的投递
 // （抛错隔离、空轮不发、多订阅者依次投递）没法靠它们触发，因为真正的 GitHub 拉取依赖 gh 已登录，
 // 在 CI/本机都不可靠。原先这里还有第三条名为「某个订阅者抛错不影响其它订阅者」的测试，
 // 但它只断言了 b.start() 会 resolve，从未真正触发过投递，已删除——改成直接对抽出来的
@@ -95,7 +95,7 @@ describe("createInboxEmitter", () => {
   })
 })
 
-// Minor 7：InboxChange 这个名字承诺的是「变化」，不该把「拉到了但和上次一模一样」也塞进去
+// InboxChange 这个名字承诺的是「变化」，不该把「拉到了但和上次一模一样」也塞进去
 describe("inboxEqual", () => {
   const base = { prs: 1, issues: 2, ciFailed: false, ciSha: "abc", byViewer: true }
 
