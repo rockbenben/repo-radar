@@ -165,6 +165,9 @@
   "card.filterTag": "Añadir filtro de etiqueta #{tag}",
   "card.favOn": "Favorito",
   "card.favOff": "Quitar favorito",
+  "card.suspectHint": "Probablemente movido desde {path} · las etiquetas pueden seguir en la tarjeta anterior",
+  "card.suspectMigrate": "Migrar",
+  "card.suspectIgnore": "Ignorar",
   "health.conflicted": "conflicto {n}",
   "health.noRemote": "sin remoto",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Algunos cambios no se pudieron descartar y deben gestionarse manualmente",
   "msg.discardUnbornHead": "Esta rama aún no tiene commits; descartar cambios no está disponible aquí",
   "msg.discardLog": "Descartar cambios sin confirmar de {name}",
+  "msg.rebindOk": "Identidad migrada al registro anterior · las etiquetas han vuelto",
+  "msg.rebindFail": "Fallo al migrar: {err}",
   "time.now": "ahora mismo"
 }

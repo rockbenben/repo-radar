@@ -29,8 +29,10 @@ function CommitPreview({ repoId, changes }: { repoId: string; changes: number })
       cancelled = true
     }
   }, [open, repoId])
+  // biome-ignore-start lint/a11y/noStaticElementInteractions: onClick 只为挡冒泡——预览浮层里点任何
+  // 东西都不该顺手打开详情面板；浮层自身无操作语义，可交互控件都在其内部各行
   const content = (
-    <div className="rr-preview" onClick={(e) => e.stopPropagation()}>
+    <div className="rr-preview" role="presentation" onClick={(e) => e.stopPropagation()}>
       {changes > 0 && <div className="ch">{t("preview.dirty", { n: changes })}</div>}
       {commits === null ? (
         <div className="dim">{t("preview.loading")}</div>
@@ -46,6 +48,7 @@ function CommitPreview({ repoId, changes }: { repoId: string; changes: number })
       )}
     </div>
   )
+  // biome-ignore-end lint/a11y/noStaticElementInteractions: 预览浮层豁免块结束
   return (
     <Popover
       open={open}
@@ -73,6 +76,8 @@ export interface RepoCardProps {
   onQuickFilter: (term: string) => void
   onFilterTag: (tag: string) => void
   onCopyPath: (path: string) => void
+  onRebindSuspect: (id: string) => void
+  onDismissSuspect: (id: string) => void
 }
 
 function severity(r: RepoStatus): "ok" | "warn" | "crit" {
@@ -115,7 +120,7 @@ function shortHealth(h: HealthIssue): string {
 }
 
 // memo：仅当自身 props 变化才重渲。配合 App 里稳定的回调 + mergeRepo 保留未变仓库引用，
-// 一条 repo:updated / 一次选择 / 打字搜索只重渲受影响的卡，而非全部 72 张。
+// 一条 repo:updated / 一次选择 / 打字搜索只重渲受影响的卡，而非全部卡片。
 export const RepoCard = memo(function RepoCard({
   repo,
   selected,
@@ -126,6 +131,8 @@ export const RepoCard = memo(function RepoCard({
   onQuickFilter,
   onFilterTag,
   onCopyPath,
+  onRebindSuspect,
+  onDismissSuspect,
 }: RepoCardProps) {
   const t = useT()
   const sev = severity(repo)
@@ -170,7 +177,9 @@ export const RepoCard = memo(function RepoCard({
             {slot}
           </span>
         )}
-        <span className="rr-c-name">{baseName}</span>
+        <button type="button" className="rr-c-name" onClick={(e) => { stop(e); onShowDetail(repo.id) }}>
+          {baseName}
+        </button>
         {repo.archived && <span className="rr-c-arch">{t("card.archived")}</span>}
         {repo.language && (
           <button type="button"
@@ -292,7 +301,21 @@ export const RepoCard = memo(function RepoCard({
         )}
       </div>
 
-      <div className="rr-c-acts" onClick={stop}>
+      {repo.suspect && (
+        <div className="rr-c-suspect">
+          <span className="tx">{t("card.suspectHint", { path: repo.suspect.oldPath })}</span>
+          <button type="button" className="mv" onClick={(e) => { stop(e); onRebindSuspect(repo.id) }}>
+            {t("card.suspectMigrate")}
+          </button>
+          <button type="button" className="ig" onClick={(e) => { stop(e); onDismissSuspect(repo.id) }}>
+            {t("card.suspectIgnore")}
+          </button>
+        </div>
+      )}
+
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: onClick 只为挡冒泡——操作栏空白处
+          点到不该触发「打开详情」，栏内按钮各有自己的 handler */}
+      <div className="rr-c-acts" role="presentation" onClick={stop}>
         <div className="rr-c-rail">
           {OPENS.map((o) => (
             <button type="button" key={o.key} className="seg" title={t("card.openWith", { label: t(o.tk) })} onClick={() => onOpen(repo.id, o.key)}>

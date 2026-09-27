@@ -165,6 +165,9 @@
   "card.filterTag": "Add tag filter #{tag}",
   "card.favOn": "Favorite",
   "card.favOff": "Unfavorite",
+  "card.suspectHint": "Likely a moved copy of {path} · its labels may still live on the old card",
+  "card.suspectMigrate": "Migrate",
+  "card.suspectIgnore": "Ignore",
   "health.conflicted": "conflict {n}",
   "health.noRemote": "no remote",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Some changes could not be discarded and need to be handled manually",
   "msg.discardUnbornHead": "This branch has no commits yet; discarding changes is not supported here",
   "msg.discardLog": "Discard uncommitted changes of {name}",
+  "msg.rebindOk": "Identity migrated to the old record — its labels came back with it",
+  "msg.rebindFail": "Migration failed: {err}",
   "time.now": "just now"
 }

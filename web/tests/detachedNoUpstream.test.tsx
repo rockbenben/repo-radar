@@ -50,6 +50,8 @@ const card = (repo: RepoStatus) =>
       onQuickFilter={noop}
       onFilterTag={noop}
       onCopyPath={noop}
+      onRebindSuspect={noop}
+      onDismissSuspect={noop}
     />,
   )
 

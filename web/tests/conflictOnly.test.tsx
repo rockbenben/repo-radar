@@ -46,6 +46,8 @@ const card = (dirty: DirtyCounts) => (
     onQuickFilter={noop}
     onFilterTag={noop}
     onCopyPath={noop}
+    onRebindSuspect={noop}
+    onDismissSuspect={noop}
   />
 )
 

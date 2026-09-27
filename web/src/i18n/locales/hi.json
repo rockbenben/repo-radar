@@ -165,6 +165,9 @@
   "card.filterTag": "टैग फ़िल्टर जोड़ें #{tag}",
   "card.favOn": "पसंदीदा",
   "card.favOff": "पसंदीदा हटाएँ",
+  "card.suspectHint": "संभवतः {path} से स्थानांतरित · लेबल पुराने कार्ड पर हो सकते हैं",
+  "card.suspectMigrate": "स्थानांतरित करें",
+  "card.suspectIgnore": "नज़रअंदाज़ करें",
   "health.conflicted": "conflict {n}",
   "health.noRemote": "कोई remote नहीं",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "कुछ बदलाव रद्द नहीं किए जा सके; उन्हें स्वयं संभालना होगा",
   "msg.discardUnbornHead": "इस ब्रांच में अभी कोई कमिट नहीं है; यहाँ बदलाव रद्द करना समर्थित नहीं है",
   "msg.discardLog": "{name} के uncommitted बदलाव discard किए गए",
+  "msg.rebindOk": "पहचान पुराने रिकॉर्ड पर स्थानांतरित हो गई · लेबल भी वापस आ गए",
+  "msg.rebindFail": "स्थानांतरण विफल: {err}",
   "time.now": "अभी-अभी"
 }

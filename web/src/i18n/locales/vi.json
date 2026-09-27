@@ -165,6 +165,9 @@
   "card.filterTag": "Thêm bộ lọc thẻ #{tag}",
   "card.favOn": "Yêu thích",
   "card.favOff": "Bỏ yêu thích",
+  "card.suspectHint": "Có thể đã chuyển từ {path} · nhãn có thể vẫn nằm trên thẻ cũ",
+  "card.suspectMigrate": "Di dời",
+  "card.suspectIgnore": "Bỏ qua",
   "health.conflicted": "xung đột {n}",
   "health.noRemote": "không remote",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Một số thay đổi không thể hủy và cần bạn tự xử lý",
   "msg.discardUnbornHead": "Nhánh này chưa có commit nào; không hỗ trợ hủy thay đổi ở đây",
   "msg.discardLog": "Discard thay đổi chưa commit của {name}",
+  "msg.rebindOk": "Đã di dời danh tính về bản ghi cũ · nhãn đã quay lại",
+  "msg.rebindFail": "Di dời thất bại: {err}",
   "time.now": "vừa xong"
 }

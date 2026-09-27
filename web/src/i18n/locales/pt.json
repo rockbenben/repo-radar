@@ -165,6 +165,9 @@
   "card.filterTag": "Adicionar filtro de tag #{tag}",
   "card.favOn": "Favoritar",
   "card.favOff": "Desfavoritar",
+  "card.suspectHint": "Talvez movido de {path} · as tags podem estar no cartão antigo",
+  "card.suspectMigrate": "Migrar",
+  "card.suspectIgnore": "Ignorar",
   "health.conflicted": "conflito {n}",
   "health.noRemote": "sem remoto",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Algumas alterações não puderam ser descartadas e precisam ser tratadas manualmente",
   "msg.discardUnbornHead": "Este branch ainda não tem commits; descartar alterações não é suportado aqui",
   "msg.discardLog": "Descartar alterações não commitadas de {name}",
+  "msg.rebindOk": "Identidade migrada para o registro antigo · as tags voltaram",
+  "msg.rebindFail": "Falha ao migrar: {err}",
   "time.now": "agora mesmo"
 }

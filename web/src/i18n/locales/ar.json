@@ -165,6 +165,9 @@
   "card.filterTag": "أضف تصفية الوسم #{tag}",
   "card.favOn": "إضافة للمفضلة",
   "card.favOff": "إزالة من المفضلة",
+  "card.suspectHint": "ربما نُقل من {path} · قد تكون الوسوم لا تزال على البطاقة القديمة",
+  "card.suspectMigrate": "نقل",
+  "card.suspectIgnore": "تجاهل",
   "health.conflicted": "تعارض {n}",
   "health.noRemote": "لا يوجد بعيد",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "تعذّر تجاهل بعض التغييرات ويجب معالجتها يدويًا",
   "msg.discardUnbornHead": "لا توجد commits في هذا الفرع بعد؛ تجاهل التغييرات غير مدعوم هنا",
   "msg.discardLog": "تجاهل التغييرات غير الملتزمة لـ {name}",
+  "msg.rebindOk": "نُقلت الهوية إلى السجل القديم · عادت الوسوم معها",
+  "msg.rebindFail": "فشل النقل: {err}",
   "time.now": "الآن"
 }

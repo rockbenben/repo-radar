@@ -165,6 +165,9 @@
   "card.filterTag": "태그 필터 추가 #{tag}",
   "card.favOn": "즐겨찾기",
   "card.favOff": "즐겨찾기 해제",
+  "card.suspectHint": "{path}에서 이동한 것으로 보입니다 · 태그가 이전 카드에 남아 있을 수 있습니다",
+  "card.suspectMigrate": "마이그레이션",
+  "card.suspectIgnore": "무시",
   "health.conflicted": "충돌 {n}",
   "health.noRemote": "원격 없음",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "일부 변경 사항은 취소하지 못했습니다. 직접 처리하세요",
   "msg.discardUnbornHead": "이 브랜치에는 아직 커밋이 없습니다. 여기서는 변경 사항 취소를 지원하지 않습니다",
   "msg.discardLog": "discard {name}의 미commit 변경 사항",
+  "msg.rebindOk": "이전 기록으로 신원을 마이그레이션했습니다 · 태그도 함께 돌아왔습니다",
+  "msg.rebindFail": "마이그레이션 실패: {err}",
   "time.now": "방금"
 }

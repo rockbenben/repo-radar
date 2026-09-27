@@ -59,6 +59,9 @@ export interface RepoStatus {
   githubInbox: GithubInbox | null // 跨仓库「等我的」：PR/issue/CI（后台补全，无 GitHub 远程或未拉到为 null）
   error: string | null
   scannedAt: string // ISO 8601
+  // 疑似旧身份（服务端检测：这条卡是新铸 id，但账本里恰有一条已失联、同 origin 的老条目，
+  // 标签可能还挂在旧身份上）。null/缺省 = 没有线索；用户确认迁移（rebind）或忽略后消失
+  suspect?: { oldId: string; oldPath: string } | null
 }
 
 export interface GithubInbox {

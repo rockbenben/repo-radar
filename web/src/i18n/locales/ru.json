@@ -165,6 +165,9 @@
   "card.filterTag": "Добавить фильтр по тегу #{tag}",
   "card.favOn": "В избранное",
   "card.favOff": "Убрать из избранного",
+  "card.suspectHint": "Возможно, перемещено из {path} · метки могли остаться на старой карточке",
+  "card.suspectMigrate": "Перенести",
+  "card.suspectIgnore": "Игнорировать",
   "health.conflicted": "конфликт {n}",
   "health.noRemote": "нет удалённого",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Часть изменений не удалось отменить — обработайте их вручную",
   "msg.discardUnbornHead": "В этой ветке ещё нет коммитов — отмена изменений здесь не поддерживается",
   "msg.discardLog": "Discard незакоммиченных изменений {name}",
+  "msg.rebindOk": "Личность перенесена на старую запись · метки вернулись",
+  "msg.rebindFail": "Сбой переноса: {err}",
   "time.now": "только что"
 }

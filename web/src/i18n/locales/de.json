@@ -165,6 +165,9 @@
   "card.filterTag": "Tag-Filter #{tag} hinzufügen",
   "card.favOn": "Favorit",
   "card.favOff": "Favorit entfernen",
+  "card.suspectHint": "Vermutlich von {path} verschoben · Labels könnten noch auf der alten Karte sein",
+  "card.suspectMigrate": "Übernehmen",
+  "card.suspectIgnore": "Ignorieren",
   "health.conflicted": "Konflikt {n}",
   "health.noRemote": "kein Remote",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Einige Änderungen konnten nicht verworfen werden und müssen manuell behandelt werden",
   "msg.discardUnbornHead": "Dieser Branch hat noch keine Commits; das Verwerfen von Änderungen wird hier nicht unterstützt",
   "msg.discardLog": "Nicht committete Änderungen von {name} verwerfen",
+  "msg.rebindOk": "Identität auf den alten Eintrag übernommen — Labels sind wieder da",
+  "msg.rebindFail": "Übernahme fehlgeschlagen: {err}",
   "time.now": "gerade eben"
 }

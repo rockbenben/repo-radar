@@ -165,6 +165,9 @@
   "card.filterTag": "タグ絞り込みに追加 #{tag}",
   "card.favOn": "お気に入り",
   "card.favOff": "お気に入り解除",
+  "card.suspectHint": "{path} から移動された可能性あり · タグは古いカードに残っているかも",
+  "card.suspectMigrate": "移行",
+  "card.suspectIgnore": "無視",
   "health.conflicted": "conflict {n}",
   "health.noRemote": "リモートなし",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "一部の変更は破棄できませんでした。手動で処理してください",
   "msg.discardUnbornHead": "このブランチにはまだコミットがありません。ここでは変更の破棄に対応していません",
   "msg.discardLog": "{name} の未コミットの変更を破棄",
+  "msg.rebindOk": "古いレコードへ身元を移行しました · タグも一緒に戻りました",
+  "msg.rebindFail": "移行に失敗：{err}",
   "time.now": "たった今"
 }

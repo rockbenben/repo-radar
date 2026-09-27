@@ -165,6 +165,9 @@
   "card.filterTag": "เพิ่มตัวกรองแท็ก #{tag}",
   "card.favOn": "ชื่นชอบ",
   "card.favOff": "เลิกชื่นชอบ",
+  "card.suspectHint": "อาจย้ายมาจาก {path} · ป้ายอาจยังอยู่บนการ์ดเก่า",
+  "card.suspectMigrate": "ย้าย",
+  "card.suspectIgnore": "ข้าม",
   "health.conflicted": "ขัดแย้ง {n}",
   "health.noRemote": "ไม่มีรีโมท",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "ไม่สามารถยกเลิกการเปลี่ยนแปลงบางส่วนได้ ต้องจัดการเอง",
   "msg.discardUnbornHead": "สาขานี้ยังไม่มีคอมมิต จึงยังไม่รองรับการยกเลิกการเปลี่ยนแปลงที่นี่",
   "msg.discardLog": "Discard การเปลี่ยนแปลงที่ยังไม่ได้ commit ของ {name}",
+  "msg.rebindOk": "ย้ายตัวตนไปยังบันทึกเดิมแล้ว · ป้ายกลับมาด้วย",
+  "msg.rebindFail": "ย้ายไม่สำเร็จ: {err}",
   "time.now": "เมื่อกี้"
 }

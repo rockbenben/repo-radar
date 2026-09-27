@@ -6,14 +6,34 @@ import { DetailPanel } from "./components/DetailPanel"
 import { RepoCard } from "./components/RepoCard"
 import { ScanConfigEditor } from "./components/ScanConfigEditor"
 import { ScopeMark } from "./components/ScopeMark"
+import { SelIcon } from "./components/SelIcon"
 import { StashView } from "./components/StashView"
 import { StatsView } from "./components/StatsView"
 import { WorklogView } from "./components/WorklogView"
 import { LANGS, useI18n } from "./i18n"
+import {
+  ATTENTION,
+  type AttentionKey,
+  activeRelease,
+  activeStashDays,
+  COUNT_KINDS,
+  days,
+  dismissKey,
+  dismissVal,
+  formatMark,
+  issueActive,
+  kindArrivals,
+  kindCount,
+  LAMP_KEYS,
+  LAMP_OP,
+  parseMark,
+  STASH_SNOOZE_MS,
+} from "./lib/attention"
 import { type HasRootsState, resolveEmptyArea } from "./lib/emptyState"
 import { applyFilter, type FilterState } from "./lib/filter"
 import { visibleLamps } from "./lib/lamps"
-import { daysSince, isGithubUrl } from "./lib/meta"
+import { isGithubUrl } from "./lib/meta"
+import { type LogEntry, loadLog, loadViews, pref, type SavedView, savePref } from "./lib/prefs"
 import { mergeRepo, parentOf } from "./lib/repos"
 import { relativeTime } from "./lib/time"
 import { connectEvents, type ServerEvent } from "./lib/ws"
@@ -21,142 +41,10 @@ import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
 
 const JSON_HEADERS = { "content-type": "application/json" }
 
-/** 顶栏下拉的角色标记：三个 Select 外观相同、值又会变，没有常驻图标就分不清谁是谁。
- *  漏斗=按分组筛选、双向箭头=排序、栅格=分组方式；currentColor 内联 SVG，随主题走 */
-function SelIcon({ kind }: { kind: "filter" | "sort" | "group" }) {
-  const path =
-    kind === "filter"
-      ? "M2 3h12l-4.5 5.2V13l-3-1.5V8.2L2 3Z" // 漏斗
-      : kind === "sort"
-        ? "M5 3v10M5 13l-2.4-2.6M5 13l2.4-2.6M11 13V3M11 3l-2.4 2.6M11 3l2.4 2.6" // 上下双箭头
-        : "M2.5 2.5h4.6v4.6H2.5zM8.9 2.5h4.6v4.6H8.9zM2.5 8.9h4.6v4.6H2.5zM8.9 8.9h4.6v4.6H8.9z" // 四宫格
-  return (
-    <svg className="rr-sel-ic" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
-      <path d={path} />
-    </svg>
-  )
-}
-
 // 是否已配置过扫描来源。挂载时和保存扫描目录后都要算一次，抽出来避免两处判断口径跑偏
 const configHasRoots = (c: { roots?: unknown[]; manualRepos?: unknown[] }) =>
   (c.roots?.length ?? 0) > 0 || (c.manualRepos?.length ?? 0) > 0
 const REPO_URL = "https://github.com/rockbenben/repo-radar" // 顶栏 GitHub 链接（与 package.json repository 一致）
-
-const days = (d?: string | null): number => daysSince(d ?? null) ?? 0
-const RELEASE_MIN_AHEAD = 3 // 发版雷达：tag 之后堆到几个提交才提醒（刚发完版提交一两个别急着烦人）
-const STASH_MIN_DAYS = 7 // stash 搁几天才提醒
-const STASH_SNOOZE_MS = 30 * 86_400_000 // stash「已处理」是打盹不是消除：30 天后再提醒（不然真忘了的那条永远不响）
-// 「已处理」三种失效规则：
-// 计数类（PR/issue/落后/未推/未发版）——存当时数量，只在「更多（来了新的）」时重现；
-// stash——打盹：存点击时间，30 天到点重响；HEAD 类（没提交/冲突/CI）——存 HEAD hash，提交一次才重评。
-const COUNT_KINDS = new Set(["pr", "issue", "behind", "unpushed", "release"])
-
-/**
- * 计数类「已处理」的存储形状：`"4"`（水位）或 `"4@7"`（水位 @ 点击当时服务端的累计新到达数）。
- *
- * 为什么要多存后半截：光靠水位，「下探」只有在渲染进程活着、并且恰好观察到那一轮时才会被记下
- * （下面清理 effect 里的降档）。托盘常驻（--tray / 开机自启）恰恰是没有渲染进程的形态——
- * 4 个 PR 全被合掉（差值 ≤ 0 不弹通知，也没人降水位）、随后来了 2 个新的：系统通知照弹
- * 「PR +2」，用户点进来，这边却按 2 ≤ 4 判定为已处理，「该你了」里根本没有这条；紧接着清理
- * effect 把水位降到 2，2 ≤ 2 依然成立——除非 PR 数涨过 2，否则再也不出现。用户被通知叫来看一个
- * 不存在的条目，界面上还没有「撤销已处理」的入口。
- * 服务端在 InboxCache 里逐轮累加「新到达」数（只增不减，见 server/src/types.ts 的 prsAdded），
- * 面板关着的那些轮次照记，于是这里只要比对基线就知道「点了已处理之后到底有没有新东西进来」。
- * 只有 pr/issue 有这份服务端记账；旧格式（纯数字）与其余计数类退回原来的纯水位比较，
- * 下次点「已处理」时自动升级成新格式。
- */
-const parseMark = (v: string): { n: number; base: number | null } => {
-  const at = v.indexOf("@")
-  return at < 0 ? { n: Number(v), base: null } : { n: Number(v.slice(0, at)), base: Number(v.slice(at + 1)) }
-}
-const formatMark = (n: number, base: number | null): string => (base === null ? String(n) : `${n}@${base}`)
-
-// 服务端记的累计新到达数；没有这份记账（非 GitHub 类、或还没拉到 inbox）返回 null
-function kindArrivals(r: RepoStatus, kind: string): number | null {
-  switch (kind) {
-    case "pr":
-      return r.githubInbox?.prsAdded ?? null
-    case "issue":
-      return r.githubInbox?.issuesAdded ?? null
-    default:
-      return null
-  }
-}
-
-// 计数类问题的当前数量——「已处理」清理时用来给水位降档
-function kindCount(r: RepoStatus, kind: string): number {
-  switch (kind) {
-    case "pr":
-      return r.githubInbox?.prs ?? 0
-    case "issue":
-      return r.githubInbox?.issues ?? 0
-    case "behind":
-      return r.behind
-    case "unpushed":
-      return r.ahead
-    case "release":
-      return r.release?.ahead ?? 0
-    default:
-      return 0
-  }
-}
-
-// 发版/stash 是否「该提醒」——队列生成与「已处理」清理共用一份判定，避免两处阈值漂移。
-// 返回上下文（而非布尔）省去调用侧的重复计算与非空断言。
-const activeRelease = (r: RepoStatus) => (r.release && r.release.ahead >= RELEASE_MIN_AHEAD ? r.release : null)
-const activeStashDays = (r: RepoStatus): number | null => {
-  if (r.stashCount === 0) return null
-  const d = days(r.stashOldest)
-  return d >= STASH_MIN_DAYS ? d : null
-}
-
-// 某仓库的某类「待处理」问题当前是否仍成立——用于清理已解决的「已处理」记录（解决即清，别压制之后的新情况）。
-// 计数类直接委托 kindCount（同一映射，别再抄一份数字来源）；release 例外——它的「成立」带阈值。
-function issueActive(r: RepoStatus, kind: string): boolean {
-  if (kind === "release") return activeRelease(r) !== null
-  if (COUNT_KINDS.has(kind)) return kindCount(r, kind) > 0
-  switch (kind) {
-    case "ci":
-      return !!r.githubInbox?.ciFailed
-    case "conflict":
-      return r.dirty.conflicted > 0
-    case "dirty":
-      return r.dirty.staged + r.dirty.unstaged + r.dirty.untracked > 0
-    case "stash":
-      return activeStashDays(r) !== null
-    default:
-      return false
-  }
-}
-
-// 记住显示选项（每浏览器）；搜索词与告警筛选不持久化，刷新即清空
-const pref = (key: string, fallback: string) => {
-  try {
-    return localStorage.getItem(`rr.${key}`) ?? fallback
-  } catch {
-    return fallback
-  }
-}
-const savePref = (key: string, value: string) => {
-  try {
-    localStorage.setItem(`rr.${key}`, value)
-  } catch {
-    /* localStorage 不可用时静默 */
-  }
-}
-
-type AttentionKey = "no-remote" | "detached" | "unpushed" | "dirty" | "behind" | "stash"
-const ATTENTION: { key: AttentionKey; labelKey: string; sev: "crit" | "warn" | "" ; test: (r: RepoStatus) => boolean }[] = [
-  { key: "no-remote", labelKey: "lamp.noRemote", sev: "crit", test: (r) => r.remotes.length === 0 },
-  { key: "detached", labelKey: "lamp.detached", sev: "crit", test: (r) => r.branch === null },
-  { key: "unpushed", labelKey: "lamp.unpushed", sev: "warn", test: (r) => r.ahead > 0 },
-  { key: "dirty", labelKey: "lamp.dirty", sev: "warn", test: (r) => r.dirty.staged + r.dirty.unstaged + r.dirty.untracked > 0 },
-  { key: "behind", labelKey: "lamp.behind", sev: "warn", test: (r) => r.behind > 0 },
-  { key: "stash", labelKey: "lamp.stash", sev: "", test: (r) => r.stashCount > 0 },
-]
-// 可一键批量处理的告警类型 → 对应的 git 操作
-const LAMP_OP: Partial<Record<AttentionKey, "push" | "pull">> = { unpushed: "push", behind: "pull" }
-const LAMP_KEYS = ATTENTION.map((a) => a.key)
 
 // 设置弹窗的两栏，按**交互模型**分：常规里点完即生效，扫描与打开方式要显式保存并重扫。
 // 第二项复用已有的 scan.title，只有「常规」是新词
@@ -165,34 +53,6 @@ const SETTINGS_TABS: { key: SettingsTab; labelKey: string }[] = [
   { key: "general", labelKey: "settings.tabGeneral" },
   { key: "scan", labelKey: "scan.title" },
 ]
-
-// 保存的视图：一套命名的筛选 + 排序 + 分组组合
-type SavedView = {
-  name: string
-  query: string
-  group: string | null
-  sort: FilterState["sort"]
-  groupMode: "folder" | "language" | "none"
-  attention: AttentionKey | null
-  tags?: string[]
-}
-const loadViews = (): SavedView[] => {
-  try {
-    return JSON.parse(localStorage.getItem("rr.views") ?? "[]") as SavedView[]
-  } catch {
-    return []
-  }
-}
-
-// 操作日志（客户端滚动记录）
-type LogEntry = { t: number; ok: boolean; text: string }
-const loadLog = (): LogEntry[] => {
-  try {
-    return JSON.parse(localStorage.getItem("rr.log") ?? "[]") as LogEntry[]
-  } catch {
-    return []
-  }
-}
 
 export default function App({
   themeMode,
@@ -231,8 +91,10 @@ export default function App({
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number } | null>(null)
   const [view, setView] = useState<"board" | "stats" | "log" | "worklog">(() => pref("view", "board") as "board" | "stats" | "log" | "worklog")
   const [log, setLog] = useState<LogEntry[]>(loadLog)
-  const addLog = (ok: boolean, text: string) =>
-    setLog((prev) => [{ t: Date.now(), ok, text }, ...prev].slice(0, 80))
+  const addLog = useCallback(
+    (ok: boolean, text: string) => setLog((prev) => [{ t: Date.now(), ok, text }, ...prev].slice(0, 80)),
+    [],
+  )
   const [groupMode, setGroupMode] = useState<"folder" | "language" | "none">(
     () => pref("group", "none") as "folder" | "language" | "none",
   )
@@ -393,7 +255,8 @@ export default function App({
     setSelected((s) => new Set([...s].filter((id) => data.some((r) => r.id === id))))
   }, [])
 
-  async function rescan() {
+  // useCallback 而非函数声明：WS effect 把它列进依赖，身份必须稳定，否则每轮渲染重连
+  const rescan = useCallback(async () => {
     setScanning(true)
     try {
       const res = await fetch("/api/scan", { method: "POST" })
@@ -405,13 +268,14 @@ export default function App({
       // 服务端和界面在同一台机器上，客户端的 now 与服务端的完成时刻只差毫秒级
       setLastScanAt(new Date().toISOString())
     } catch (err) {
-      setLoadError(t("msg.loadError", { err: String(err) }))
-      addLog(false, t("msg.scanFail", { err: String(err) }))
+      // tRef 而不是 t：稳定身份不能捕获当轮渲染的翻译闭包
+      setLoadError(tRef.current("msg.loadError", { err: String(err) }))
+      addLog(false, tRef.current("msg.scanFail", { err: String(err) }))
     } finally {
       setScanning(false)
       setScanProgress(null)
     }
-  }
+  }, [applyScanResult, addLog])
 
   useEffect(() => {
     rescan()
@@ -458,8 +322,7 @@ export default function App({
       // 否则「上次扫描」会一直停在断线前的旧值，比不显示更误导
       void syncScanStatus()
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncScanStatus, applyScanResult])
+  }, [syncScanStatus, applyScanResult, rescan, addLog])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -649,6 +512,39 @@ export default function App({
     },
     [],
   )
+  // 「疑似旧身份」·迁移：服务端验完四道前提后把这条卡路份交回老 id（新铸 id 出账）。
+  // 必须整轮重扫而不是 mergeRepo——两张卡合成一张、id 也换了，增量合并表达不了
+  const rebindSuspect = useCallback(
+    async (id: string) => {
+      try {
+        const res = await fetch(`/api/repos/${id}/rebind`, { method: "POST" })
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        if (!res.ok) {
+          message.warning(t("msg.rebindFail", { err: String(body.error ?? res.status) }))
+          return
+        }
+        message.success(t("msg.rebindOk"))
+        await rescan()
+      } catch (err) {
+        message.warning(t("msg.rebindFail", { err: String(err) }))
+      }
+    },
+    [message, t, rescan],
+  )
+  // ·忽略：只摘提示，服务端广播 repo:updated 让提示条就地消失，增量合并够用
+  const dismissSuspect = useCallback(
+    async (id: string) => {
+      try {
+        const res = await fetch(`/api/repos/${id}/suspect-dismiss`, { method: "POST" })
+        if (!res.ok) return
+        const updated = (await res.json()) as RepoStatus
+        setRepos((rs) => mergeRepo(rs, updated))
+      } catch {
+        // 静默：提示条留着，下一轮或再点一次都不伤数据
+      }
+    },
+    [],
+  )
   // 卡片专用的稳定回调（配合 RepoCard 的 memo，避免每次渲染换新函数使 memo 失效）
   const toggleFavorite = useCallback((id: string, next: boolean) => patchMeta(id, { favorite: next }), [patchMeta])
   const quickFilter = useCallback((term: string) => setFilter((f) => ({ ...f, query: term })), [])
@@ -765,7 +661,7 @@ export default function App({
         setConfigLoaded(false)
         // 请求真的失败了（后端还在跑启动扫描、休眠唤醒后 socket 被重置等）：hasRoots 置为
         // "unknown"，与「还没拉到结果」的 null 严格区分开——unknown 走明确的错误提示 + 重试
-        // 入口，绝不能被当成「确知没配置过」去显示首次运行的欢迎文案（缺陷 2）
+        // 入口，绝不能被当成「确知没配置过」去显示首次运行的欢迎文案
         setHasRoots("unknown")
       })
   }, [])
@@ -801,7 +697,7 @@ export default function App({
       message.error(t("msg.autostartFail"))
     }
   }
-  // 退出后台服务（仅 exe 模式；macOS 的 .app 没有 Dock 图标和控制台，这是唯一的退出途径）
+  // 退出后台服务——设置里这个按钮只跟 /api/shutdown 端点是否存在挂钩（canQuit），与打包形态无关
   async function quitApp() {
     let ok = true
     try {
@@ -916,40 +812,31 @@ export default function App({
   }, [active, repos])
   const stashTotal = useMemo(() => active.reduce((s, r) => s + r.stashCount, 0), [active])
 
-  const dismissKey = (q: { r: RepoStatus; kind: string }) => `${q.r.id}:${q.kind}`
-  // ci 按「远程默认分支 oid」记（CI 红是远端条件，按本地 HEAD 记的话别人推新提交触发的新失败永远不重现）；
-  // 缓存还没有 ciSha 时存哨兵 "0"——绝不落本地 hash：oid 下一轮到达时会和本地 hash 对不上，
-  // 刚点的已处理会无故复活（迁移重现）。哨兵语义见 isDismissed。
-  const dismissVal = (q: { r: RepoStatus; kind: string; n: number }) =>
-    q.kind === "stash"
-      ? String(Date.now())
-      : q.kind === "ci"
-        ? (q.r.githubInbox?.ciSha ?? "0")
-        : COUNT_KINDS.has(q.kind)
-          ? formatMark(q.n, kindArrivals(q.r, q.kind)) // pr/issue 连服务端的累计新到达数一起存作基线
-          : (q.r.lastCommit?.hash ?? "0")
-  const isDismissed = (q: { r: RepoStatus; kind: string; n: number }): boolean => {
-    const stored = dismissed[dismissKey(q)]
-    if (stored === undefined) return false
-    if (q.kind === "stash") return Date.now() - Number(stored) < STASH_SNOOZE_MS
-    // ci 的哨兵记录（点已处理时还没拿到 oid）：这轮红持续期间保持已处理，转绿由清理 effect 收走；
-    // 只对存量哨兵如此——现在 oid 随轮询必达，新点的已处理都按 oid 记、新失败照常重现
-    if (q.kind === "ci" && stored === "0") return true
-    if (!COUNT_KINDS.has(q.kind)) return stored === dismissVal(q)
-    const { n, base } = parseMark(stored)
-    const arrivals = kindArrivals(q.r, q.kind)
-    // 服务端记账说「点了已处理之后累计数变过」→ 立刻重现，与这边有没有看见计数下探无关。
-    // 比的是 `!==` 而不是 `>`：累计数**变小**不代表「没有新到达」，只可能是服务端那个计数器
-    // 被重置了（InboxCache 见 origin url 变了就从 0 重记——HTTPS 换 SSH、GitHub 上改仓库名后
-    // 更新远程、加/去 .git 后缀都算；github-inbox.json 损坏或被剪枝同理），而基线存在
-    // localStorage、键是 repoId，身份账本保证改远程不换 id，于是旧基线原地不动。
-    // 当成「没有新到达」的话，这个功能要修的症状原样复现：通知弹了「PR +2」、用户点进来
-    // 队列里却没有这条，而且要再攒够 base+1 次新到达才解除。计数器重置只能靠「对不上」认出来。
-    // 保守侧的代价：重置之后这条会多冒一次，用户再点一次 ✓ 就重新对上表。
-    // 没有基线（旧格式记录）或服务端没给记账时退回原来的纯水位比较
-    if (base !== null && arrivals !== null && arrivals !== base) return false
-    return q.n <= n
-  }
+  const isDismissed = useCallback(
+    (q: { r: RepoStatus; kind: string; n: number }): boolean => {
+      const stored = dismissed[dismissKey(q)]
+      if (stored === undefined) return false
+      if (q.kind === "stash") return Date.now() - Number(stored) < STASH_SNOOZE_MS
+      // ci 的哨兵记录（点已处理时还没拿到 oid）：这轮红持续期间保持已处理，转绿由清理 effect 收走；
+      // 只对存量哨兵如此——现在 oid 随轮询必达，新点的已处理都按 oid 记、新失败照常重现
+      if (q.kind === "ci" && stored === "0") return true
+      if (!COUNT_KINDS.has(q.kind)) return stored === dismissVal(q)
+      const { n, base } = parseMark(stored)
+      const arrivals = kindArrivals(q.r, q.kind)
+      // 服务端记账说「点了已处理之后累计数变过」→ 立刻重现，与这边有没有看见计数下探无关。
+      // 比的是 `!==` 而不是 `>`：累计数**变小**不代表「没有新到达」，只可能是服务端那个计数器
+      // 被重置了（InboxCache 见 origin url 变了就从 0 重记——HTTPS 换 SSH、GitHub 上改仓库名后
+      // 更新远程、加/去 .git 后缀都算；github-inbox.json 损坏或被剪枝同理），而基线存在
+      // localStorage、键是 repoId，身份账本保证改远程不换 id，于是旧基线原地不动。
+      // 当成「没有新到达」的话，这个功能要修的症状原样复现：通知弹了「PR +2」、用户点进来
+      // 队列里却没有这条，而且要再攒够 base+1 次新到达才解除。计数器重置只能靠「对不上」认出来。
+      // 保守侧的代价：重置之后这条会多冒一次，用户再点一次 ✓ 就重新对上表。
+      // 没有基线（旧格式记录）或服务端没给记账时退回原来的纯水位比较
+      if (base !== null && arrivals !== null && arrivals !== base) return false
+      return q.n <= n
+    },
+    [dismissed],
+  )
   // 10 分钟心跳：stash 打盹到期等纯时间条件也能在长开的标签页里重评（否则没有 repo 更新就永远不重算）
   const [queueTick, setQueueTick] = useState(0)
   useEffect(() => {
@@ -966,6 +853,8 @@ export default function App({
   // 该你了：按紧迫度排的跨仓库行动队列。每个仓库列出全部问题、取「第一条没被已处理的」——
   // 不是取最紧迫那条再过滤：那样把 PR 点了已处理，会连带藏掉同仓库排位更低的冲突/落后等仍在的问题。
   // 「等我的」（CI 红 / PR / issue）> 「要丢的活」（冲突/落后/没提交/没推）>「该交付的」（该发版）>「快忘的」（stash 搁置）。
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: queueTick 是 10 分钟心跳，本体不读它，
+  // 只为让 stash 打盹等到纯时间条件在长开的标签页里被重评
   const actionQueueVisible = useMemo(() => {
     return active
       .map((r) => {
@@ -995,8 +884,8 @@ export default function App({
       })
       .filter((x): x is QueueItem => x !== null)
       .sort((a, b) => b.score - a.score)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, dismissed, queueTick])
+  }, [active, isDismissed, queueTick])
+  // biome-ignore-end lint/correctness/useExhaustiveDependencies: 心跳豁免块结束
   const dismissItem = (q: { r: RepoStatus; kind: string; n: number }) => setDismissed((d) => ({ ...d, [dismissKey(q)]: dismissVal(q) }))
 
   // 默认只看未排除的；「已排除」开关切换为只看被排除的那些（便于管理 / 取消排除）
@@ -1044,6 +933,8 @@ export default function App({
       onQuickFilter={quickFilter}
       onFilterTag={filterTag}
       onCopyPath={copyPath}
+      onRebindSuspect={rebindSuspect}
+      onDismissSuspect={dismissSuspect}
     />
   )
 
@@ -1756,7 +1647,7 @@ export default function App({
             ))
           )}
           {loadError !== null && <div className="rr-empty err">{loadError}</div>}
-          {/* 空状态：三态分流交给 resolveEmptyArea 纯函数（好单测）。缺陷 2 的要点是永远不能把
+          {/* 空状态：三态分流交给 resolveEmptyArea 纯函数（好单测）。要点是永远不能把
               「不知道」显示成「首次运行」——loading（配置请求还没回来）和 configError（请求确实
               失败了）都要有各自明确的展示，只有确知 hasRoots===false 才走欢迎页；任何一种都不能
               导致主区域什么都不渲染 */}

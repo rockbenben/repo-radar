@@ -240,6 +240,8 @@ describe("卡片「⋯」预览的最近提交", () => {
               onQuickFilter={noop}
               onFilterTag={noop}
               onCopyPath={noop}
+              onRebindSuspect={noop}
+              onDismissSuspect={noop}
             />
           </AntApp>
         </I18nProvider>

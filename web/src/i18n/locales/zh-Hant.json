@@ -165,6 +165,9 @@
   "card.filterTag": "加入標籤篩選 #{tag}",
   "card.favOn": "收藏",
   "card.favOff": "取消收藏",
+  "card.suspectHint": "疑似從 {path} 搬移 · 標籤可能仍掛在舊卡片上",
+  "card.suspectMigrate": "遷移",
+  "card.suspectIgnore": "忽略",
   "health.conflicted": "衝突 {n}",
   "health.noRemote": "無遠端",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "有一部分變更這次沒能捨棄，需自行處理",
   "msg.discardUnbornHead": "目前分支還沒有提交，這裡暫不支援捨棄變更",
   "msg.discardLog": "捨棄 {name} 的未提交變更",
+  "msg.rebindOk": "身分已遷回舊記錄 · 標籤跟著回來了",
+  "msg.rebindFail": "遷移失敗：{err}",
   "time.now": "剛剛"
 }

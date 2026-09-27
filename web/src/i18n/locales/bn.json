@@ -165,6 +165,9 @@
   "card.filterTag": "ট্যাগ ফিল্টার যোগ #{tag}",
   "card.favOn": "প্রিয়",
   "card.favOff": "প্রিয় থেকে সরান",
+  "card.suspectHint": "সম্ভবত {path} থেকে সরানো হয়েছে · লেবেল হয়তো পুরনো কার্ডে আছে",
+  "card.suspectMigrate": "স্থানান্তর",
+  "card.suspectIgnore": "উপেক্ষা",
   "health.conflicted": "conflict {n}",
   "health.noRemote": "রিমোট নেই",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "কিছু পরিবর্তন বাতিল করা যায়নি; সেগুলি নিজে সামলাতে হবে",
   "msg.discardUnbornHead": "এই ব্রাঞ্চে এখনও কোনো কমিট নেই; এখানে পরিবর্তন বাতিল করা সমর্থিত নয়",
   "msg.discardLog": "{name}-এর আনকমিটেড পরিবর্তন discard করা হলো",
+  "msg.rebindOk": "পরিচয় পুরনো রেকর্ডে স্থানান্তরিত হয়েছে · লেবেলও ফিরে এসেছে",
+  "msg.rebindFail": "স্থানান্তর ব্যর্থ: {err}",
   "time.now": "এইমাত্র"
 }

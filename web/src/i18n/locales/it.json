@@ -165,6 +165,9 @@
   "card.filterTag": "Aggiungi filtro tag #{tag}",
   "card.favOn": "Preferito",
   "card.favOff": "Rimuovi dai preferiti",
+  "card.suspectHint": "Forse spostato da {path} · i tag potrebbero essere ancora sulla vecchia scheda",
+  "card.suspectMigrate": "Migra",
+  "card.suspectIgnore": "Ignora",
   "health.conflicted": "conflitto {n}",
   "health.noRemote": "nessun remote",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Alcune modifiche non sono state annullate e vanno gestite manualmente",
   "msg.discardUnbornHead": "Questo branch non ha ancora commit; qui non è possibile annullare le modifiche",
   "msg.discardLog": "Scarta le modifiche non committate di {name}",
+  "msg.rebindOk": "Identità migrata al vecchio record · i tag sono tornati",
+  "msg.rebindFail": "Migrazione non riuscita: {err}",
   "time.now": "adesso"
 }

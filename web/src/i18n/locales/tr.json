@@ -165,6 +165,9 @@
   "card.filterTag": "#{tag} etiket süzgeci ekle",
   "card.favOn": "Favori",
   "card.favOff": "Favoriden çıkar",
+  "card.suspectHint": "{path} konumundan taşınmış olabilir · etiketler eski kartta kalmış olabilir",
+  "card.suspectMigrate": "Taşı",
+  "card.suspectIgnore": "Yoksay",
   "health.conflicted": "çakışma {n}",
   "health.noRemote": "uzak yok",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Bazı değişiklikler geri alınamadı ve elle ele alınmalı",
   "msg.discardUnbornHead": "Bu dalda henüz commit yok; burada değişiklikleri geri alma desteklenmiyor",
   "msg.discardLog": "{name} için commit edilmemiş değişiklikleri discard et",
+  "msg.rebindOk": "Kimlik eski kayda taşındı · etiketler geri geldi",
+  "msg.rebindFail": "Taşıma başarısız: {err}",
   "time.now": "az önce"
 }

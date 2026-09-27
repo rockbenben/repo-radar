@@ -165,6 +165,9 @@
   "card.filterTag": "Tambah filter tag #{tag}",
   "card.favOn": "Favorit",
   "card.favOff": "Batal favorit",
+  "card.suspectHint": "Mungkin dipindahkan dari {path} · label mungkin masih di kartu lama",
+  "card.suspectMigrate": "Pindahkan",
+  "card.suspectIgnore": "Abaikan",
   "health.conflicted": "konflik {n}",
   "health.noRemote": "tanpa remote",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "Sebagian perubahan tidak dapat dibuang dan harus ditangani sendiri",
   "msg.discardUnbornHead": "Branch ini belum memiliki commit; membuang perubahan tidak didukung di sini",
   "msg.discardLog": "Discard perubahan yang belum di-commit dari {name}",
+  "msg.rebindOk": "Identitas dipindahkan ke catatan lama · label ikut kembali",
+  "msg.rebindFail": "Gagal memindahkan: {err}",
   "time.now": "baru saja"
 }

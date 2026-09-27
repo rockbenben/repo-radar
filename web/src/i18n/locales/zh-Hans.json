@@ -165,6 +165,9 @@
   "card.filterTag": "加入标签筛选 #{tag}",
   "card.favOn": "收藏",
   "card.favOff": "取消收藏",
+  "card.suspectHint": "疑似从 {path} 搬来 · 标签可能还挂在旧卡片上",
+  "card.suspectMigrate": "迁移",
+  "card.suspectIgnore": "忽略",
   "health.conflicted": "冲突 {n}",
   "health.noRemote": "无远程",
   "health.stash": "stash {n}",
@@ -373,5 +376,7 @@
   "msg.discardOutOfScope": "有一部分改动这次没能丢弃，需自行处理",
   "msg.discardUnbornHead": "当前分支还没有提交，这里暂不支持丢弃改动",
   "msg.discardLog": "丢弃 {name} 的未提交改动",
+  "msg.rebindOk": "身份已迁回旧记录 · 标签跟着回来了",
+  "msg.rebindFail": "迁移失败：{err}",
   "time.now": "刚刚"
 }
