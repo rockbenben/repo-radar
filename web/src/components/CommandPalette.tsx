@@ -70,6 +70,10 @@ export function CommandPalette({
       <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
         <input
           ref={inputRef}
+          role="combobox"
+          aria-expanded={results.length > 0}
+          aria-controls="rr-palette-list"
+          aria-activedescendant={results.length > 0 ? `rr-palette-opt-${Math.min(sel, results.length - 1)}` : undefined}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
@@ -98,13 +102,20 @@ export function CommandPalette({
           }}
         />
       </div>
-      <div style={{ maxHeight: 360, overflowY: "auto", padding: 6 }}>
+      <div style={{ maxHeight: 360, overflowY: "auto", padding: 6 }} role="listbox" id="rr-palette-list" aria-label={t("palette.placeholder")}>
         {results.length === 0 && (
           <div style={{ padding: "28px 0", textAlign: "center", color: "var(--dim)", fontSize: 13 }}>{t("palette.noMatch")}</div>
         )}
         {results.map((r, i) => (
+          // biome-ignore-start lint/a11y/useKeyWithClickEvents: 键盘路径按 WAI-ARIA 组合框模式
+          // 收在顶部输入框上（↑/↓/Enter），行本身不做焦点落点——每行挂 tabIndex 反而把
+          // 「8 行 × 每行几个动作按钮」塞进 Tab 序列，破坏 ⌘K 直达的用法
           <div
             key={r.id}
+            role="option"
+            id={`rr-palette-opt-${i}`}
+            tabIndex={-1}
+            aria-selected={i === sel}
             onMouseEnter={() => setSel(i)}
             onClick={() => pick(r)}
             style={{
@@ -133,7 +144,9 @@ export function CommandPalette({
             >
               {r.description ?? r.displayName ?? ""}
             </span>
-            <span style={{ display: "flex", gap: 4, flex: "none" }} onClick={(e) => e.stopPropagation()}>
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: 这层只是把按钮群的点击与行的
+                「直接用编辑器打开」隔开，交互全在内部的真 Button 上 */}
+            <span style={{ display: "flex", gap: 4, flex: "none" }} role="presentation" onClick={(e) => e.stopPropagation()}>
               {(["editor", "terminal", "explorer"] as const).map((tgt) => (
                 <Button
                   key={tgt}
@@ -162,6 +175,7 @@ export function CommandPalette({
               )}
             </span>
           </div>
+          // biome-ignore-end lint/a11y/useKeyWithClickEvents: 行的豁免块结束
         ))}
       </div>
       <div
