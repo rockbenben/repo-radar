@@ -3,7 +3,7 @@
 # 四个全绿之后，publish job 自动把草稿翻成正式发布——不需要人去网页点按钮。
 # 中途仍然是草稿（releaseType 见 electron-builder.yml）：只传了一半的产物不该对用户可见，
 # 而任何一个平台构建失败，publish 就不会跑，草稿留在原地等人处理。
-# 产物：repo-radar Setup <version>.exe（Windows NSIS，双击安装）
+# 产物：repo-radar-<version>-x64-setup.exe（Windows NSIS，双击安装；命名见 electron-builder.yml）
 #      repo-radar-<version>-arm64.dmg / -x64.dmg（macOS，同一个 runner 上交叉出两个架构）
 #      repo-radar-<version>-x64.AppImage / -arm64.AppImage（Linux，两个 runner 各出各的）
 # 同时产出 latest*.yml。
@@ -39,8 +39,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # tag 必须与 package.json 版本一致：这个版本号既显示在设置面板，也是自动更新比较的依据。
-      # 忘 bump 就会发出「版本号与 tag 对不上」的产物，用户与更新器都会被它误导
+      - run: npm run lint # 与 ci 同一道 biome 门禁：发布产物不该绕过它
+      # tag 必须与 package.json 版本一致：这个版本号显示在设置面板、进产物文件名、写进 latest.yml。
+      # 忘 bump 就发出「版本号与 tag 对不上」的产物——本项目不做自动更新（理由见 electron-builder.yml
+      # 的 mac 段），但用户对着 Releases 页挑安装包时照样会被它误导
       - name: Verify tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash

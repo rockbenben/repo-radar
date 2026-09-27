@@ -1,6 +1,8 @@
 node_modules/
 dist/
 *.log
+dist-electron/
+
 .claude/
 .superpowers/
-dist-electron/
+.qoder*

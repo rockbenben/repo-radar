@@ -10,8 +10,10 @@ productName: repo-radar
 artifactName: ${name}-${version}-${arch}.${ext}
 directories:
   output: dist-electron
-# 刻意**不设** buildResources：它默认是 build/（不存在，无妨），而如果把它指向 scripts/，
-# electron-builder 会自动把该目录排除出 asar——主进程运行时正要从 asar 里读
+# 刻意**不设** buildResources：默认落点是 build/，而那里面只有 installer.nsh——下面
+# nsis.include 已经显式引用这一个文件，用不着把整个目录认领成 buildResources。
+# 而如果把它指向 scripts/（图标都在那儿），electron-builder 会自动把该目录排除出
+# asar——主进程运行时正要从 asar 里读
 # scripts/icon-256.png 当托盘图标，那样会在打包后静默失效（图标变成空白，无报错）。
 # 图标改为在下面各平台段落里用显式相对路径引用
 

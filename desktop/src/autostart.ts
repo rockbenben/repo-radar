@@ -90,8 +90,8 @@ export function parseRunValue(value: string): string | null {
 }
 
 /**
- * 从 HKCU Run 值里取出「路径之后的参数」——用来判断这个值是不是上一代（SEA）程序写的
- * （缺陷 2）。SEA 时代 autostartCommand 写的直接形式是 `"<exe>" --no-open`；更早的
+ * 从 HKCU Run 值里取出「路径之后的参数」——用来判断这个值是不是上一代（SEA）程序写的。
+ * SEA 时代 autostartCommand 写的直接形式是 `"<exe>" --no-open`；更早的
  * PowerShell 包装形式把参数放在 -ArgumentList '...' 里。Electron 版写的是 --tray（TRAY_FLAG），
  * 从不会出现 --no-open。解析不出时返回 null，交给 isLegacyEntry 保守处理。
  */
@@ -157,7 +157,8 @@ export function getAutostart(home = homedir()): AutostartState {
   return { supported: true, enabled: app.getLoginItemSettings({ args: [TRAY_FLAG] }).openAtLogin }
 }
 
-export function setAutostart(enabled: boolean, home = homedir()): AutostartState {
+/** 只在模块内使用：对外经 autostartExtra 的 set 回调用，不额外开一个导出面 */
+function setAutostart(enabled: boolean, home = homedir()): AutostartState {
   // 未打包时 app.getPath("exe") 是 node_modules/electron/dist/electron.exe——
   // 一个随时会被 npm install 覆盖的临时路径，写进开机自启毫无意义且有害
   // （开发者本机调试一次，就会把自己的登录项改成指向这个临时文件）。
@@ -208,15 +209,14 @@ export function autostartExtra(
 /**
  * 判断一个自启条目是不是「上一代（SEA 时代）程序」留下的遗留条目。
  *
- * 缺陷 1（上一轮）的语义修复：上一轮误把 SEA 时代 healAutostart 的规则（"自启指向你放它的
- * 地方；只有当那个文件消失了，才改为当前这份"）搬来当作"是否清理遗留条目"的判据——但那条
- * 规则管的是完全不同的问题：healAutostart 管的是"我们自己的条目指向了被移动/删除的副本"，
- * 目标还在就不该动；这里要管的是"上一代程序留下的条目必须清掉"，目标还在恰恰是问题本身
- * （旧 exe 还在，旧条目就会在下次登录时把它拉起来，抢占端口）。
+ * 判据是「身份」而不是「目标文件还在不在」——曾有过一次把 healAutostart 的规则（"自启指向
+ * 你放它的地方；只有当那个文件消失了，才改为当前这份"）误搬来当清理判据：那条规则管的是
+ * "我们自己的条目指向了被移动/删除的副本"，目标还在就不该动；而这里要管的是"上一代程序
+ * 留下的条目必须清掉"，目标还在恰恰是问题本身（旧 exe 还在，旧条目就会在下次登录时把它
+ * 拉起来，抢占端口）。
  *
- * 正确判据是「身份」，与目标文件是否存在无关——三个平台各有稳定的身份标记，
- * 不会随文件被移动/删除而改变：
- *   - Windows（本轮缺陷 2 修复）：不能只看值名是不是 "repo-radar"——用户完全可能手工建过
+ * 三个平台各有稳定的身份标记，不会随文件被移动/删除而改变：
+ *   - Windows：不能只看值名是不是 "repo-radar"——用户完全可能手工建过
  *     一个恰好叫这个名字、但指向别的东西的自启项，只看值名会把它也无条件删掉。必须与
  *     Linux 分支同一判据形状：解析出目标路径（parseRunValue）**且**带有 SEA 时代专属的
  *     --no-open 标志（parseRunFlag，SEA 时代 autostartCommand 写的就是 "<exe>" --no-open；
@@ -245,13 +245,13 @@ export function isLegacyEntry(evidence: LegacyEntryEvidence): boolean {
       const flag = parseRunFlag(evidence.entryValue)
       // 两个条件缺一不可：只有值名对上、内容却解析不出路径（格式完全不认识），或者
       // 路径解析得出但带的不是 --no-open（比如用户手工建的同名条目），都不能当成遗留条目
-      return targetPath !== null && flag !== null && flag.includes("--no-open")
+      return targetPath !== null && !!flag?.includes("--no-open")
     }
     case "darwin":
       return evidence.plistExists
     case "linux":
       // null 代表解析不出 Exec 行，无法确认身份，保守不动
-      return evidence.execFlag !== null && evidence.execFlag.includes("--no-open")
+      return !!evidence.execFlag?.includes("--no-open")
   }
 }
 
@@ -264,7 +264,7 @@ export function isLegacyEntry(evidence: LegacyEntryEvidence): boolean {
  * （标记已为 true），哪怕又发现了遗留条目，也不再重新启用——用户可能已经在设置里
  * 主动关掉了自启，不能在没有任何提示的情况下又把它打开。
  *
- * 缺陷 4：参数从 server 端的用户 Config 换成了桌面端专属的 AutostartMigrationState——
+ * 参数是桌面端专属的 AutostartMigrationState，不是 server 端的用户 Config——
  * 这个标记本就是纯粹的桌面端实现细节，不该出现在用户可见/可通过 API 修改的配置里。
  */
 export function planLegacyMigration(
@@ -279,7 +279,7 @@ export function planLegacyMigration(
 /**
  * 删除遗留条目之后的收尾：按 plan 的决定决定是否重新启用，并把迁移标记落盘。
  *
- * 缺陷 1 第 4 点：setAutostart(true) 与写标记之间如果写盘失败（磁盘满/只读），
+ * 一个已知的窄窗口：setAutostart(true) 与写标记之间如果写盘失败（磁盘满/只读），
  * 自启已经打开了，但标记没能落盘——下次启动 loadMigrationState 仍会读到"未迁移"，
  * 若用户在这期间又手动关掉过自启，会被这次的重试无声打开。无法阻止，但至少要能在
  * 日志里查到原因，因此这里不能吞掉 saveMigrationState 抛出的异常。
@@ -308,15 +308,15 @@ function finishMigration(
  * home 可注入（默认真实 homedir()），只为了让测试能在临时目录里跑完整流程，
  * 不必也不该在测试中触碰真实用户目录。
  *
- * 缺陷 1 的顺序修复：三个平台分支都改成「先读取并决定，再删除，最后设置自启与写标记」——
- * 上一轮是先删除遗留条目、再调 loadConfig（本轮已改成 loadMigrationState）；后者若因为
+ * 顺序刻意为「先读取并决定，再删除，最后设置自启与写标记」——曾经是先删除遗留条目、
+ * 再读迁移状态；后者若因为
  * 状态文件被截断而抛异常，会被本函数末尾的 catch 悄悄吞掉，而条目已经删了、标记也没写，
- * 迁移永远不会再有机会重新跑一次。现在顺序反过来：先探测是不是遗留条目（只读，不破坏
+ * 迁移永远不会再有机会重新跑一次。现在的顺序反过来：先探测是不是遗留条目（只读，不破坏
  * 任何东西），确认是之后再读迁移状态——读失败就直接跳过本次清理、记一行日志，一次删除
  * 都不做；只有状态读取成功，才真正删除条目、调用 finishMigration 收尾。
  *
  * stateFile 参数：桌面端专属的迁移状态文件路径（main.ts 里与 window-state.json 放在同一个
- * 配置目录下），不再是 server 端的用户 config 文件（缺陷 4）。
+ * 配置目录下），与 server 端的用户 config 文件分开。
  */
 export function cleanupLegacyEntries(stateFile: string, home = homedir()): void {
   // 未打包（开发版）时 app.getPath("exe") 是 node_modules 里的临时 electron.exe：
@@ -326,7 +326,7 @@ export function cleanupLegacyEntries(stateFile: string, home = homedir()): void 
   try {
     if (process.platform === "win32") {
       // 旧版写的是 "<exe>" --no-open（或更早的 PowerShell 包装形式），值名固定为 repo-radar；
-      // isLegacyEntry 现在同时核验解析出的路径与 --no-open 标志（缺陷 2），这一步只读不写
+      // isLegacyEntry 同时核验解析出的路径与 --no-open 标志，这一步只读不写
       const entryValue = regReadValue(NAME)
       if (!isLegacyEntry({ platform: "win32", entryValue })) return
       const stateResult = loadMigrationState(stateFile)
@@ -388,7 +388,7 @@ export function cleanupLegacyEntries(stateFile: string, home = homedir()): void 
       finishMigration(stateFile, home, plan)
     }
   } catch (err) {
-    // 缺陷 1 第 3 点：这个函数会改动用户机器上的注册表/登录项/文件，静默失败不可接受——
+    // 注意：这个函数会改动用户机器上的注册表/登录项/文件，静默失败不可接受——
     // 之前这里是空 catch {}，任何异常（reg 不在 PATH、文件系统只读等）都无声消失，
     // 用户看到自启"莫名其妙"地不对，日志里却什么线索都没有
     console.error(

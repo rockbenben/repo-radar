@@ -22,14 +22,9 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
-      "a11y": {
-        "noStaticElementInteractions": "warn",
-        "useKeyWithClickEvents": "warn",
-        "noNoninteractiveElementInteractions": "warn"
-      },
+      "preset": "recommended",
       "correctness": {
-        "useExhaustiveDependencies": "warn"
+        "useExhaustiveDependencies": "error"
       },
       "style": {
         "noNonNullAssertion": "off"
