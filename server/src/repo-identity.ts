@@ -9,7 +9,7 @@ import { mapLimit } from "./map-limit"
 const SEED_CONCURRENCY = 8
 
 /**
- * 仓库身份账本。解决的问题：repoId 是路径的 sha1（git.ts:77），因此仓库改个名就等于
+ * 仓库身份账本。解决的问题：repoId 是路径的 sha1（见 git.ts 的 repoId），因此仓库改个名就等于
  * 换了个仓库——标签、收藏、归档、便签、分组、前端已消掉的队列项全部对不上，且旧条目
  * 永远留在 config.json 里。
  *
@@ -27,6 +27,13 @@ export interface IdentityEntry {
   ino: string
   rootCommit: string | null
   seenAt: string // ISO 8601，prune 的年龄护栏用
+  /** 最后一次扫描时该仓库的 origin 拉取地址。只用于「疑似搬移」的提示匹配（store 层），
+   *  **刻意不进认领判据池**——origin URL 与根提交是同一类碰撞键（同 upstream 的多个 clone
+   *  完全相同），放宽窗口的误认风险原样存在 */
+  url?: string
+  /** 「疑似旧身份」挂账：本轮新铸的 id 与某条已失联、URL 唯一吻合的老账本记录的配对建议。
+   *  只是提示，不是结论；用户手动确认（rebind）才会发生身份迁移 */
+  suspect?: { oldId: string; oldPath: string; at: string }
   /** 本条目最后一次被扫到的「代」：每轮 resolve 给所有活条目盖上「账本里最大代 + 1」。
    *  认领只认「上一代还盖过章、这一代路径没了」的条目。理由：判据②按根提交匹配且**不能
    *  比较 dev**（跨卷移动时 dev 本来就变了），于是同一 upstream 的两个 clone 分处 lost/found
@@ -76,7 +83,7 @@ const isPrevGen = (e: IdentityEntry, currentGen: number): boolean => currentGen 
  * 折少了会怎样：macOS 上 `scan()` 给出 `/Users/me/code/tool`、`manualRepos` 里写的是
  * `/Users/me/Code/tool`（同一个目录），`new Set` 按精确字符串去重所以两条都活着，
  * 归一化不折大小写就把它们当成两个仓库；而铸造用的 `repoId` 是**无条件小写**的
- * （git.ts:78），两边算出同一个 id，第二条撞上铸造的碰撞守卫拿到合成 id
+ * （见 git.ts 的 repoId），两边算出同一个 id，第二条撞上铸造的碰撞守卫拿到合成 id
  * `repoId("…#2")`——同一个仓库两张卡片，第二张的 id 在用户 config.json 里根本不存在，
  * 标签/收藏/归档/便签全不显示，账本里还留一条永久的假记录。
  *
@@ -248,6 +255,7 @@ export class IdentityLedger {
 
     // 快照一份：下面的回写会改 store，而代与 lost 候选都必须按本轮开始时的账本算
     const before = this.store.entries()
+    this.lastMintedIds = new Set()
     // 当前代 = 账本里最大代 + 1；账本为空时为 1
     let maxGen = 0
     for (const [, e] of before) maxGen = Math.max(maxGen, genOf(e))
@@ -280,7 +288,7 @@ export class IdentityLedger {
     // 而真正的 B 铸新 id 什么都不剩，全程无报错——是「产生错误数据」，比丢数据严重。
     //
     // 「删掉重新 clone 回原路径」不会命中这个例外：那时 ino 同样变了，但**没有任何未知路径
-    // 带着老 ino**，路径命中照样赢（Task 5 定的行为，不能回归）。
+    // 带着老 ino**，路径命中照样赢（这是定下的行为，不能回归）。
     const unknownByKey = uniqueByKey(unknown.map((p) => [p, p] as [string, string]), liveKey)
     // 老键在已知这一侧也必须唯一：两条已知路径记着同一个 (dev,ino) 就分不清是谁搬走了，宁可不动
     const hitByOldKey = uniqueByKey(pathHit.map(([p, id]) => [p, this.store.get(id)!] as [string, IdentityEntry]), inoKey)
@@ -402,6 +410,7 @@ export class IdentityLedger {
       for (let n = 2; used.has(id) || this.store.get(id) !== undefined; n++) id = repoId(`${p}#${n}`)
       used.add(id)
       out.set(p, id)
+      this.lastMintedIds.add(id)
       if (!computedRoot.has(p)) minted.push(p)
     }
 
@@ -430,6 +439,10 @@ export class IdentityLedger {
         ino: s?.ino ?? prev?.ino ?? "0",
         rootCommit: computedRoot.get(p) ?? prev?.rootCommit ?? null,
         seenAt: new Date().toISOString(),
+        // url/suspect 不是 resolve 算出来的（decorate/检测在 resolve 之后写），必须原样带过：
+        // 整个对象重建而不带它们 = 每轮把搬移线索抹一次，suspect 活不过下一轮
+        url: prev?.url,
+        suspect: prev?.suspect,
         // 只有本轮**真的扫到**的才盖章；没扫到的条目留在上一代，下一轮就出了认领窗口。
         // 「路径在 paths 里」不等于「扫到了」：磁盘上已经不存在的条目（失效的 manualRepo）
         // 一样不盖章。盖了会怎样：这条记录永远满足「上一代盖过章 + 路径不在磁盘上」，
@@ -493,8 +506,83 @@ export class IdentityLedger {
     return this.store.get(id)
   }
 
+  /** 本轮 resolve 新铸（首次入账）的 id。store 用它决定「疑似旧身份」检测只对新铸者做一次 */
+  lastMintedIds = new Set<string>()
+
+  /** 记录该仓库当前的 origin 拉取地址；值没变就不写盘。未知 id 静默忽略（不凭空造条目） */
+  recordUrl(id: string, url: string): void {
+    const e = this.store.get(id)
+    if (e === undefined || e.url === url) return
+    this.store.set(id, { ...e, url })
+  }
+
+  /** 挂「疑似旧身份」提示账；重复挂同一配对不刷新时间戳（提示条不该每轮重新冒头） */
+  setSuspect(id: string, suspect: { oldId: string; oldPath: string }): void {
+    const e = this.store.get(id)
+    if (e === undefined) return
+    const p = e.suspect
+    if (p !== undefined && typeof p.oldId === "string" && p.oldId === suspect.oldId && p.oldPath === suspect.oldPath) return
+    this.store.set(id, { ...e, suspect: { ...suspect, at: new Date().toISOString() } })
+  }
+
+  clearSuspect(id: string): void {
+    const e = this.store.get(id)
+    if (e === undefined || e.suspect === undefined) return
+    this.store.set(id, { ...e, suspect: undefined })
+  }
+
+  /** 该 id 当前有效的 suspect（老条目已被剪掉时提示作废）。UI 每轮经 decorate 读它 */
+  getSuspect(id: string): { oldId: string; oldPath: string } | null {
+    const s = this.store.get(id)?.suspect
+    if (s === undefined || typeof s.oldId !== "string" || typeof s.oldPath !== "string") return null
+    if (this.store.get(s.oldId) === undefined) return null
+    return { oldId: s.oldId, oldPath: s.oldPath }
+  }
+
+  /**
+   * 为一个**本轮新铸**的 id 找「疑似的旧身份」：账本里 url 相同、路径不同、且路径已不在
+   * 磁盘上的条目。三种情况一律不认（返回 null）：① 同 url 还有活在盘上的持有者——那
+   * 多半是兄弟 clone，搬移叙事不成立；② 失联的同 url 条目不止一条——歧义；③ 零条。
+   * 认错身份的代价是错误提示误导用户手动迁错，比不提示严重；宁缺毋滥。
+   */
+  findSuspect(
+    mintedId: string,
+    url: string,
+    mintedPath: string,
+    existsOf: (path: string) => boolean = IdentityLedger.pathExists,
+  ): { oldId: string; oldPath: string } | null {
+    const norm = normalizePath(mintedPath)
+    const dead: { oldId: string; oldPath: string }[] = []
+    for (const [oid, e] of this.store.entries()) {
+      if (oid === mintedId || e.url !== url) continue
+      if (normalizePath(e.path) === norm) continue
+      if (existsOf(e.path)) return null // ① 活持有者存在，直接放弃（不用 break：后面也不该再看）
+      dead.push({ oldId: oid, oldPath: e.path })
+    }
+    return dead.length === 1 ? dead[0]! : null // ②③ 歧义或零条
+  }
+
+  /**
+   * 用户确认「这个新卡片就是那条老记录搬来的」：老条目改持新路径、新铸条目出账——
+   * 身份跟着老 id 走，config 里挂在老 id 上的标签/收藏/归档/便签一个字不用动，
+   * 与自动认领同一套哲学（不迁数据）。只吃**已挂账的 suspect**，不接受任意 fromId：
+   * 校验（URL 现值、旧路径已失联）由调用方在挂账时做过，这里再验一次条目还在。
+   * 返回 false = 无可用的挂账/老条目已不在，什么都不动。
+   */
+  rebindToOld(mintedId: string): boolean {
+    const minted = this.store.get(mintedId)
+    const s = minted?.suspect
+    if (minted === undefined || s === undefined || typeof s.oldId !== "string") return false
+    const old = this.store.get(s.oldId)
+    if (old === undefined) return false
+    this.store.set(s.oldId, { ...old, path: minted.path, url: minted.url ?? old.url, suspect: undefined })
+    this.store.delete(mintedId)
+    this.reindex()
+    return true
+  }
+
   /** 年龄护栏及其理由在 JsonStore.pruneStale 里。对账本而言它尤其要命：条目一剪，
-   *  那批仓库回来时会被当成全新仓库，标签/收藏/归档全丢——正是本轮要消灭的行为 */
+   *  那批仓库回来时会被当成全新仓库，标签/收藏/归档全丢——正是要消灭的行为 */
   prune(keepIds: Set<string>, maxAgeMs = 30 * 86_400_000): void {
     this.store.pruneStale(keepIds, (e) => e.seenAt, maxAgeMs)
     this.reindex()

@@ -503,7 +503,7 @@ describe("判据②的播种与同轮次约束", () => {
  * 部分 SMB 共享）上不成立——inoKey 对它**整体作废判据①**，两条判据都没有，一次普通改名
  *（账本的旗舰用例）就丢标签/收藏/归档/便签
  */
-describe("空仓库长出提交后补算根提交（E3）", () => {
+describe("空仓库长出提交后补算根提交", () => {
   const statZero = () => st(1, 0) // exFAT / FAT32 / 部分 SMB 共享：ino 恒为 0，判据①整体作废
 
   it("ino 不可用时，新建 → 提交 → 改名靠补算出来的根提交认回老 id（标签因此保住）", async () => {
@@ -592,7 +592,7 @@ describe("已知路径的唯一例外：仓库其实搬走了", () => {
     expect(ids.get(A)).not.toBe(oldId) // 新仓库拿全新 id，不继承别人的身份
   })
 
-  // 这条挂了就是推翻用户拍板的既定行为（Task 5）：「删掉重新 clone 回原路径」ino 同样会变，
+  // 这条挂了就是推翻用户拍板的既定行为：「删掉重新 clone 回原路径」ino 同样会变，
   // 但没有任何未知路径带着老 ino，此时路径命中必须照样赢——否则用户重装一次仓库标签就没了
   it("不回归 re-clone：同一路径 ino 变了但没人带着老 ino → 路径命中仍然赢", async () => {
     const led = makeLedger(tmpFile())
@@ -757,5 +757,61 @@ describe("同一目录的两种大小写拼写", () => {
     )
     expect(new Set(ids.values()).size).toBe(2)
     expect(ids.get(lower)).toBe(repoId(lower))
+  })
+})
+
+// 疑似旧身份提示（搬移 rebind）的地基：账本除了路径/dev/ino/根提交，还要记「最后所见的
+// origin URL」与「疑似旧身份」挂账。url 只在消费侧比对、不进认领判据池；
+// suspect 是提示不是结论——只有用户手动确认才发生身份迁移。
+describe("url 记账与疑似旧身份挂账", () => {
+  it("recordUrl 写进既有条目并跨实例持久化；未知 id 上静默无操作", async () => {
+    const file = tmpFile()
+    const led = makeLedger(file)
+    const ids = await resolve(led, ["D:/p/one"], noRootCommit, () => st(1, 11))
+    const id = ids.get("D:/p/one")!
+    led.recordUrl(id, "https://github.com/u/one.git")
+    led.flush()
+    const led2 = makeLedger(file)
+    expect(led2.get(id)?.url).toBe("https://github.com/u/one.git")
+    expect(led2.get(id)?.path).toBe("D:/p/one") // 其余字段原样
+    led2.recordUrl("no-such-id", "https://x")
+    expect(led2.get("no-such-id")).toBeUndefined() // 不许凭空造条目
+  })
+
+  it("setSuspect 挂上提示并保留其它字段；clearSuspect 摘掉", async () => {
+    const led = makeLedger(tmpFile())
+    const ids = await resolve(led, ["D:/p/one"], noRootCommit, () => st(1, 12))
+    const id = ids.get("D:/p/one")!
+    led.setSuspect(id, { oldId: "old-1", oldPath: "D:/gone/one" })
+    const e = led.get(id)!
+    expect(e.suspect?.oldId).toBe("old-1")
+    expect(e.suspect?.oldPath).toBe("D:/gone/one")
+    expect(typeof e.suspect?.at).toBe("string")
+    expect(e.path).toBe("D:/p/one")
+    led.clearSuspect(id)
+    expect(led.get(id)?.suspect).toBeUndefined()
+    expect(led.get(id)?.path).toBe("D:/p/one") // 清理不动别的
+  })
+
+  it("老账本（没有 url/suspect 字段）照旧有效并加载成功", () => {
+    const file = tmpFile()
+    writeFileSync(
+      file,
+      JSON.stringify({ "some-id": { path: "D:/p/a", dev: "1", ino: "5", rootCommit: null, seenAt: new Date().toISOString(), gen: 1 } }),
+      "utf8",
+    )
+    const led = makeLedger(file)
+    expect(led.get("some-id")?.path).toBe("D:/p/a")
+  })
+
+  it("rebind：old 条目改持新路径、新铸条目出账；标签跟着 id 走", async () => {
+    const led = makeLedger(tmpFile())
+    const ids = await resolve(led, ["D:/p/new"], noRootCommit, () => st(1, 13))
+    const mintedId = ids.get("D:/p/new")!
+    // 模拟一条已失联的旧账本记录由外部写入前，先按常规 resolve 让 minted 条目存在；
+    // 旧条目直接入册（真实场景里它是历轮 resolve 写下的）
+    led.setSuspect(mintedId, { oldId: "old-9", oldPath: "D:/p/old" })
+    expect(led.rebindToOld(mintedId)).toBe(false) // old-9 不在账本里 → 拒绝，不动任何条目
+    expect(led.get(mintedId)).toBeDefined()
   })
 })

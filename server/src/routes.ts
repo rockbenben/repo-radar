@@ -51,7 +51,7 @@ const OPEN_TARGETS = new Set<string>(["editor", "terminal", "explorer"])
 
 // createProject 专属的锁键：不是仓库 id，也不与 cloneRepo 共享。mkdir + git init 是秒级操作，
 // 退出时 10 秒的排空上限对它绰绰有余，包一层 withRepoLock 就够（见 /api/new-project 处的注释）。
-// 只有 createProject 用这个键——不会像上一轮 "__scaffold__" 那样把慢克隆也拖进来一起排队。
+// 只有 createProject 用这个键——不会像早期版本的 "__scaffold__" 合成键那样把慢克隆也拖进来一起排队。
 const NEW_PROJECT_LOCK_KEY = "__scaffold-new-project__"
 
 // 自身端口按**实际绑定的**端口推导，不写死、也不能只按 PORT 推：原端口被占用/被系统保留时
@@ -359,6 +359,26 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   // 丢弃全部未提交改动（破坏性，前端二次确认）
   app.post("/api/repos/:id/discard", (c) => mutateRepo(c, async (repo) => ({ result: await withRepoLock(repo.id, () => discardChanges(repo.path)) })))
 
+  // 「疑似旧身份」手动迁移：用户确认「这张新卡就是那条老记录搬来的」。
+  // 四道重验在 store.rebindSuspect 里（挂账是几轮前的观测，前提可能过期）；成功即整轮重扫——
+  // 卡片的 id 从新铸 id 换回老 id，config 里挂在老 id 上的标签/收藏/归档立刻跟着这张卡显示
+  app.post("/api/repos/:id/rebind", async (c) => {
+    const id = c.req.param("id") ?? ""
+    if (!store.get(id)) return c.json({ error: "repo not found" }, 404)
+    const r = store.rebindSuspect(id)
+    if (!r.ok) return c.json({ error: r.error }, 400)
+    await rescan()
+    return c.json({ ok: true, repo: store.get(r.oldId) ?? null })
+  })
+
+  // 忽略提示：只摘挂账不动数据不重扫；redecorate 让提示立刻从这张卡上消失并广播新状态
+  app.post("/api/repos/:id/suspect-dismiss", (c) => {
+    const updated = store.dismissSuspect(c.req.param("id") ?? "")
+    if (!updated) return c.json({ error: "repo not found" }, 404)
+    hub.broadcast("repo:updated", { repo: updated })
+    return c.json(updated)
+  })
+
   app.patch("/api/repos/:id/meta", async (c) => {
     const repo = store.get(c.req.param("id"))
     if (!repo) return c.json({ error: "repo not found" }, 404)
@@ -526,9 +546,9 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     // 提到局部 const：body 是 let，上面的类型收窄只在当次判断成立，TS 不会把它带到后面的使用点
     const { parent, name } = body
     const cfg = loadConfig(configFile)
-    // 走 withRepoLock（缺陷 4）：createProject 只是 mkdir + git init + 写一个 README，秒级操作，
+    // 走 withRepoLock：createProject 只是 mkdir + git init + 写一个 README，秒级操作，
     // 10 秒的排空上限绰绰有余——包上它，退出排空才能真正等到它跑完，而不是像克隆一样两头落空。
-    // 不会重蹈上一轮 "__scaffold__" 合成键的覆辙：clone 走的是 scaffold.ts 里的临时目录方案
+    // 不会重蹈早期 "__scaffold__" 合成键的覆辙：clone 走的是 scaffold.ts 里的临时目录方案
     // （耗时可能是分钟级，排空对它形同虚设，见下面 /api/clone 的注释），两者时长差两个数量级，
     // 不该用同一把锁——这里用的 NEW_PROJECT_LOCK_KEY 只有 createProject 自己在用。
     const result = await withRepoLock(NEW_PROJECT_LOCK_KEY, () => createProject(parent, name, cfg.roots))

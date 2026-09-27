@@ -83,6 +83,10 @@ export interface RepoStatus {
   githubInbox: GithubInbox | null // 跨仓库「等我的」：PR/issue/CI（后台补全，无 GitHub 远程或未拉到为 null）
   error: string | null // git 命令失败时的摘要，正常为 null
   scannedAt: string // ISO 8601
+  // 疑似旧身份（搬移提示，见 repo-identity.ts 的 suspect）：这条卡片是新铸的 id，但账本里
+  // 恰有一条已失联、origin URL 相同的老条目——标签可能还挂在那边。null/undefined = 没有线索。
+  // 提示不是结论：只有用户在卡片上确认后才会发生身份迁移（rebind）
+  suspect?: { oldId: string; oldPath: string } | null
 }
 
 export interface BatchResultItem {

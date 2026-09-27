@@ -155,6 +155,18 @@ export class RepoStore {
       onProgress?.(scanned, paths.length)
       return status
     })
+    // 「疑似旧身份」检测只对新铸者做一次（lastMintedIds 是本轮 resolve 的产出）：此后
+    // url/remotes 的记账与挂账读取都归 decorate 管，这里不重复。找到就落账本，
+    // 本轮收尾的重装饰（下面的 decorate）会把 suspect 带进状态
+    if (this.identity) {
+      for (const s of statuses) {
+        if (!this.identity.lastMintedIds.has(s.id)) continue
+        const url = s.remotes.find((r) => r.name === "origin")?.url ?? s.remotes[0]?.url
+        if (!url) continue
+        const cand = this.identity.findSuspect(s.id, url, s.path)
+        if (cand) this.identity.setSuspect(s.id, cand)
+      }
+    }
     // 收尾前用「现在」的配置把所有状态重新装饰一遍：扫描期间用户可能改了收藏/标签/
     // 备注/归档（redecorate 已广播新状态），而上面的 statuses 是用开跑时的 cfg 快照装饰的——
     // 不重新装饰就整份装进去，会把用户刚打的 ⭐ 打回旧值，且要错到下一轮 redecorate 或
@@ -213,6 +225,43 @@ export class RepoStore {
     return [...this.repos.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
+  /**
+   * 用户点「迁移」：把新铸卡片的身份交还给账本里的老条目——config 按老 id 存的
+   * 标签/收藏/归档一个字不用搬（与自动认领同一哲学）。只吃**已挂账的 suspect**，
+   * 并在动手前重验四个可能过期的前提（挂账是几轮前的观测）：
+   * ① 老条目还在；② 老条目的 url 仍等于该仓库现在的 origin（远程换过说明叙事断了）；
+   * ③ 老路径仍不在磁盘上（搬回来了就该走自动认领而不是这个按钮）；
+   * ④ 新铸 id 上**没有**用户数据——有就拒绝，静默合并两套标签等于替用户做主。
+   */
+  rebindSuspect(id: string): { ok: true; oldId: string } | { ok: false; error: string } {
+    const led = this.identity
+    const st = this.repos.get(id)
+    if (!led || !st) return { ok: false, error: "no-ledger" }
+    const cand = led.getSuspect(id)
+    if (!cand) return { ok: false, error: "no-suspect" }
+    const old = led.get(cand.oldId)
+    if (!old) return { ok: false, error: "no-suspect" }
+    const url = st.remotes.find((r) => r.name === "origin")?.url ?? st.remotes[0]?.url
+    if (!url || old.url !== url) return { ok: false, error: "url-stale" }
+    if (existsSync(old.path)) return { ok: false, error: "old-path-back" }
+    const cfg = this.getConfig()
+    const holdsData =
+      (cfg.tags[id]?.length ?? 0) > 0 ||
+      cfg.favorites.includes(id) ||
+      cfg.archived.includes(id) ||
+      cfg.notes[id] !== undefined ||
+      cfg.groupOverrides[id] !== undefined ||
+      cfg.lastOpened[id] !== undefined
+    if (holdsData) return { ok: false, error: "minted-has-data" }
+    return led.rebindToOld(id) ? { ok: true, oldId: cand.oldId } : { ok: false, error: "no-suspect" }
+  }
+
+  /** 用户点「忽略」：摘掉提示，不动任何数据。老条目留到自然出护栏 */
+  dismissSuspect(id: string): RepoStatus | undefined {
+    this.identity?.clearSuspect(id)
+    return this.redecorate(id)
+  }
+
   get(id: string): RepoStatus | undefined {
     return this.repos.get(id)
   }
@@ -244,6 +293,13 @@ export class RepoStore {
       status.description = gd ?? local
     }
     status.health = checkHealth(status, cfg)
+    // 身份账本的两次轻量读写（都不碰 git，值没变不落盘）：
+    // ① 记 origin URL——「疑似旧身份」检测的唯一线索来源；origin 缺失时不记（不抹旧值：
+    //    一轮瞬时失败不该让搬移线索消失，recordUrl 只在有 url 时调用）
+    // ② 读 suspect 挂账——提示跨轮存活，直到用户迁移/忽略或老条目被剪才消失
+    const origin = status.remotes.find((r) => r.name === "origin")?.url ?? status.remotes[0]?.url
+    if (this.identity && origin) this.identity.recordUrl(status.id, origin)
+    status.suspect = this.identity?.getSuspect(status.id) ?? null
     return status
   }
 
