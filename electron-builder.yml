@@ -66,8 +66,8 @@ publish:
   provider: github
   owner: rockbenben
   repo: repo-radar
-  # 显式写明用草稿：四个 runner 的产物陆续传到同一条 release，中途只有一半产物在里面，
-  # 这段时间不该对用户可见。全部到齐后由 .github/workflows/release.yml 的 publish job
-  # 自动翻成正式发布（gh release edit --draft=false），不需要人工点按钮。
-  # 不直接用 release（边传边公开）就是为了避免那个半成品窗口
-  releaseType: draft
+  # 这段只用来生成 latest*.yml 里的下载地址，不代表由 electron-builder 去建 release：
+  # CI 的 build job 一律 --publish never，release 由 publish job 一次性创建并挂全部产物。
+  # 别改回让每个 runner 自己发布——四个 runner 并发建 release 会把同一个 tag 建成两条、
+  # 产物随机分两半（v1.3.0 漏 dmg、v1.4.0 漏 setup.exe 就是这么来的，而 CI 四条腿全绿）。
+  # 详见 .github/workflows/release.yml 顶部注释。

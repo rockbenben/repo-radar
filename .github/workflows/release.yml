@@ -1,12 +1,17 @@
-# 打 v* tag 时打包，产物先上传到同一条 GitHub Release 草稿（draft）。四个 build job：
-# Windows、macOS 各一个 runner，Linux 拆成 x64/arm64 两个 runner（原因见下面矩阵里的注释）。
-# 四个全绿之后，publish job 自动把草稿翻成正式发布——不需要人去网页点按钮。
-# 中途仍然是草稿（releaseType 见 electron-builder.yml）：只传了一半的产物不该对用户可见，
-# 而任何一个平台构建失败，publish 就不会跑，草稿留在原地等人处理。
+# 打 v* tag 时打包四个平台，最后由 publish job 建出这条 GitHub Release 并把产物挂上去。
+# 四个 build job：Windows、macOS 各一个 runner，Linux 拆成 x64/arm64 两个 runner（原因见下面矩阵里的注释）。
+#
+# **release 只能有一个人创建**：早先每个 build job 各自跑 electron-builder --publish always，
+# 而 electron-builder 的 releaseType: draft 让它按 tag 查不到已有草稿（GitHub 的
+# /releases/tags/{tag} 不返回 draft），于是四个 runner 并发各建一条——同一个 tag 出现两条
+# release，产物被随机拆成两半。v1.3.0 的 dmg 和 v1.4.0 的 setup.exe 就是这样漏在没人看到的
+# 草稿里的，而四条腿全绿、publish 也成功，从 CI 状态上完全看不出来。
+# 现在 build 一律 --publish never，产物走 workflow artifact；publish 汇总后一次性建 release。
+#
 # 产物：repo-radar-<version>-x64-setup.exe（Windows NSIS，双击安装；命名见 electron-builder.yml）
 #      repo-radar-<version>-arm64.dmg / -x64.dmg（macOS，同一个 runner 上交叉出两个架构）
-#      repo-radar-<version>-x64.AppImage / -arm64.AppImage（Linux，两个 runner 各出各的）
-# 同时产出 latest*.yml。
+#      repo-radar-<version>-x86_64.AppImage / -arm64.AppImage（Linux，两个 runner 各出各的）
+#      以及 latest*.yml 与 *.blockmap。
 name: release
 
 on:
@@ -52,29 +57,48 @@ jobs:
           test "$TAG" = "$PKG" || { echo "tag v$TAG 与 package.json 的 $PKG 不一致"; exit 1; }
       - run: npm test
       - run: npm run build
-      - name: Package and publish
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
-      # 手动触发（不打 tag）时不发布，只上传成 workflow artifact，便于验证构建本身
+      - name: Package
+        run: npx electron-builder --publish never
+      # if-no-files-found: error 是这道防呆：某个 runner 什么都没产出时（v1.4.0 就是 Windows 那半
+      # 丢进了另一条 release），error 让这一步当场红，而不是把空产物交下去拼一条缺安装包的发布
       - uses: actions/upload-artifact@v7
-        if: "!startsWith(github.ref, 'refs/tags/')"
         with:
-          name: repo-radar-${{ matrix.label }}
+          name: dist-${{ matrix.label }}
           path: |
             dist-electron/*.exe
+            dist-electron/*.exe.blockmap
             dist-electron/*.dmg
+            dist-electron/*.dmg.blockmap
             dist-electron/*.AppImage
             dist-electron/latest*.yml
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   # needs: build 在矩阵上是「四条腿全成功才跑」，正好是「产物到齐」的判据。
-  # --latest 显式指定：草稿的创建时间早于发布时间，不写的话 GitHub 有可能不把它算成最新版
+  # --latest 显式指定：不写的话 GitHub 有可能不把它算成最新版。
+  # 重跑同一个 tag 时 release 已存在——改为 --clobber 覆盖上传，不再新建，免得又长出第二条
   publish:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: out
+      - name: Check every platform arrived
+        run: |
+          echo "out/ 里的产物："
+          ls -l out
+          for pat in '-x64-setup.exe' '.dmg' '.AppImage'; do
+            find out -name "*$pat" | grep -q . || { echo "缺 *$pat —— 不发布"; exit 1; }
+          done
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME 已存在，覆盖上传产物"
+            gh release upload "$GITHUB_REF_NAME" out/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --latest
+          fi
