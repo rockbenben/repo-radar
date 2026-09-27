@@ -14,7 +14,8 @@ const OPEN_ROWS: { key: keyof OpenCommands; tk: string }[] = [
 /**
  * 扫描与打开方式：查看/编辑 config 里的 roots、excludes、open 三段，保存后触发全量重扫。
  * 这是设置弹窗里的一栏（不是自己开一层弹窗——弹层套弹层的旧结构见 git 历史）。
- * `open` 仍然是入参：它决定这一栏什么时候去拉配置，切到这一栏才拉，不在后台空转。
+ * `open` 仍然是入参：它决定这一栏什么时候去拉配置——设置弹窗一开就拉一次，
+ * 切栏不重拉（hidden 只藏不卸载，打字打到一半不会因为切栏被抹掉）。
  * 这是「zero-config」承诺的补全——下载即用的用户不该被迫去手改 JSON（还要懂反斜杠转义）。
  * 打开方式尤其：默认值 code / wt / explorer 是 Windows + VS Code 的组合，换个机器就是
  * 点了「在编辑器打开」毫无反应（openTarget 的失败只进控制台日志），而界面上原本无处可改。
@@ -58,6 +59,8 @@ export function ScanConfigEditor({
   // 点「重试」时自增，加进下面 effect 的依赖数组触发重新加载；不复用 open（它这次打开期间不变）
   const [reloadTick, setReloadTick] = useState(0)
 
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: reloadTick 是「重试」心跳，本体不读它，
+  // 只为在 open 不变的这次打开里再触发一次加载
   useEffect(() => {
     if (!open) return
     // 每次打开都要重置——之前只重置了 input/loaded，roots 从来没清过：重新打开弹窗、
@@ -91,8 +94,8 @@ export function ScanConfigEditor({
     }
     // 故意不把 t/message 放进依赖数组——见上面 tRef/messageRef 的注释：这个 effect 只该在
     // 弹窗开关或点了「重试」时重新加载，语言切换不该触发它
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, reloadTick])
+  // biome-ignore-end lint/correctness/useExhaustiveDependencies: 重试心跳豁免块结束
 
   // 合并规则只此一份：去空白、空则忽略、重复项静默去重。
   // 「按回车/点添加」和「直接点保存」必须走同一套，否则将来改了归一化（比如去掉末尾斜杠）

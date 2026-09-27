@@ -354,6 +354,9 @@ export function DetailPanel({
   useEffect(() => setGroupInput(repo.group), [repo.group])
 
 
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: 触发集刻意只有 repo.id——fetchDetail 每轮
+  // 渲染新建，列入依赖会让切分支/编辑输入框期间重跑整个重置（冲掉未提交的编辑）；
+  // repo.group/repo.note 只是切换时刻的顺带读取，同仓库内它们的变更由各自控件自己跟
   useEffect(() => {
     let cancelled = false
     setDetail(null)
@@ -381,8 +384,8 @@ export function DetailPanel({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo.id])
+  // biome-ignore-end lint/correctness/useExhaustiveDependencies: repo.id 触发集豁免块结束
 
   /**
    * 仓库在服务端那边真的变了（HEAD 换了提交 / 未提交改动的构成变了）→ 面板里缓存下来的
@@ -398,6 +401,9 @@ export function DetailPanel({
    */
   const stamp = `${repo.lastCommit?.hash ?? ""}|${repo.dirty.staged}|${repo.dirty.unstaged}|${repo.dirty.untracked}|${repo.dirty.conflicted}`
   const syncedStamp = useRef(stamp)
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: 触发集刻意只有 stamp——diffOpen/changes
+  // 只是本次指纹变更时读一眼的现值，列入依赖会让「展开/收起 diff」反过来触发详情重取；
+  // refreshDetail/fetchDiff/closeDiff 每轮渲染新建，同理；重取次数的语义由 tests/detailDiffStale.test.tsx 钉死
   useEffect(() => {
     if (syncedStamp.current === stamp) return
     syncedStamp.current = stamp
@@ -406,8 +412,8 @@ export function DetailPanel({
     // 而没有任何东西会再去取它，那块正文就永远停在加载中了
     if (diffOpen && changes > 0) void fetchDiff()
     else closeDiff()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stamp])
+  // biome-ignore-end lint/correctness/useExhaustiveDependencies: stamp 触发集豁免块结束
 
   const web = remoteWeb(repo.remotes)
   const nameMatch = /^(\d{3})-(.+)$/.exec(repo.name)

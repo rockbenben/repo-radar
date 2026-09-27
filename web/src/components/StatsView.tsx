@@ -11,6 +11,8 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
   const [error, setError] = useState<string | null>(null)
   const [reload, setReload] = useState(0) // 失败后手动重试：自增触发重取
 
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: reload 是「重试」心跳，本体不读它，
+  // 自增只为在失败后再触发一次取数；t/语言不进依赖，避免切语言重复请求
   useEffect(() => {
     let cancelled = false
     setError(null)
@@ -26,11 +28,11 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
         setActivity(act.repos)
       })
       .catch((err) => !cancelled && setError(gt("stats.loadFail", { err: String(err) })))
-    // 依赖 reload：挂载时取一次，失败后点「重试」再取（不把 t 放进依赖，避免切主题/语言时重复请求）
     return () => {
       cancelled = true
     }
   }, [reload])
+  // biome-ignore-end lint/correctness/useExhaustiveDependencies: 重试心跳豁免块结束
 
   if (error)
     return (
@@ -49,8 +51,9 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
   // git init 完写了两个文件的目录工作区是有 mtime 的，拿活跃口径判会把它算成活跃仓库
   const nonEmpty = activity.filter((a) => a.lastCommitDate !== null)
   const empty = activity.length - nonEmpty.length
-  // 下面两个榜单按**活跃**筛，与看板卡片的排序同一口径——两处的标题在 18 种语言里逐字相同
-  // （sort.activity 与 stats.recentActive）。用提交口径筛的话，两块地方对同一个仓库给出不同
+  // 下面两个榜单按**活跃**筛，与看板卡片的排序同一口径——两处的标题在 18 种语言里是同一个词
+  // （sort.activity 与 stats.recentActive；ja/ko 的排序项按该语言习惯带「…順/…순」后缀）。
+  // 用提交口径筛的话，两块地方对同一个仓库给出不同
   // 答案，而榜单照样凑满 15 行，看不出少了谁。
   //
   // 注意举例时别拿「git init 之后还没提交、改了一整天」当典型：那种仓库整棵树是一条

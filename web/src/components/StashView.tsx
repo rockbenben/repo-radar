@@ -43,9 +43,12 @@ export function StashView({ onLog }: { onLog: (ok: boolean, text: string) => voi
     }
   }
   // 仅挂载时取一次；后续动作各自 await load() 刷新
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: load 每轮渲染新建且闭包内只有
+  // setState 与稳定引用，列入依赖会让每次重渲染都重新拉全量 stash 列表，违背「仅挂载一次」的本意
   useEffect(() => {
     void load(true)
   }, [])
+  // biome-ignore-end lint/correctness/useExhaustiveDependencies: 仅挂载豁免块结束
 
   const groups = data ?? []
   const total = useMemo(() => groups.reduce((s, g) => s + g.stashes.length, 0), [groups])

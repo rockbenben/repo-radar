@@ -43,7 +43,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// 本轮修复的核心场景：之前加载 effect 的依赖数组里带着 t，而 t 由 I18nProvider 在语言变化时
+// 这个组件要防的回归：之前加载 effect 的依赖数组里带着 t，而 t 由 I18nProvider 在语言变化时
 // 重建——切换界面语言会让这个 effect 重跑，它第一件事就是 setRoots([])，用户在对话框里已经
 // 加载好（甚至正在编辑）的扫描目录列表会被无声清空。修复后 effect 只认 open/reloadTick。
 describe("ScanConfigEditor — 切换界面语言不清空已加载的 roots", () => {
@@ -64,7 +64,7 @@ describe("ScanConfigEditor — 切换界面语言不清空已加载的 roots", (
   })
 })
 
-// 回归锁定：上一轮修的"重新打开对话框要重置 roots"不能被这一轮改动带回去——
+// 回归锁定：此前修的"重新打开对话框要重置 roots"不能被后续改动带回去——
 // 关闭再打开必须清掉上一次打开时加载到的旧列表，改用新一轮加载的结果，不能两次结果混在一起。
 describe("ScanConfigEditor — 重新打开对话框仍然要重置 roots（回归锁定）", () => {
   it("关闭后用不同数据重新打开：不残留上一次打开的旧列表", async () => {
