@@ -1,4 +1,4 @@
-import { Button, Modal } from "antd"
+import { Button, Dropdown, Modal } from "antd"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useT } from "../i18n"
 import { remoteWeb } from "../lib/meta"
@@ -145,34 +145,38 @@ export function CommandPalette({
               {r.description ?? r.displayName ?? ""}
             </span>
             {/* biome-ignore lint/a11y/noStaticElementInteractions: 这层只是把按钮群的点击与行的
-                「直接用编辑器打开」隔开，交互全在内部的真 Button 上 */}
+                「直接用编辑器打开」隔开，交互全在内部的真 Button / 下拉菜单项上 */}
             <span style={{ display: "flex", gap: 4, flex: "none" }} role="presentation" onClick={(e) => e.stopPropagation()}>
-              {(["editor", "terminal", "explorer"] as const).map((tgt) => (
-                <Button
-                  key={tgt}
-                  size="small"
-                  onClick={() => {
-                    onOpen(r.id, tgt)
-                    onClose()
-                  }}
-                >
-                  {t(tgt === "editor" ? "card.editor" : tgt === "terminal" ? "card.terminal" : "card.dir")}
-                </Button>
-              ))}
-              <Button size="small" title={r.path} onClick={() => onCopyPath(r.path)}>
-                {t("card.copy")}
+              {/* 主按钮「编辑器」直出（与 Enter 同义），其余四颗收进 ⋯ 下拉（B-U2）——
+                  五颗文字按钮把行高撑大、把描述挤到 ~10 字，而描述正是搜索后确认「找对仓了吗」的关键 */}
+              <Button size="small" type="primary" ghost onClick={() => { onOpen(r.id, "editor"); onClose() }}>
+                {t("card.editor")}
               </Button>
-              {remoteWeb(r.remotes) && (
-                <Button
-                  size="small"
-                  onClick={() => {
-                    const web = remoteWeb(r.remotes)
-                    if (web) window.open(web.url, "_blank", "noreferrer")
-                  }}
-                >
-                  {t("palette.remote")}
+              <Dropdown
+                trigger={["click"]}
+                menu={{
+                  items: [
+                    { key: "terminal", label: t("card.terminal") },
+                    { key: "explorer", label: t("card.dir") },
+                    { key: "copy", label: t("card.copy") },
+                    ...(remoteWeb(r.remotes) ? [{ key: "remote", label: t("palette.remote") }] : []),
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === "terminal") onOpen(r.id, "terminal")
+                    else if (key === "explorer") onOpen(r.id, "explorer")
+                    else if (key === "copy") onCopyPath(r.path)
+                    else if (key === "remote") {
+                      const web = remoteWeb(r.remotes)
+                      if (web) window.open(web.url, "_blank", "noreferrer")
+                    }
+                    if (key !== "copy") onClose() // 复制不关面板，就地再选
+                  },
+                }}
+              >
+                <Button size="small" className="rr-palette-more">
+                  ⋯
                 </Button>
-              )}
+              </Dropdown>
             </span>
           </div>
           // biome-ignore-end lint/a11y/useKeyWithClickEvents: 行的豁免块结束

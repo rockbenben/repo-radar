@@ -6,3 +6,6 @@ dist-electron/
 .claude/
 .superpowers/
 .qoder*
+
+# design-preview 打磨稿是审阅工作稿，不入库（同 002/019 惯例）
+design-preview/

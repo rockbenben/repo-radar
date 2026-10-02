@@ -80,6 +80,14 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
       <span className="ago">{a.lastActivityDate ? relativeTime(a.lastActivityDate) : t("stats.emptyRepo")}</span>
     </button>
   )
+  // 两块榜单行式相同、排序方向相反，方向原本只写在标题里——各挂一行列头，最右那列一眼可知是「最后活跃」（C-S1）
+  const listHead = (
+    <div className="rr-actlist-hd" aria-hidden="true">
+      <span className="rank">#</span>
+      <span className="nm">{t("stats.colProject")}</span>
+      <span className="ago">{t("stats.colLastActive")}</span>
+    </div>
+  )
 
   return (
     <div className="rr-stats">
@@ -100,11 +108,11 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
       <div style={{ display: "grid", gap: 28, gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))" }}>
         <section>
           <h2>{t("stats.recentActive")}</h2>
-          <div className="rr-actlist">{top.map(row)}</div>
+          <div className="rr-actlist">{listHead}{top.map(row)}</div>
         </section>
         <section>
-          <h2>{t("stats.staleTop")}</h2>
-          <div className="rr-actlist">{stale.map(row)}</div>
+          <h2>{t("stats.staleTop", { n: stale.length })}</h2>
+          <div className="rr-actlist">{listHead}{stale.map(row)}</div>
         </section>
       </div>
     </div>

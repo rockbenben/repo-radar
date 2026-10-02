@@ -46,6 +46,14 @@ const configHasRoots = (c: { roots?: unknown[]; manualRepos?: unknown[] }) =>
   (c.roots?.length ?? 0) > 0 || (c.manualRepos?.length ?? 0) > 0
 const REPO_URL = "https://github.com/rockbenben/repo-radar" // 顶栏 GitHub 链接（与 package.json repository 一致）
 
+// 本应用 Windows 优先，快捷键按钮不该对着一枚 Mac 键帽发呆（A-T1）：非 Mac 显示 Ctrl。
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent)
+const KBD_MOD = IS_MAC ? "⌘" : "Ctrl"
+
+// 批量/单仓库的 git 动作词。中文界面里把裸动词拼进句子会中英夹丝（「批量 push 完成」），
+// 过一张 action.* 表；en 及其余语言的 action.* 就是原动词，等价于不转。exec 等未收录动作原样返回。
+const ACTION_KEYS = new Set(["fetch", "pull", "push"])
+
 // 设置弹窗的两栏，按**交互模型**分：常规里点完即生效，扫描与打开方式要显式保存并重扫。
 // 第二项复用已有的 scan.title，只有「常规」是新词
 type SettingsTab = "general" | "scan"
@@ -72,6 +80,8 @@ export default function App({
   // 改用 ref 持有最新的 t，处理器内部读 ref（同 components/ScanConfigEditor.tsx 的做法）
   const tRef = useRef(t)
   tRef.current = t
+  // 稳定 helper：把 git 动作词本地化（见 ACTION_KEYS）。t 走 ref，供 WS 闭包里安全调用
+  const actionWord = useCallback((a: string) => (ACTION_KEYS.has(a) ? tRef.current(`action.${a}`) : a), [])
   const [repos, setRepos] = useState<RepoStatus[]>([])
   const [scanning, setScanning] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -296,7 +306,7 @@ export default function App({
           const f = e.payload.results.filter((r) => !r.ok)
           addLog(
             f.length === 0,
-            tRef.current("batch.done", { action: e.payload.action, ok: e.payload.results.length - f.length }) +
+            tRef.current("batch.done", { action: actionWord(e.payload.action), ok: e.payload.results.length - f.length }) +
               (f.length ? tRef.current("batch.doneFail", { n: f.length, names: f.map((x) => x.name).join("、") }) : ""),
           )
         }
@@ -322,7 +332,7 @@ export default function App({
       // 否则「上次扫描」会一直停在断线前的旧值，比不显示更误导
       void syncScanStatus()
     })
-  }, [syncScanStatus, applyScanResult, rescan, addLog])
+  }, [syncScanStatus, applyScanResult, rescan, addLog, actionWord])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -975,11 +985,11 @@ export default function App({
                 </svg>
               }
               placeholder={t("bar.search")}
-              style={{ width: 260 }}
+              className="rr-search"
               size="small"
             />
             <Button size="small" type="text" className="rr-kbd" onClick={() => setPaletteOpen(true)} title={t("bar.paletteTip")}>
-              ⌘K
+              {KBD_MOD} K
             </Button>
             <span className="rr-sep" />
             {/* 三个下拉长得一模一样，且「按分组筛选」和「分组方式」都带「分组」二字——
@@ -1055,17 +1065,6 @@ export default function App({
                 options={views.map((v) => ({ label: v.name, value: v.name }))}
               />
             )}
-            <Button
-              size="small"
-              type="text"
-              onClick={() => {
-                setNewViewName(viewName ?? "")
-                setSaveViewOpen(true)
-              }}
-              title={t("bar.saveViewTip")}
-            >
-              {t("bar.saveView")}
-            </Button>
           </>
         )}
         {/* 读数 + 三个全局动作合成一个**整体**。此前它们是 .rr-bar 里的散兵，而 .rr-bar 是
@@ -1074,37 +1073,36 @@ export default function App({
             右对齐仍然成立，也不再受各语言按钮宽度差异的摆布 */}
         <div className="rr-bar-status">
         <span className="rr-readout">
-          <span className="cell">
+          <span className="cell" title={t("gauge.fleet")}>
             <span className="v">{counts.fleet}</span>
             <span className="k">FLEET</span>
           </span>
-          <span className="cell">
+          <span className="cell" title={t("gauge.crit")}>
             <span className={`v${counts.crit > 0 ? " crit" : ""}`}>{counts.crit}</span>
             <span className="k">CRIT</span>
           </span>
-          <span className="cell">
+          <span className="cell" title={t("gauge.warn")}>
             <span className={`v${counts.warn > 0 ? " warn" : ""}`}>{counts.warn}</span>
             <span className="k">WARN</span>
           </span>
-          <span className="cell">
+          <span className="cell" title={t("gauge.clean")}>
             <span className="v ok">{counts.clean}</span>
             <span className="k">CLEAN</span>
           </span>
           {/* 看板数据有多新——没有这个，兜底重扫是否真的在跑就完全看不见。做成第五格仪表
               而不是按钮旁的游离文本：扫描新鲜度和舰队状态是同一类读数，且仪表格在扫描期间
-              保持稳定（旧实现扫描时文本消失、按钮变宽，整条顶栏跟着抖）。
+              保持稳定（旧实现扫描时文本消失、按钮变宽，整条顶栏跟着抖）。没扫过时显示占位「—」
+              而不是整格消失——格子忽在忽不在会让仪表组宽度跳动（A-P3）。
               相对时间必须按真实 Date.now() 算：把每分钟的 clockTick 当 now 传进去，窗口被
               最小化时浏览器会节流那个 interval，而 WebSocket 照收，于是 lastScanAt 可能比
               快照更新，算出正的差值、渲染成「3 分钟后」。走动靠 clockTick 触发的整体重渲 */}
-          {lastScanAt !== null && (
-            <span
-              className="cell"
-              title={`${t("bar.lastScan", { t: relativeTime(lastScanAt) })} · ${new Date(lastScanAt).toLocaleString(lang, { hour12: false })}`}
-            >
-              <span className="v time">{relativeTime(lastScanAt)}</span>
-              <span className="k">SCAN</span>
-            </span>
-          )}
+          <span
+            className="cell"
+            title={lastScanAt ? `${t("bar.lastScan", { t: relativeTime(lastScanAt) })} · ${new Date(lastScanAt).toLocaleString(lang, { hour12: false })}` : undefined}
+          >
+            <span className="v time">{lastScanAt ? relativeTime(lastScanAt) : "—"}</span>
+            <span className="k">SCAN</span>
+          </span>
         </span>
         <Button size="small" loading={scanning} onClick={rescan}>
           {scanning ? (scanProgress ? t("bar.scanProgress", { done: scanProgress.scanned, total: scanProgress.total }) : t("bar.scanning")) : t("bar.rescan")}
@@ -1137,6 +1135,21 @@ export default function App({
           style={{ display: "none" }}
           onChange={importManifestFile}
         />
+        {/* 保存视图是看板动作，但放进这个整体组（A-P1）：此前它留在看板控件块尾部，
+            1280 宽下独自掉到顶栏第二行最左、右侧空一片。并入本组后跟读数组一起换行、一起右对齐 */}
+        {view === "board" && (
+          <Button
+            size="small"
+            type="text"
+            onClick={() => {
+              setNewViewName(viewName ?? "")
+              setSaveViewOpen(true)
+            }}
+            title={t("bar.saveViewTip")}
+          >
+            {t("bar.saveView")}
+          </Button>
+        )}
         <Button
           size="small"
           className="rr-gear"
@@ -1200,7 +1213,7 @@ export default function App({
               {/* 显示：语言与主题——纯展示偏好放在最前 */}
               <div className="grp">{t("settings.grpDisplay")}</div>
               <div className="row">
-                <span className="lb">Language</span>
+                <span className="lb">{t("settings.language")}</span>
                 <Select
                   size="small"
                   value={lang}
@@ -1373,7 +1386,13 @@ export default function App({
                   <span className="lb">
                     {t("settings.quit")}<span className="hint">{t("settings.quitHint")}</span>
                   </span>
-                  <Popconfirm title={t("settings.quitHint")} onConfirm={() => void quitApp()}>
+                  <Popconfirm
+                    title={t("settings.quitConfirm")}
+                    description={t("settings.quitHint")}
+                    okText={t("settings.quitBtn")}
+                    cancelText={t("modal.cancel")}
+                    onConfirm={() => void quitApp()}
+                  >
                     <Button size="small" danger>
                       {t("settings.quitBtn")}
                     </Button>
@@ -1476,10 +1495,13 @@ export default function App({
                 </Button>
               </>
             )}
+            {/* 告警灯=筛选，右侧两个=视图切换（A-S1）：加一条竖向分隔，并把切换器从
+                「灭掉的灯」式的 text 按钮改成与「重新扫描」同族的描边按钮框，两类控件不再同形 */}
+            {(stashTotal > 0 || showStash || counts.archived > 0 || showArchived) && <span className="rr-annun-div" aria-hidden="true" />}
             {(stashTotal > 0 || showStash) && (
               <Button
                 size="small"
-                type={showStash ? "primary" : "text"}
+                type={showStash ? "primary" : "default"}
                 ghost={showStash}
                 onClick={() =>
                   setShowStash((v) => {
@@ -1495,7 +1517,7 @@ export default function App({
             {(counts.archived > 0 || showArchived) && (
               <Button
                 size="small"
-                type={showArchived ? "primary" : "text"}
+                type={showArchived ? "primary" : "default"}
                 ghost={showArchived}
                 onClick={() =>
                   setShowArchived((v) => {

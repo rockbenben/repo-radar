@@ -573,6 +573,19 @@ export function DetailPanel({
           ))}
         </section>
 
+        {/* 便签紧跟体检（B-U3）：它是「下次要做什么」的回访锚点，原本排在标签分组之后，
+            改动多时被推到 76vh 滚动线以下，打开面板第一眼看不到 */}
+        <section>
+          <h3>{t("detail.note")}</h3>
+          <Input.TextArea
+            value={noteInput}
+            onChange={(e) => setNoteInput(e.target.value)}
+            onBlur={commitNote}
+            autoSize={{ minRows: 2, maxRows: 6 }}
+            placeholder={t("detail.notePlaceholder")}
+          />
+        </section>
+
         {repo.mergedBranches.length > 0 && (
           <section>
             <h3>{t("detail.cleanBranches", { n: repo.mergedBranches.length })}</h3>
@@ -703,17 +716,6 @@ export function DetailPanel({
               {repo.archived ? t("detail.unarchive") : t("detail.archive")}
             </Button>
           </div>
-        </section>
-
-        <section>
-          <h3>{t("detail.note")}</h3>
-          <Input.TextArea
-            value={noteInput}
-            onChange={(e) => setNoteInput(e.target.value)}
-            onBlur={commitNote}
-            autoSize={{ minRows: 2, maxRows: 6 }}
-            placeholder={t("detail.notePlaceholder")}
-          />
         </section>
         </div>
         <div className="rr-d-col">

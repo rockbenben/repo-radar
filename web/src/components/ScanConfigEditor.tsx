@@ -181,7 +181,7 @@ export function ScanConfigEditor({
       ) : (
         <>
           <div className="rr-sect first">{t("roots.title")}</div>
-          <div className="rr-roots-hint">{t("roots.hint")}</div>
+          <div className="rr-roots-hint" title={t("roots.depthHint")}>{t("roots.hint")}</div>
           {list(roots, (i) => setRoots(roots.filter((_, n) => n !== i)), t("roots.none"))}
           {adder(input, setInput, () => {
             setRoots(merged(roots, input))

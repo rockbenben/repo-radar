@@ -103,7 +103,7 @@ describe("计数类「已处理」在面板关着期间也不会被静默压制"
     // ① 面板里显示 PR 4，用户点 ✓（此时服务端累计新到达为 0）
     stubFetch([repo(inbox(4, 0))])
     render(view())
-    await waitFor(() => expect(queueReasons()).toEqual(["4 个 PR 等你"]))
+    await waitFor(() => expect(queueReasons()).toEqual(["4 个 PR 等你处理"]))
     fireEvent.click(screen.getByTitle("标记已处理（有新变化再提醒）"))
     await waitFor(() => expect(queueReasons()).toEqual([]))
 
@@ -117,7 +117,7 @@ describe("计数类「已处理」在面板关着期间也不会被静默压制"
     render(view())
 
     // 被叫来了，队列里就必须有这条——而不是「2 ≤ 4，已处理」
-    await waitFor(() => expect(queueReasons()).toEqual(["2 个 PR 等你"]))
+    await waitFor(() => expect(queueReasons()).toEqual(["2 个 PR 等你处理"]))
   })
 
   it("对照：合掉 2 个只剩 2、没有新的到达 → 仍然保持已处理（不能一改就全冒出来）", async () => {
@@ -133,7 +133,7 @@ describe("计数类「已处理」在面板关着期间也不会被静默压制"
   it("点「已处理」时把服务端的累计数一并存成基线，下次才比得了", async () => {
     stubFetch([repo(inbox(2, 7))])
     render(view())
-    await waitFor(() => expect(queueReasons()).toEqual(["2 个 PR 等你"]))
+    await waitFor(() => expect(queueReasons()).toEqual(["2 个 PR 等你处理"]))
 
     fireEvent.click(screen.getByTitle("标记已处理（有新变化再提醒）"))
 
@@ -153,7 +153,7 @@ describe("计数类「已处理」在面板关着期间也不会被静默压制"
 
     render(view())
 
-    await waitFor(() => expect(queueReasons()).toEqual(["2 个 PR 等你"]))
+    await waitFor(() => expect(queueReasons()).toEqual(["2 个 PR 等你处理"]))
   })
 
   it("旧格式（纯水位，没有基线）退回原口径，不会因为读不到基线就乱冒", async () => {

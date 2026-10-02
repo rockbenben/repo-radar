@@ -137,7 +137,7 @@ describe("活动日志的批量完成回执跟随当前界面语言", () => {
 
     emitFinished()
 
-    expect(logTexts()).toEqual(["批量 push 完成：1 成功"])
+    expect(logTexts()).toEqual(["批量推送完成：1 成功"])
   })
 })
 

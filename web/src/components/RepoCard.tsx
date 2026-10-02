@@ -213,7 +213,7 @@ export const RepoCard = memo(function RepoCard({
           </span>
         )}
         {changes === 0 && repo.branch !== null ? (
-          <span className="clean">✓ clean</span>
+          <span className="clean">✓ {t("card.clean")}</span>
         ) : (
           <>
             {repo.dirty.staged > 0 && <span className="stg">+{repo.dirty.staged}</span>}
@@ -227,7 +227,7 @@ export const RepoCard = memo(function RepoCard({
             游离 HEAD 上挂出「未跟踪上游」，而同一仓库的体检区不列这条，两处直说矛盾；游离时也压根
             没有分支可跟踪，照提示去 git push -u 直接报错。upstream 非 null = 上游分支已被删 */}
         {repo.ahead === -1 && repo.upstream === null && repo.branch !== null && repo.remotes.length > 0 && (
-          <span className="i">{t("card.noUpstream")}</span>
+          <span className="rr-chip i">{t("card.noUpstream")}</span>
         )}
       </div>
 
