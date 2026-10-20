@@ -142,6 +142,10 @@ export default function App({
   const [watchCov, setWatchCov] = useState<{ watched: number; total: number }>({ watched: 0, total: 0 })
   const [lastScanAt, setLastScanAt] = useState<string | null>(null) // 最近一次全量扫描完成时刻（ISO）
   const [notifications, setNotifications] = useState(false) // 「等我的」新增时弹系统通知（服务端持久化，默认关）
+  // 启动时检查一次新版本（服务端持久化，**默认关**）。初值必须与服务端默认一致：
+  // /api/config 回来之前这一格是先画出来的，猜错的那一侧会闪一下相反的状态
+  const [checkUpdates, setCheckUpdates] = useState(false)
+  const [checkingUpdate, setCheckingUpdate] = useState(false) // 手动检查进行中（原生对话框在主进程那边弹）
   const manifestFileRef = useRef<HTMLInputElement>(null)
   const [bootAnim, setBootAnim] = useState(false) // 初次载入时的开机错峰淡入（仅一次，不在筛选/刷新时重播）
   const bootedRef = useRef(false)
@@ -654,6 +658,7 @@ export default function App({
         setWatchLimit(typeof c.watchLimit === "number" ? c.watchLimit : 0)
         setAutoFetchMin(typeof c.autoFetchMinutes === "number" ? c.autoFetchMinutes : 0)
         setNotifications(!!c.notifications)
+        setCheckUpdates(!!c.checkUpdates)
         setHasRoots(configHasRoots(c))
         setConfigLoaded(true)
       })
@@ -746,6 +751,33 @@ export default function App({
     } catch {
       setNotifications(!next) // 失败回滚：开关显示成开着却没生效，比直接报错更糟
       message.error(t("msg.saveFail"))
+    }
+  }
+  // 启动时检查新版本的开关。**默认关**：会联网的开关一律 opt-in，
+  // 而它只发一次请求、只回一句「有没有新版」，不下载也不安装
+  async function toggleCheckUpdates() {
+    const next = !checkUpdates
+    setCheckUpdates(next)
+    try {
+      const r = await fetch("/api/config", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ checkUpdates: next }) })
+      if (!r.ok) throw new Error()
+      message.success(next ? t("msg.updateCheckOn") : t("msg.updateCheckOff"))
+    } catch {
+      setCheckUpdates(!next) // 失败回滚：开关显示成开着却没生效，比直接报错更糟
+      message.error(t("msg.saveFail"))
+    }
+  }
+  // 手动检查一次。真正的检查、对话框、下载与安装都在主进程里（原生对话框只能在那儿弹），
+  // 这里只负责发起并等结果
+  async function checkUpdateNow() {
+    setCheckingUpdate(true)
+    try {
+      const r = await fetch("/api/update/check", { method: "POST", headers: JSON_HEADERS, body: "{}" })
+      if (!r.ok) throw new Error()
+    } catch {
+      message.error(t("msg.updateCheckFail"))
+    } finally {
+      setCheckingUpdate(false)
     }
   }
   async function changeWatchLimit(limit: number) {
@@ -1355,6 +1387,23 @@ export default function App({
                   {t("settings.notify")}<span className="hint">{t("settings.notifyHint")}</span>
                 </span>
                 <Switch size="small" checked={notifications} onChange={toggleNotifications} disabled={!configLoaded} />
+              </div>
+              {/* 更新检查：开关管的是「每次启动顺手问一句」，按钮管的是「现在问」。
+                  两件事分开是因为它们回答的不是同一个问题——用户可能不想让应用
+                  每次启动都联网，但此刻想知道有没有新版 */}
+              <div className="row">
+                <span className="lb">
+                  {t("settings.checkUpdates")}<span className="hint">{t("settings.checkUpdatesHint")}</span>
+                </span>
+                <Switch size="small" checked={checkUpdates} onChange={toggleCheckUpdates} disabled={!configLoaded} />
+              </div>
+              <div className="row">
+                <span className="lb">
+                  {t("settings.checkUpdatesNow")}<span className="hint">{t("settings.checkUpdatesNowHint")}</span>
+                </span>
+                <Button size="small" loading={checkingUpdate} onClick={() => void checkUpdateNow()}>
+                  {t("settings.checkUpdatesNowBtn")}
+                </Button>
               </div>
               {/* 系统：本机/本实例相关的两个动作。它们和上面的开关一样即时生效，
                   所以是「常规」里的一个分组，不值得单开一栏——版本和 GitHub 链接搬去页脚之后，

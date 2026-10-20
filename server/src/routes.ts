@@ -42,6 +42,12 @@ export interface ApiExtras {
   boundPort?: () => number // 实际绑定的端口，同源白名单按它算。取函数而非数值：createApi 在 bind 之前就调用了，那时端口还没定
   devOrigins?: boolean // 放行 vite dev server（5173）。**只能在开发模式下为真**，见 DEV_ORIGINS
   version?: string // 应用版本，由宿主注入（桌面应用用 app.getVersion()）
+  /**
+   * 手动查一次更新。**只在桌面应用注入**——那里才有 electron-updater 与原生对话框，
+   * 服务器部署时端点不存在。返回值的含义由桌面端定义（upToDate/available/…），
+   * 这里只当字符串透传，不在 server 里另抄一份判据。
+   */
+  checkUpdate?: () => Promise<string>
   shutdown?: () => void // /api/shutdown 的实际退出动作；不注入则端点不存在（仅单文件 exe 模式注入，服务器部署绝不暴露可杀进程的 HTTP 端点）
   autostart?: { get: () => { supported: boolean; enabled: boolean }; set: (enabled: boolean) => { supported: boolean; enabled: boolean } } // 开机自启（仅单文件 exe 模式注入）
 }
@@ -175,6 +181,13 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     const body = await jsonBody(c)
     if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be a boolean" }, 400)
     return c.json(extras.autostart.set(body.enabled))
+  })
+
+  // 手动查一次更新。**只在桌面应用注入**：那边跑 electron-updater、弹原生对话框，
+  // 服务器部署没有「发布版」这回事，端点干脆不存在
+  app.post("/api/update/check", async (c) => {
+    if (!extras.checkUpdate) return c.json({ error: "update check is only available in the desktop app" }, 400)
+    return c.json({ outcome: await extras.checkUpdate() })
   })
 
   app.get("/api/repos", (c) => c.json(store.list()))

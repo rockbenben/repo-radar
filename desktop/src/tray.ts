@@ -4,6 +4,7 @@ export interface TrayActions {
   show: () => void
   rescan: () => void
   openLogs: () => void
+  checkUpdate: () => void
   quit: () => void
 }
 
@@ -18,6 +19,7 @@ export function createTray(iconPath: string, actions: TrayActions): Tray {
     Menu.buildFromTemplate([
       { label: "显示面板", click: actions.show },
       { label: "立即重扫", click: actions.rescan },
+      { label: "检查更新", click: actions.checkUpdate },
       { label: "打开日志", click: actions.openLogs },
       { type: "separator" },
       { label: "退出", click: actions.quit },
