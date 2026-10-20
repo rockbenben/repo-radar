@@ -27,6 +27,9 @@ export interface Config {
   watchLimit: number
   autoFetchMinutes: number // 定时后台 fetch 间隔（分钟）；0 = 关闭（默认）
   notifications: boolean // GitHub「等我的」新增时弹系统通知：默认关闭（打扰性功能一律 opt-in）
+  // 启动时检查一次有没有新版本：**默认关闭**。会联网的开关一律 opt-in，
+  // 而且它只发一次请求、只回一句「有没有新版」，不下载也不安装——下载和安装都要用户点头
+  checkUpdates: boolean
   health: { staleDays: number; disabledRules: string[] }
   open: { editor: string; terminal: string; explorer: string }
 }
@@ -46,6 +49,7 @@ export const DEFAULT_CONFIG: Config = {
   watchLimit: 200,
   autoFetchMinutes: 0,
   notifications: false,
+  checkUpdates: false,
   health: { staleDays: 90, disabledRules: [] },
   open: {
     editor: 'code "{path}"',
@@ -140,6 +144,8 @@ export function validateConfigPatch(body: unknown): string | null {
       return "watchLimit must be a non-negative integer"
   }
   if (body.notifications !== undefined && typeof body.notifications !== "boolean") return "notifications must be a boolean"
+  if (body.checkUpdates !== undefined && typeof body.checkUpdates !== "boolean")
+    return "checkUpdates must be a boolean"
   if (body.health !== undefined) {
     if (!isRecord(body.health)) return "health must be an object"
     if (body.health.staleDays !== undefined && typeof body.health.staleDays !== "number")

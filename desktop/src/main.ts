@@ -15,6 +15,7 @@ import { resolveConfigFile } from "./config-path"
 import { showNotification, summarizeInboxChanges } from "./notify"
 import { createQuit } from "./quit"
 import { createTray } from "./tray"
+import { checkForUpdates } from "./update"
 import { loadLastVersion, saveLastVersion } from "./version-state"
 import { createWindow, saveWindowState } from "./window"
 
@@ -141,6 +142,8 @@ function bootstrap(): void {
   let mainWindow: BrowserWindow | null = null
   let tray: Tray | null = null
   let quitting = false // 只有走 quit() 才置真；窗口的 close 处理器靠它区分「隐藏」与「真退出」
+  // 启动时那次自动检查的定时器。退出时必须清掉：定时器没清会让进程在收尾之后还赖着
+  let updateTimer: NodeJS.Timeout | null = null
   // 提到 bootstrap 顶层：showWindow() 建窗口时要用，quit() 的 beforeExit 收尾补存时也要用，
   // 两处必须用同一份路径，不能各算一遍
   const windowStateFile = join(configDir, "window-state.json")
@@ -215,6 +218,9 @@ function bootstrap(): void {
       // REPO_RADAR_CONFIG/REPO_RADAR_PORT，理由与后果全在 autostartExtra 的注释里
       autostart: autostartExtra(isDefaultConfig),
       shutdown: () => void quit(),
+      // 设置面板里那一下「检查更新」：跑在主进程里（原生对话框 + electron-updater 都在这儿），
+      // 设置面板只是个网页，它自己没法弹原生框
+      checkUpdate: () => checkForUpdates({ getWindow: () => mainWindow }, true),
     },
   })
 
@@ -223,6 +229,10 @@ function bootstrap(): void {
     stopBackend: () => backend.stop(),
     beforeExit: () => {
       quitting = true // 放行窗口的 close，不再拦截成隐藏
+      if (updateTimer) {
+        clearTimeout(updateTimer)
+        updateTimer = null
+      }
       tray?.destroy()
       // 主动补存一次窗口尺寸/位置：唯一的真退出路径最终调用 app.exit()，是强制终止进程，
       // 根本不会触发窗口的 close 事件（window.ts 里挂在 close 上的持久化因此从未在这条路径上
@@ -360,8 +370,25 @@ function bootstrap(): void {
         show: () => void showWindow(),
         rescan: () => void fetch(`http://127.0.0.1:${backend.port}/api/scan`, { method: "POST" }).catch(() => {}),
         openLogs: () => void shell.openPath(logFilePath(configDir)),
+        checkUpdate: () => void checkForUpdates({ getWindow: () => mainWindow }, true),
         quit: () => void quit(),
       })
+      // 启动时检查一次有没有新版本。**默认关闭**（config.checkUpdates），开关在设置面板里；
+      // 用户不打开它就一次网络请求都不发——这个应用是本地优先的，联网得用户自己点头。
+      // 读配置失败按「关」处理：坏配置不该让应用一启动就联网。
+      let wantUpdateCheck = false
+      try {
+        wantUpdateCheck = loadConfig(configFile).checkUpdates
+      } catch {
+        /* 配置读不出来时按「关」处理 */
+      }
+      // 延后几秒再查：启动扫描正在跑，不该跟它抢带宽。检查本身是异步的，不占主线程。
+      if (wantUpdateCheck) {
+        updateTimer = setTimeout(() => {
+          updateTimer = null
+          void checkForUpdates({ getWindow: () => mainWindow }, false)
+        }, 5000)
+      }
       if (!startsHidden(process.argv, app.getLoginItemSettings().wasOpenedAsHidden)) void showWindow()
     })
     .catch((err) => {

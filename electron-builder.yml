@@ -18,7 +18,13 @@ directories:
 # 图标改为在下面各平台段落里用显式相对路径引用
 
 # 服务端与主进程的依赖已由 esbuild 全部打进 desktop/dist/main.cjs，
-# 因此 asar 里不需要任何 node_modules——只带三样东西
+# 因此除 electron-updater 外不需要任何 node_modules——只带下面这几样东西
+# electron-updater 是唯一的例外：它必须以**真实的 node_modules 形式**存在运行时
+# （esbuild 把它打进 main.cjs 会让它找不到自己的 package.json 和同目录文件），
+# 所以下面不能有 "!**/node_modules"——它会把 electron-updater 一起挡在包外，
+# 装出来的应用会在启动时报找不到模块。electron-builder 按 package.json 的
+# dependencies 计算该带哪些包，根 package.json 里只有 electron-updater 一个生产依赖，
+# 带进去的就是它那一棵树（不涉及 server/web 这两个 workspace 的依赖）。
 # 注意：scripts/icon.ico 不在这里——它只在构建期被下面 win.icon 引用（生成 exe 图标资源），
 # 主进程运行时只读 icon-256.png（托盘/通知共用），把 .ico 塞进 asar 只是白占约 372KB 空间
 files:
@@ -30,7 +36,6 @@ files:
   - scripts/tray-icon.png
   - scripts/tray-icon@2x.png
   - package.json
-  - "!**/node_modules"
 
 asar: true
 
@@ -47,8 +52,10 @@ nsis:
   include: build/installer.nsh             # 卸载时清理运行时写入的开机自启注册表项，见该文件注释
 
 mac:
-  # 只出 dmg，不出 zip：本项目不做自动更新（人类决策），zip 在这里唯一的用途就是给
-  # electron-updater 当更新载体，没有自动更新也就没有人会去读它，留着只是重复产物。
+  # 只出 dmg，不出 zip。zip 在这里唯一的用途是给 electron-updater 当更新载体，
+  # 而 macOS 这一侧暂时用不上：本项目**不签名** macOS 包，而未签名、未公证的 .app
+  # 换掉自己就破坏了签名，本来就不能自更新。等签名与公证配好，再把 zip 加回来。
+  # （Windows/Linux 那边是有更新通道的：NSIS 与 AppImage 都能就地替换。）
   # arch 同时写 arm64 与 x64：electron-builder 在 arm64 runner（macos-latest）上
   # 也能直接为 x64 下载对应的 Electron 二进制来构建，不需要 Rosetta，一个 runner 出两份 dmg。
   target:

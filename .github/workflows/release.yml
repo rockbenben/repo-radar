@@ -46,8 +46,9 @@ jobs:
       - run: npm ci
       - run: npm run lint # 与 ci 同一道 biome 门禁：发布产物不该绕过它
       # tag 必须与 package.json 版本一致：这个版本号显示在设置面板、进产物文件名、写进 latest.yml。
-      # 忘 bump 就发出「版本号与 tag 对不上」的产物——本项目不做自动更新（理由见 electron-builder.yml
-      # 的 mac 段），但用户对着 Releases 页挑安装包时照样会被它误导
+      # 忘 bump 就发出「版本号与 tag 对不上」的产物——应用内更新（opt-in，默认关）会拿这个版本号
+      # 去比 latest.yml，对不上的话用户永远看不到「已是最新」以外的结果；
+      # 用户对着 Releases 页挑安装包时也一样会被它误导
       - name: Verify tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
