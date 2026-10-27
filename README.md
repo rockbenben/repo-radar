@@ -31,6 +31,8 @@ Whatever needs action rises to the top as a queue, one item per repo, ranked by 
 | Closing the window | drops to tray | drops to tray | quits — use **Launch at login** to keep it resident |
 | Watching for changes | covers every repo under a scan directory | same | covers the first 200 repos (raise or lift the cap in settings) |
 
+**macOS 13 (Ventura) or newer** is required: Electron 44 dropped macOS 12, and this build ships Electron 45.
+
 Everything runs on your machine and uses the `git` you already have — no account, no telemetry, nothing uploaded. The GitHub column (PRs, issues, CI) is optional and reads through the [`gh` CLI](https://cli.github.com/) you're already logged into; skip it and the rest still works.
 
 ## Install
@@ -85,7 +87,7 @@ Scan directories, excluded folders and the open commands are editable in ⚙ Set
 
 ## Known limits
 
-- **Upgrades are manual by design.** No auto-update: run the new installer over the old one.
+- **In-app updates are opt-in, never forced.** The startup check is off by default; when you turn it on it only asks GitHub for the latest version. Downloading and installing each need your confirmation. macOS builds stay manual until signing lands — grab the new installer from Releases.
 - **A move that slips past the recognizing scan gets a hint, not a silent loss.** When the automatic match misses, the fresh card offers *"likely a moved copy of the old path"* — click **Migrate** and the tags, star and notes follow it. It only fires for repos scanned at least once on this build (the ledger needs to have seen their remote), and never for a destination you haven't added as a scan directory.
 - **Linux has no dependable tray**, so closing the window quits instead of minimizing.
 - **Repos you added one by one, outside a scan directory, aren't recognised that way** — move one and you point it at the new path yourself.

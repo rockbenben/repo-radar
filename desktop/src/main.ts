@@ -12,6 +12,7 @@ import { DEFAULT_PORT, PORT, PORT_IS_EXPLICIT } from "../../server/src/port"
 import { autostartExtra, cleanupLegacyEntries } from "./autostart"
 import { startsHidden } from "./cli"
 import { resolveConfigFile } from "./config-path"
+import { mainT } from "./i18n"
 import { showNotification, summarizeInboxChanges } from "./notify"
 import { createQuit } from "./quit"
 import { createTray } from "./tray"
@@ -220,7 +221,19 @@ function bootstrap(): void {
       shutdown: () => void quit(),
       // 设置面板里那一下「检查更新」：跑在主进程里（原生对话框 + electron-updater 都在这儿），
       // 设置面板只是个网页，它自己没法弹原生框
-      checkUpdate: () => checkForUpdates({ getWindow: () => mainWindow }, true),
+      checkUpdate: (lang) => checkForUpdates({ getWindow: () => mainWindow }, true, lang),
+      // 首次加的扫描目录不该逼用户手打路径：桌面端直接开系统文件夹选择器。
+      // web 只是调这个端点；服务器模式没有它，按钮会隐藏。
+      pickDirectory: async () => {
+        const win = mainWindow
+        const options = {
+          properties: ["openDirectory" as const],
+          title: mainT(app.getLocale(), "roots.pick"),
+        }
+        const result =
+          win && !win.isDestroyed() ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+        return result.canceled ? null : (result.filePaths[0] ?? null)
+      },
     },
   })
 
@@ -366,19 +379,29 @@ function bootstrap(): void {
         app.exit(1)
         return
       }
-      tray = createTray(trayIconPath, {
-        show: () => void showWindow(),
-        rescan: () => void fetch(`http://127.0.0.1:${backend.port}/api/scan`, { method: "POST" }).catch(() => {}),
-        openLogs: () => void shell.openPath(logFilePath(configDir)),
-        checkUpdate: () => void checkForUpdates({ getWindow: () => mainWindow }, true),
-        quit: () => void quit(),
-      })
+      tray = createTray(
+        trayIconPath,
+        {
+          show: () => void showWindow(),
+          rescan: () => void fetch(`http://127.0.0.1:${backend.port}/api/scan`, { method: "POST" }).catch(() => {}),
+          openLogs: () => void shell.openPath(logFilePath(configDir)),
+          checkUpdate: () => void checkForUpdates({ getWindow: () => mainWindow }, true),
+          quit: () => void quit(),
+        },
+        {
+          show: mainT(app.getLocale(), "tray.show"),
+          rescan: mainT(app.getLocale(), "bar.rescan"),
+          checkUpdate: mainT(app.getLocale(), "settings.checkUpdatesNowBtn"),
+          openLogs: mainT(app.getLocale(), "tray.openLogs"),
+          quit: mainT(app.getLocale(), "settings.quitBtn"),
+        },
+      )
       // 启动时检查一次有没有新版本。**默认关闭**（config.checkUpdates），开关在设置面板里；
       // 用户不打开它就一次网络请求都不发——这个应用是本地优先的，联网得用户自己点头。
       // 读配置失败按「关」处理：坏配置不该让应用一启动就联网。
       let wantUpdateCheck = false
       try {
-        wantUpdateCheck = loadConfig(configFile).checkUpdates
+        wantUpdateCheck = loadConfig(configFile).checkUpdates === true
       } catch {
         /* 配置读不出来时按「关」处理 */
       }
@@ -389,7 +412,7 @@ function bootstrap(): void {
           void checkForUpdates({ getWindow: () => mainWindow }, false)
         }, 5000)
       }
-      if (!startsHidden(process.argv, app.getLoginItemSettings().wasOpenedAsHidden)) void showWindow()
+      if (!startsHidden(process.argv, app.getLoginItemSettings().wasOpenedAtLogin)) void showWindow()
     })
     .catch((err) => {
       // backend.start() 失败已经在上面的 try/catch 里弹过框、app.exit(1) 并 return 了，

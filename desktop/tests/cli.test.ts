@@ -6,7 +6,7 @@ describe("startsHidden — 是否只起托盘、不弹窗", () => {
     expect(startsHidden(["repo-radar.exe", "--tray"], false)).toBe(true)
   })
 
-  it("macOS 的登录项没有参数，靠 wasOpenedAsHidden 判断", () => {
+  it("macOS 的登录项没有参数，靠 wasOpenedAtLogin 判断", () => {
     expect(startsHidden(["/Applications/repo-radar.app/Contents/MacOS/repo-radar"], true)).toBe(true)
   })
 

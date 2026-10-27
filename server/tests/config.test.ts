@@ -264,6 +264,22 @@ describe("notifications 字段", () => {
   })
 })
 
+describe("checkUpdates 字段", () => {
+  it("默认关闭——联网开关必须由用户主动打开", () => {
+    expect(DEFAULT_CONFIG.checkUpdates).toBe(false)
+  })
+
+  it("旧配置文件没有这个字段时按默认值合并", () => {
+    const merged = mergeConfig(structuredClone(DEFAULT_CONFIG), { roots: ["/a"] } as Partial<Config>)
+    expect(merged.checkUpdates).toBe(false)
+  })
+
+  it("校验：必须是布尔", () => {
+    expect(validateConfigPatch({ checkUpdates: true })).toBeNull()
+    expect(validateConfigPatch({ checkUpdates: "yes" })).toBe("checkUpdates must be a boolean")
+  })
+})
+
 // legacyAutostartMigrated 曾被错误地放进这份用户可见、可通过 PUT /api/config 修改的
 // 配置——它是纯粹的桌面端一次性迁移状态（SEA 时代自启意图是否已经迁移过），用户在自己的
 // config.json 里看到一个看不懂的内部字段，还能通过公开 API 把它改坏，进而干扰

@@ -14,6 +14,7 @@ fields are covered in the README; this page is the rest.
 | `health` | `{ staleDays, disabledRules }` — tune the "stale" threshold or switch off individual checks |
 | `open` | command templates for the editor / terminal / folder buttons (`{path}` = the repo path) |
 | `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | background behaviour. Only `autoScanMinutes` (30) is on by default |
+| `checkUpdates` | desktop builds only: ask GitHub once at startup whether a newer release exists. Off by default; the check never downloads or installs anything — both need your confirmation |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | per-repo organization |
 | `lastOpened` | when each repo's editor / terminal / folder button was last used — maintained automatically, nothing to edit by hand |
 

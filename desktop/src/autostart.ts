@@ -173,8 +173,14 @@ function setAutostart(enabled: boolean, home = homedir()): AutostartState {
         rmSync(file, { force: true })
       }
     } else {
-      // Windows 走 --tray 参数；macOS 登录项不带参数，用 openAsHidden 表达同一意图
-      app.setLoginItemSettings({ openAtLogin: enabled, args: [TRAY_FLAG], openAsHidden: true })
+      // Windows 走 --tray 参数；macOS 登录项不带参数，改由启动后读 wasOpenedAtLogin（见 cli.ts）
+      //
+      // 原来这里还传了 openAsHidden: true——**它在 Electron 44 被移除了**：
+      // 官方 breaking-changes 写的是「Removed: Pre-macOS 13 login item attributes」，
+      // 这几个字段只在 macOS 12 及更早版本上有效，而 macOS 12 已被 Chromium 放弃。
+      // 现在 macOS 上的等价手段是 getLoginItemSettings().wasOpenedAtLogin
+      // （「这次是不是登录时被自动拉起来的」），语义比「被隐藏拉起」更准。
+      app.setLoginItemSettings({ openAtLogin: enabled, args: [TRAY_FLAG] })
     }
   }
   return getAutostart(home)
