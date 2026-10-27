@@ -8,6 +8,8 @@ monorepo（npm workspaces）：`server`（Hono 后端 + git 扫描）/ `web`（R
 - typecheck: `npm run typecheck -w server && npm run typecheck -w web && npm run typecheck -w desktop`
 - lint: `npm run lint`（biome check，`npm run lint:fix` 做安全自动修复）；ci.yml / release.yml 都跑它
 - test: `npm test`（含上面三项 typecheck + 三个 workspace 的 vitest）
+  机器负载高时，server 的 `perf-smoke` / `suspect-move` 会假超时（30s 上限、git 子进程多）：
+  **单独跑这两个文件判定**——绿=抖动，红=真回归，别把它当回归去追。
 - deadcode: `npx knip`（未装为项目依赖；`knip.json` 只把 Windows 系统二进制 `reg` 记为已声明）
 - bench: `npm run bench`（扫描并发基准）。**测扫描/并发性能只能走它**——起 Electron 做进程级 A/B
   会被单实例锁、端口漂移和启动扫描与手动重扫交错污染计时。

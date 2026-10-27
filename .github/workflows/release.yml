@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -39,12 +39,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run lint # 与 ci 同一道 biome 门禁：发布产物不该绕过它
+      - run: npm run check:workflows
+        shell: bash
       # tag 必须与 package.json 版本一致：这个版本号显示在设置面板、进产物文件名、写进 latest.yml。
       # 忘 bump 就发出「版本号与 tag 对不上」的产物——应用内更新（opt-in，默认关）会拿这个版本号
       # 去比 latest.yml，对不上的话用户永远看不到「已是最新」以外的结果；
@@ -81,6 +85,8 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -94,6 +100,13 @@ jobs:
           for pat in '-x64-setup.exe' '.dmg' '.AppImage'; do
             find out -name "*$pat" | grep -q . || { echo "缺 *$pat —— 不发布"; exit 1; }
           done
+      # 手动下载的校验和：更新器自己用 latest*.yml 里的 sha512，这里给人一条可独立核对的退路
+      - name: Write SHA256SUMS
+        run: |
+          cd out
+          rm -f SHA256SUMS
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -102,6 +115,7 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" out/* --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --latest
+          fi
       # 把 release 发布出去，并显式把 `releases/latest` 指到它，然后自己确认一遍。
       #
       # ⚠️ **显式给 make_latest 不是多此一举**：GitHub 在「草稿转成已发布」时**不会**重算
@@ -135,4 +149,3 @@ jobs:
             exit 1
           fi
           echo "release ${tag} 已发布，releases/latest 指向它"
-          fi

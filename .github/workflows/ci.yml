@@ -23,6 +23,8 @@ jobs:
         with:
           node-version: 24
       - run: npm ci
+      - run: npm run check:workflows # workflow 的 run: 块只在 tag 时执行，这里提前做 bash -n
+        shell: bash
       - run: npm run lint # biome check：lint + import 顺序，格式化不在它职责内
       - run: npm test # root 脚本 = server/web/desktop 三份 typecheck + 三套测试
       - run: npm run build
