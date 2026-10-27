@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
+import { renameWithRetry } from "./atomic-write"
 
 export interface JsonStoreOptions<T> {
   file: string
@@ -81,7 +82,7 @@ export class JsonStore<T> {
       // 这个窗口真实且反复出现。同目录 rename 在 NTFS 与 POSIX 上都是原子替换。
       const tmp = `${this.file}.tmp`
       writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.map), null, 2), "utf8")
-      renameSync(tmp, this.file)
+      renameWithRetry(tmp, this.file)
       this.dirty = false
       this.writeFailed = false // 恢复了：下一段失败要重新报一行
     } catch (err) {

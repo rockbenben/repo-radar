@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
+import { renameWithRetry } from "./atomic-write"
 
 export interface Config {
   roots: string[]
@@ -190,7 +191,7 @@ function sanitizeNumber(v: unknown, fallback: number, max = Number.MAX_SAFE_INTE
 function quarantineCorrupt(file: string): boolean {
   try {
     const backup = `${file}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`
-    renameSync(file, backup)
+    renameWithRetry(file, backup)
     console.error(`[repo-radar] config.json 解析失败，已备份为 ${backup} 并按默认设置继续 / corrupt config backed up`)
     return true
   } catch {
@@ -245,5 +246,5 @@ export function saveConfig(file: string, config: Config): void {
   // 都是原子替换，读方要么看到旧的完整内容、要么看到新的完整内容，不存在半截状态。
   const tmp = `${file}.tmp`
   writeFileSync(tmp, JSON.stringify(config, null, 2), "utf8")
-  renameSync(tmp, file)
+  renameWithRetry(tmp, file)
 }
