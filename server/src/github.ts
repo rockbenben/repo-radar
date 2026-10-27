@@ -246,15 +246,17 @@ const PR_LIST_LIMIT = 100
 export async function getGithubStatus(cwd: string): Promise<GithubStatus> {
   const empty: GithubStatus = { ok: false, error: null, prs: [], prsTruncated: false, run: null }
 
-  if (!(await ghAvailable())) return { ...empty, error: "本机未安装 GitHub CLI（gh）" } // 复用缓存探测，别每次点开都白 spawn 一次 --version
+  // gh 未安装 / 未登录：回**错误码**，中文句子交给前端按界面语言翻译（界面有 18 种语言，
+  // 服务端写死中文的话，英文界面里会蹦出一句中文）。映射见 web/src/lib/errText.ts。
+  if (!(await ghAvailable())) return { ...empty, error: "ghMissing" } // 复用缓存探测，别每次点开都白 spawn 一次 --version
 
   // --limit：gh 默认只抓 30 条，而面板把这个数组的长度当「Open PRs: N」渲染——超过 30 个开放 PR 的
   // 仓库会显示 30，同屏的行动队列却走 GraphQL totalCount 显示真实数字，两个数当场打架
   const prRes = await runGh(cwd, ["pr", "list", "--state", "open", "--limit", String(PR_LIST_LIMIT), "--json", "number,title,url,isDraft"])
   if (prRes.code !== 0) {
-    const msg = prRes.stderr.trim().split("\n").pop() || "gh 查询失败"
+    const msg = prRes.stderr.trim().split("\n").pop() || "ghQueryFailed"
     // 常见：未登录、当前目录不是 GitHub 仓库
-    return { ...empty, error: /auth|logged in|login/i.test(msg) ? "gh 未登录（运行 gh auth login）" : msg }
+    return { ...empty, error: /auth|logged in|login/i.test(msg) ? "ghNotLoggedIn" : msg }
   }
 
   let prs: GithubPr[] = []

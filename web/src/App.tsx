@@ -30,6 +30,7 @@ import {
   STASH_SNOOZE_MS,
 } from "./lib/attention"
 import { type HasRootsState, resolveEmptyArea } from "./lib/emptyState"
+import { errText } from "./lib/errText"
 import { applyFilter, type FilterState } from "./lib/filter"
 import { visibleLamps } from "./lib/lamps"
 import { isGithubUrl } from "./lib/meta"
@@ -82,6 +83,38 @@ export default function App({
   tRef.current = t
   // 稳定 helper：把 git 动作词本地化（见 ACTION_KEYS）。t 走 ref，供 WS 闭包里安全调用
   const actionWord = useCallback((a: string) => (ACTION_KEYS.has(a) ? tRef.current(`action.${a}`) : a), [])
+  // 横幅/输出面板标题里的动作名：预演（dry run）加一个**本地化**前缀。
+  // 服务端过去直接拼中文「预演: 」，非中文界面里就会漏出中文（实测英文界面显示
+  // “Batch 预演: echo hello … done: 1 ok”）。现在服务端只传命令原文 + dryRun 标记。
+  const batchActionWord = useCallback(
+    (a: string, dryRun?: boolean) => (dryRun ? tRef.current("batch.dryRunLabel", { action: a }) : actionWord(a)),
+    [actionWord],
+  )
+  // 顶栏横幅的文案。单仓库动作（详情面板里点的 拉取/更新/推送）说「仓库 + 动作 + 结果」，
+  // 不说「批量…完成」——用户点的是单个仓库，那句文案会让人以为触发了批量操作。
+  // 横幅**照旧出现**：详情面板可能在同步完成前被关掉（或切到别的仓库重挂载），
+  // 那一行内联结果就没了，这条横幅是唯一的当场反馈。
+  const batchBannerText = (b: BatchProgress, failedItems: BatchResultItem[]): string => {
+    const action = actionWord(b.action)
+    if (!b.finished) {
+      return (
+        t("batch.running", { action: batchActionWord(b.action, b.dryRun), done: b.done, total: b.total }) +
+        (b.current ? ` · ${b.current}` : "")
+      )
+    }
+    if (b.scope === "single" && b.results.length === 1) {
+      const r = b.results[0]
+      return r.ok
+        ? t("batch.doneOne", { name: r.name, action })
+        : t("batch.doneOneFail", { name: r.name, action, err: r.message })
+    }
+    return (
+      t("batch.done", { action: batchActionWord(b.action, b.dryRun), ok: b.results.length - failedItems.length }) +
+      (failedItems.length > 0
+        ? t("batch.doneFail", { n: failedItems.length, names: failedItems.map((f) => f.name).join("、") })
+        : "")
+    )
+  }
   const [repos, setRepos] = useState<RepoStatus[]>([])
   const [scanning, setScanning] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -125,6 +158,8 @@ export default function App({
   // 是否已配置过扫描来源（roots 或手动仓库）：null=config 还没拉到。首次引导欢迎页只在
   // 明确「没配置过」时出现——配置了但扫出 0 个仓库的用户应看到「未发现仓库」而不是被当成新用户
   const [hasRoots, setHasRoots] = useState<HasRootsState>(null)
+  // 空看板要能说出「到底在哪些目录里没找到仓库」；只存布尔值的话，路径写错时用户只能猜
+  const [scanRoots, setScanRoots] = useState<string[]>([])
   const [autostart, setAutostart] = useState<{ supported: boolean; enabled: boolean }>({ supported: false, enabled: false }) // 开机自启（OS 为事实源；仅 exe 模式 supported）
   // 本实例信息：版本号显示在设置里，供用户核对「我现在跑的是哪一版」——单实例不再自动替换旧版，
   // 升级要靠「退出 → 运行新版」，这个显示就是用户确认升级是否生效的唯一凭据。
@@ -132,9 +167,10 @@ export default function App({
   // port：后端实际绑定的端口。默认端口绑不上时会自动换一个，而端口是本页 origin 的一部分——
   // 显示出来用户才知道自己实际跑在哪（书签/脚本要用），也才解释得了换端口后 localStorage
   // 里的视图和活动日志为何像是"没了"
-  const [instance, setInstance] = useState<{ version: string; canQuit: boolean; port: number }>({
+  const [instance, setInstance] = useState<{ version: string; canQuit: boolean; canPickDirectory: boolean; port: number }>({
     version: "",
     canQuit: false,
+    canPickDirectory: false,
     port: 0,
   })
   // 自动化开关的占位值必须与服务端默认值一致：/api/config 拉到之前（以及拉失败时）显示的
@@ -296,6 +332,9 @@ export default function App({
     const handler = (e: ServerEvent) => {
       if (e.type === "repo:updated") setRepos((rs) => mergeRepo(rs, e.payload.repo))
       else if (e.type === "batch:progress") {
+        // 单仓库动作（详情面板里的 拉取/更新/推送）复用同一套任务机制，回执同样走 batch:progress。
+        // 横幅照旧出（面板可能在完成前被关掉，那时它是唯一的当场反馈），但文案按 scope 走
+        // 「仓库 + 动作」那一种，不写「批量…完成」。
         setBatch(e.payload)
         if (e.payload.finished) {
           // 已完成任务按 taskId 各存一份（单槽会被并发批量互相覆盖，漏掉「完成早于 POST 返回」的回执）；上限防增长
@@ -308,11 +347,20 @@ export default function App({
             resolve(e.payload.results[0] ?? null)
           }
           const f = e.payload.results.filter((r) => !r.ok)
-          addLog(
-            f.length === 0,
-            tRef.current("batch.done", { action: actionWord(e.payload.action), ok: e.payload.results.length - f.length }) +
-              (f.length ? tRef.current("batch.doneFail", { n: f.length, names: f.map((x) => x.name).join("、") }) : ""),
-          )
+          const action = actionWord(e.payload.action)
+          // 单仓库动作（详情面板里的 拉取/更新/推送）：日志写「仓库 + 动作 + 结果」，
+          // 别写「批量…完成」——用户点的是单个仓库，那句文案会让人以为触发了批量操作
+          if (e.payload.scope === "single" && e.payload.results.length === 1) {
+            const r = e.payload.results[0]
+            if (r.ok) addLog(true, tRef.current("batch.doneOne", { name: r.name, action }))
+            else addLog(false, tRef.current("batch.doneOneFail", { name: r.name, action, err: r.message }))
+          } else {
+            addLog(
+              f.length === 0,
+              tRef.current("batch.done", { action, ok: e.payload.results.length - f.length }) +
+                (f.length ? tRef.current("batch.doneFail", { n: f.length, names: f.map((x) => x.name).join("、") }) : ""),
+            )
+          }
         }
       } else if (e.type === "scan:progress") setScanProgress(e.payload.scanned >= e.payload.total ? null : e.payload)
       else if (e.type === "scan:done") {
@@ -476,9 +524,18 @@ export default function App({
         const err = (await r.json().catch(() => ({}))) as { error?: string }
         throw new Error(err.error ?? `HTTP ${r.status}`) // catch 会拼进 msg.importFail 前缀，这里给中性技术兜底而非硬编码中文
       }
-      const s = (await r.json()) as { added: number; alreadyTracked: number; missing: { name: string; remote: string | null }[] }
+      const s = (await r.json()) as {
+        added: number
+        alreadyTracked: number
+        restored: number
+        kept: number
+        missing: { name: string; remote: string | null }[]
+      }
       message.success(
         t("msg.importOk", { added: s.added, tracked: s.alreadyTracked }) +
+          (s.restored > 0 ? t("msg.importRestored", { n: s.restored }) : "") +
+          // 本机已有的标签没被清单覆盖（导入以本机数据优先），说清楚免得用户以为清单没生效
+          (s.kept > 0 ? t("msg.importKept", { n: s.kept }) : "") +
           (s.missing.length ? t("msg.importOffMachine", { n: s.missing.length }) : ""),
       )
       if (s.missing.length > 0) {
@@ -596,7 +653,7 @@ export default function App({
       })
       const data = (await res.json()) as { error?: string }
       if (!res.ok) {
-        message.error(data.error ?? t("msg.createFail"))
+        message.error(errText(t, data.error) || t("msg.createFail"))
         return
       }
       message.success(t("msg.createOk", { name: newName.trim() }))
@@ -635,7 +692,7 @@ export default function App({
       })
       const data = (await res.json()) as { error?: string }
       if (!res.ok) {
-        message.error(data.error ?? t("msg.cloneFail"))
+        message.error(errText(t, data.error) || t("msg.cloneFail"))
         return
       }
       message.success(t("msg.cloneOk"))
@@ -670,6 +727,11 @@ export default function App({
         setNotifications(!!c.notifications)
         setCheckUpdates(!!c.checkUpdates)
         setHasRoots(configHasRoots(c))
+        setScanRoots(
+          [...(Array.isArray(c.roots) ? c.roots : []), ...(Array.isArray(c.manualRepos) ? c.manualRepos : [])].filter(
+            (x): x is string => typeof x === "string",
+          ),
+        )
         setConfigLoaded(true)
       })
       .catch(() => {
@@ -695,7 +757,7 @@ export default function App({
     fetch("/api/version")
       .then((r) => (r.ok ? r.json() : null))
       .then((v) => {
-        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true, port: Number(v.port) || 0 })
+        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true, canPickDirectory: v.canPickDirectory === true, port: Number(v.port) || 0 })
       })
       .catch(() => {})
     // loadConfigStatus 是 useCallback([]) 稳定引用，列进依赖数组不会多触发一次——只是照规则补齐
@@ -782,13 +844,28 @@ export default function App({
   async function checkUpdateNow() {
     setCheckingUpdate(true)
     try {
-      const r = await fetch("/api/update/check", { method: "POST", headers: JSON_HEADERS, body: "{}" })
+      const r = await fetch("/api/update/check", {
+        method: "POST",
+        headers: { ...JSON_HEADERS, "x-repo-radar": "update" },
+        body: JSON.stringify({ lang }),
+      })
       if (!r.ok) throw new Error()
     } catch {
       message.error(t("msg.updateCheckFail"))
     } finally {
       setCheckingUpdate(false)
     }
+  }
+  // 桌面端原生文件夹选择器：只在 /api/version 报 canPickDirectory 时由设置面板显示按钮
+  async function pickDirectory(): Promise<string | null> {
+    const r = await fetch("/api/pick-directory", {
+      method: "POST",
+      headers: { ...JSON_HEADERS, "x-repo-radar": "pick" },
+      body: "{}",
+    })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const body = (await r.json()) as { path?: unknown }
+    return typeof body.path === "string" ? body.path : null
   }
   async function changeWatchLimit(limit: number) {
     const prev = watchLimit
@@ -1053,7 +1130,7 @@ export default function App({
             <Select
               size="small"
               value={filter.sort}
-              className="rr-bar-sel"
+              className="rr-bar-sel wide"
               prefix={<SelIcon kind="sort" />}
               title={t("bar.sortTip")}
               onChange={(v) => setFilter({ ...filter, sort: v as FilterState["sort"] })}
@@ -1136,12 +1213,14 @@ export default function App({
             <span className="k">SCAN</span>
           </span>
         </span>
-        <Button size="small" loading={scanning} onClick={rescan}>
+        <Button size="small" loading={scanning} onClick={rescan} disabled={!hasRoots} title={hasRoots ? undefined : t("empty.welcomeCta")}>
           {scanning ? (scanProgress ? t("bar.scanProgress", { done: scanProgress.scanned, total: scanProgress.total }) : t("bar.scanning")) : t("bar.rescan")}
         </Button>
         <Dropdown
           menu={{
             items: [
+              { key: "scan", label: t("empty.welcomeCta") },
+              { type: "divider" },
               { key: "new", label: t("add.new") },
               { key: "clone", label: t("add.clone") },
               { type: "divider" },
@@ -1149,7 +1228,8 @@ export default function App({
               { key: "import", label: t("add.import") },
             ],
             onClick: ({ key }) => {
-              if (key === "new") openNewProject()
+              if (key === "scan") openScanSettings()
+              else if (key === "new") openNewProject()
               else if (key === "clone") openClone()
               else if (key === "export") exportManifest()
               else if (key === "import") manifestFileRef.current?.click()
@@ -1169,7 +1249,7 @@ export default function App({
         />
         {/* 保存视图是看板动作，但放进这个整体组（A-P1）：此前它留在看板控件块尾部，
             1280 宽下独自掉到顶栏第二行最左、右侧空一片。并入本组后跟读数组一起换行、一起右对齐 */}
-        {view === "board" && (
+        {view === "board" && repos.length > 0 && (
           <Button
             size="small"
             type="text"
@@ -1186,10 +1266,10 @@ export default function App({
           size="small"
           className="rr-gear"
           /* 高亮只标「用户自己额外开的后台行为」。文件监听改成默认关闭之后它也算一个——
-             而且是三者里最贵的那个（常驻句柄 + 溢出补票的全量重扫）。此前它默认开着，
+             而且是这一组里最贵的那个（常驻句柄 + 溢出补票的全量重扫）。此前它默认开着，
              算进来会让齿轮永远亮着、信号归零，所以那时刻意排除在外 */
-          type={autoWatch || autoFetchMin > 0 || notifications ? "primary" : "default"}
-          ghost={autoWatch || autoFetchMin > 0 || notifications}
+          type={autoWatch || autoFetchMin > 0 || notifications || checkUpdates ? "primary" : "default"}
+          ghost={autoWatch || autoFetchMin > 0 || notifications || checkUpdates}
           /* 图标按钮没有可读文字，tooltip 就是它的名字，说清「点了会发生什么」即可。
              原来那条是「设置：主题 · 自动扫描 · 定时拉取 · 提醒」——枚举了 4 项而设置里现在有十来项，
              还把「GitHub 提醒」称作「提醒」，界面上同一个东西两个叫法 */
@@ -1308,7 +1388,7 @@ export default function App({
                 <span className="lb">
                   {t("settings.autoScan")}<span className="hint">{t("settings.autoScanHint")}</span>
                 </span>
-                <Switch size="small" checked={autoWatch} onChange={toggleWatch} disabled={!configLoaded} />
+                <Switch size="small" aria-label={t("settings.autoScan")} checked={autoWatch} onChange={toggleWatch} disabled={!configLoaded} />
               </div>
               {/* 监听上限：真正的约束是文件句柄和 CPU（每个仓库 4 个监听目标），而这在
                   Linux（调大 inotify.max_user_watches 后能上几千）、Windows、网络盘之间
@@ -1399,7 +1479,7 @@ export default function App({
                 <span className="lb">
                   {t("settings.notify")}<span className="hint">{t("settings.notifyHint")}</span>
                 </span>
-                <Switch size="small" checked={notifications} onChange={toggleNotifications} disabled={!configLoaded} />
+                <Switch size="small" aria-label={t("settings.notify")} checked={notifications} onChange={toggleNotifications} disabled={!configLoaded} />
               </div>
               {/* 更新检查：开关管的是「每次启动顺手问一句」，按钮管的是「现在问」。
                   两件事分开是因为它们回答的不是同一个问题——用户可能不想让应用
@@ -1408,7 +1488,7 @@ export default function App({
                 <span className="lb">
                   {t("settings.checkUpdates")}<span className="hint">{t("settings.checkUpdatesHint")}</span>
                 </span>
-                <Switch size="small" checked={checkUpdates} onChange={toggleCheckUpdates} disabled={!configLoaded} />
+                <Switch size="small" aria-label={t("settings.checkUpdates")} checked={checkUpdates} onChange={toggleCheckUpdates} disabled={!configLoaded} />
               </div>
               <div className="row">
                 <span className="lb">
@@ -1427,7 +1507,7 @@ export default function App({
                   <span className="lb">
                     {t("settings.autostart")}<span className="hint">{t("settings.autostartHint")}</span>
                   </span>
-                  <Switch size="small" checked={autostart.enabled} onChange={() => void toggleAutostart()} />
+                  <Switch size="small" aria-label={t("settings.autostart")} checked={autostart.enabled} onChange={() => void toggleAutostart()} />
                 </div>
               )}
               {instance.canQuit && (
@@ -1457,6 +1537,7 @@ export default function App({
               open={settingsOpen}
               hidden={settingsTab !== "scan"}
               onClose={() => setSettingsOpen(false)}
+              pickDirectory={instance.canPickDirectory ? pickDirectory : undefined}
               onSaved={() => {
                 void rescan()
                 // 保存后同步「是否已配置扫描来源」，欢迎页/空状态的分流才不会用旧值；
@@ -1495,7 +1576,7 @@ export default function App({
                 ghost
                 onClick={() => runBatch(LAMP_OP[attention]!, visible.map((r) => r.id))}
               >
-                {t("annun.batchAll", { op: LAMP_OP[attention]!, n: visible.length })}
+                {t("annun.batchAll", { op: actionWord(LAMP_OP[attention]!), n: visible.length })}
               </Button>
             )}
             {selected.size > 0 && (
@@ -1505,7 +1586,7 @@ export default function App({
                 </span>
                 {(["fetch", "pull", "push"] as const).map((a) => (
                   <Button key={a} size="small" onClick={() => runBatch(a, [...selected])}>
-                    {t("annun.batch", { action: a })}
+                    {t("annun.batch", { action: actionWord(a) })}
                   </Button>
                 ))}
                 <Input
@@ -1592,10 +1673,7 @@ export default function App({
               color: batch.finished ? (failed.length > 0 ? "var(--crit)" : "var(--ok)") : "var(--text)",
             }}
           >
-            {batch.finished
-              ? t("batch.done", { action: batch.action, ok: batch.results.length - failed.length }) +
-                (failed.length > 0 ? t("batch.doneFail", { n: failed.length, names: failed.map((f) => f.name).join("、") }) : "")
-              : t("batch.running", { action: batch.action, done: batch.done, total: batch.total }) + (batch.current ? ` · ${batch.current}` : "")}
+            {batchBannerText(batch, failed)}
           </span>
           {batch.finished && batch.results.some((r) => r.output !== undefined) && (
             <Button size="small" type="text" onClick={() => setExecResultOpen(true)}>
@@ -1615,13 +1693,21 @@ export default function App({
         onCancel={() => setExecResultOpen(false)}
         footer={null}
         width={760}
-        title={<span className="mono" style={{ color: "var(--hi)" }}>{t("exec.outputTitle", { action: batch?.action ?? "" })}</span>}
+        title={
+          <span className="mono" style={{ color: "var(--hi)" }}>
+            {t("exec.outputTitle", { action: batchActionWord(batch?.action ?? "", batch?.dryRun) })}
+          </span>
+        }
         styles={{ body: { maxHeight: "72vh", overflowY: "auto" } }}
       >
         {batch?.results.map((r) => (
           <div key={r.repoId} style={{ marginBottom: 14 }}>
             <div className="mono" style={{ fontSize: 12, color: r.ok ? "var(--ok)" : "var(--crit)" }}>
-              {r.ok ? "✓" : "✗"} {r.name} · {r.code !== undefined ? t("exec.exit", { code: r.code ?? "—" }) : r.message}
+              {r.ok ? "✓" : "✗"} {r.name}
+              {/* 退出码与错误说明分两段：退出码是数字（本地化的 exec.exit），
+                  错误说明是服务端给的**错误码**（本地化由 errText 负责，细节原样附后） */}
+              {typeof r.code === "number" && ` · ${t("exec.exit", { code: r.code })}`}
+              {r.message !== "" && ` · ${errText(t, r.message)}`}
             </div>
             {r.output !== undefined && r.output !== "" && (
               <pre className="rr-exec-out">{r.output}</pre>
@@ -1764,7 +1850,7 @@ export default function App({
                     ? t("empty.noArchived")
                     : attention || filter.query || filter.group || (filter.tags?.length ?? 0) > 0
                       ? t("empty.noMatch")
-                      : t("empty.noRepos")}
+                      : t("empty.noRepos", { roots: scanRoots.join(" · ") })}
                 </div>
               )
             )

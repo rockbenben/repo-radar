@@ -31,7 +31,7 @@ export interface BackendOptions {
   port?: number // 仅测试用；正常走 REPO_RADAR_PORT / DEFAULT_PORT
   allowPortFallback?: boolean // 端口绑不上时可否改用别的（默认 true）。显式端口/开发模式下必须关掉，见 portCandidateList
   devOrigins?: boolean // 是否放行 vite dev server（5173）作为同源。**只能在开发模式下为真**，见 routes.ts 的 DEV_ORIGINS
-  extras?: Pick<ApiExtras, "autostart" | "shutdown" | "checkUpdate">
+  extras?: Pick<ApiExtras, "autostart" | "shutdown" | "checkUpdate" | "pickDirectory">
 }
 
 /** 一轮 inbox 补全里，某个仓库的「等我的」发生了变化。before 为 null 表示此前没有缓存（首次拿到） */

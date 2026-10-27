@@ -85,7 +85,7 @@ Scan-Verzeichnisse, ausgeschlossene Ordner und die Öffnen-Befehle bearbeitest d
 
 ## Bekannte Grenzen
 
-- **Upgrades sind bewusst manuell.** Kein Auto-Update: den neuen Installer über den alten laufen lassen.
+- **Updates im App sind optional und werden nie aufgezwungen.** Die Prüfung beim Start ist standardmäßig aus; wenn du sie einschaltest, fragt sie nur bei GitHub nach der neuesten Version. Herunterladen und Installieren brauchen jeweils deine Bestätigung. Unter macOS bleibt der Update-Weg manuell, bis die Signierung steht: Lade den neuen Installer aus den Releases.
 - **Ein Umzug, den der erkennende Scan verpasst, hinterlässt keinen stillen Verlust, sondern einen Hinweis.** Wenn die automatische Zuordnung danebengreift, bietet die neue Karte *„wahrscheinlich eine verschobene Kopie des alten Pfads“* — mit **Migrieren** folgen Tags, Stern und Notizen dem Repo. Der Hinweis erscheint nur bei Repos, die auf dieser Installation mindestens einmal gescannt wurden (die Buchführung muss ihr Remote gesehen haben), und nie für ein Ziel, das du nicht als Scan-Verzeichnis hinzugefügt hast.
 - **Linux hat keine verlässliche Tray**, deshalb beendet das Schließen des Fensters die App.
 - **Repos, die du einzeln außerhalb eines Scan-Verzeichnisses hinzugefügt hast, werden so nicht wiedererkannt** — verschiebst du eines, zeigst du selbst auf den neuen Pfad.

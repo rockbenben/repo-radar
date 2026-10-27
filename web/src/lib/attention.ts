@@ -104,7 +104,7 @@ export function issueActive(r: RepoStatus, kind: string): boolean {
 
 export type AttentionKey = "no-remote" | "detached" | "unpushed" | "dirty" | "behind" | "stash"
 export const ATTENTION: { key: AttentionKey; labelKey: string; sev: "crit" | "warn" | "" ; test: (r: RepoStatus) => boolean }[] = [
-  { key: "no-remote", labelKey: "lamp.noRemote", sev: "crit", test: (r) => r.remotes.length === 0 },
+  { key: "no-remote", labelKey: "lamp.noRemote", sev: "", test: (r) => r.remotes.length === 0 },
   { key: "detached", labelKey: "lamp.detached", sev: "crit", test: (r) => r.branch === null },
   { key: "unpushed", labelKey: "lamp.unpushed", sev: "warn", test: (r) => r.ahead > 0 },
   { key: "dirty", labelKey: "lamp.dirty", sev: "warn", test: (r) => r.dirty.staged + r.dirty.unstaged + r.dirty.untracked > 0 },

@@ -31,7 +31,6 @@ describe("checkHealth", () => {
   })
   it("detects error-level issues", () => {
     expect(rules(repo({ dirty: { staged: 0, unstaged: 0, untracked: 0, conflicted: 2 } }))).toContain("conflicted")
-    expect(rules(repo({ remotes: [] }))).toContain("no-remote")
     expect(rules(repo({ branch: null }))).toContain("detached-head")
   })
   it("detects warn-level issues", () => {
@@ -40,10 +39,15 @@ describe("checkHealth", () => {
     expect(rules(repo({ ahead: -1, behind: -1 }))).toContain("no-upstream")
   })
   it("detects info-level issues", () => {
+    expect(rules(repo({ remotes: [] }))).toContain("no-remote")
     expect(rules(repo({ behind: 3 }))).toContain("behind")
     expect(rules(repo({ stashCount: 1 }))).toContain("stash-left")
     const old = new Date(Date.now() - 100 * 86400_000).toISOString()
     expect(rules(repo({ committedAt: old, lastCommit: { hash: "h", message: "m", author: "a", date: old } }))).toContain("stale")
+  })
+  it("no-remote 是提示级：本地仓库不该被染成警告", () => {
+    const issue = checkHealth(repo({ remotes: [] }), cfg()).find((i) => i.rule === "no-remote")
+    expect(issue?.severity).toBe("info")
   })
 
   // 徽章文案在 18 种语言里都写着「N 天没提交」，那是一句可证伪的话，所以规则必须按

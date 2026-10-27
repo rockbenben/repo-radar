@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { isAbsolute, join } from "node:path"
-import { GitError, runGit } from "./git"
+import { currentGitIdentity, GitError, runGit } from "./git"
 import { isUnderPath } from "./watch-filter"
 
 export interface ScaffoldResult {
@@ -53,20 +53,43 @@ const underRoot = (parent: string, roots: string[]): boolean => roots.some((r) =
  * 不在这里处理排空/临时目录——mkdir + git init 是秒级操作（不像 cloneRepo 那样可能跑几分钟），
  * 调用方（routes.ts）把它包进 withRepoLock 就够了：退出时 10 秒的排空上限对它绰绰有余，
  * 见 routes.ts 里 /api/new-project 处的注释。
+ *
+ * **错误一律回错误码，不回中文句子**：界面有 18 种语言，服务端写死中文的话，英文/日文界面里
+ * 会蹦出一句中文。码 → 本地化文案的映射在 web/src/lib/errText.ts（与健康检查那套同一思路）。
  */
 export async function createProject(parent: string, name: string, roots: string[]): Promise<ScaffoldResult> {
-  if (!NAME_RE.test(name)) return { ok: false, error: "名称只能包含字母、数字、下划线、连字符、点" }
-  if (!isAbsolute(parent) || !existsSync(parent)) return { ok: false, error: "父目录不存在" }
-  if (!underRoot(parent, roots)) return { ok: false, error: "父目录必须在已配置的扫描根目录之内" }
+  if (!NAME_RE.test(name)) return { ok: false, error: "nameInvalid" }
+  if (!isAbsolute(parent) || !existsSync(parent)) return { ok: false, error: "parentMissing" }
+  if (!underRoot(parent, roots)) return { ok: false, error: "parentNotUnderRoot" }
   const target = join(parent, name)
-  if (existsSync(target)) return { ok: false, error: "目标目录已存在" }
+  if (existsSync(target)) return { ok: false, error: "targetExists" }
   try {
     mkdirSync(target)
     await runGit(target, ["init", "-b", "main"])
     writeFileSync(join(target, "README.md"), `# ${name}\n`)
+    // 再补一次初始提交：只 init 不提交的话，那个 README 会算成「未提交改动」，
+    // 刚建的项目立刻出现在「待处理」队列里——用户根本没开始做的事，不该出现在那里。
+    // 没配 git 身份（user.name/user.email）时提交会失败，那就退回原来的样子，
+    // 绝不让「建仓失败」把已经建好的目录也一起废掉。
+    await initialCommit(target, name)
     return { ok: true, path: target }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** 新仓库的首次提交。没有 git 身份就跳过；提交失败不外抛（建仓本身已经成功了）。 */
+async function initialCommit(target: string, name: string): Promise<void> {
+  try {
+    const identity = await currentGitIdentity(target)
+    // git 要求名字和邮箱都在，缺一个照样提交失败——那就把 README 留着未提交，由用户自己来
+    if (!identity || identity.name === "" || identity.email === "") return
+    await runGit(target, ["add", "-A"])
+    // commit.gpgsign=false：用户全局开了签名提交时，签名会弹窗等输入——那会把创建项目的
+    // 请求挂住（界面上的「创建」按钮一直转）。这里不做签名。
+    await runGit(target, ["-c", "commit.gpgsign=false", "commit", "-m", `chore: init ${name}`])
+  } catch {
+    /* 提交失败不影响建仓本身——目录、.git、README 都已就位 */
   }
 }
 
@@ -93,12 +116,14 @@ function safeCleanupTmp(tmpDir: string): void {
  *  不靠错误码猜——Windows 上 renameSync 抛 EPERM 更常见的原因是**源**临时目录被占用（git 子
  *  进程句柄、杀毒软件扫描、资源管理器开着那个目录），而不是目标存在，用错误码猜会说出一句与
  *  事实无关的话。改为不猜——rename 失败后显式检查 finalDir 是否真的存在，用事实决定说哪句话：
- *  确实存在 → 与克隆前预检查同一句话，保持体验一致；不存在 → 给一句可读的通用失败信息，附带
- *  原始错误码方便排查，不把原始 fs 报文（含绝对路径）直接抛给界面。 */
+ *  确实存在 → 与克隆前预检查同一句话（同一个错误码 targetExists），保持体验一致；
+ *  不存在 → 给一句可读的通用失败信息（错误码 renameFailed，后面跟 fs 错误码），
+ *  不把原始 fs 报文（含绝对路径）直接抛给界面。 */
 function friendlyRenameError(err: unknown, finalDir: string): string {
-  if (existsSync(finalDir)) return "目标目录已存在"
+  if (existsSync(finalDir)) return "targetExists"
   const code = err && typeof err === "object" && "code" in err ? (err as NodeJS.ErrnoException).code : undefined
-  return `重命名克隆结果失败${code ? `（${code}）` : ""}`
+  // 码后面跟 fs 错误码（"renameFailed:EPERM"）：前端按码翻译，并把 : 后面的部分当作细节填进去
+  return `renameFailed${code ? `:${code}` : ""}`
 }
 
 /**
@@ -114,9 +139,9 @@ function friendlyRenameError(err: unknown, finalDir: string): string {
  */
 export async function cloneRepo(url: string, parent: string, roots: string[]): Promise<ScaffoldResult> {
   const u = url.trim()
-  if (u === "" || u.startsWith("-")) return { ok: false, error: "URL 非法" }
-  if (!isAbsolute(parent) || !existsSync(parent)) return { ok: false, error: "父目录不存在" }
-  if (!underRoot(parent, roots)) return { ok: false, error: "父目录必须在已配置的扫描根目录之内" }
+  if (u === "" || u.startsWith("-")) return { ok: false, error: "urlInvalid" }
+  if (!isAbsolute(parent) || !existsSync(parent)) return { ok: false, error: "parentMissing" }
+  if (!underRoot(parent, roots)) return { ok: false, error: "parentNotUnderRoot" }
   const derivedName = u.replace(/\.git$/, "").replace(/[/\\]+$/, "").split(/[/\\:]/).pop() ?? ""
   const tmpName = `${CLONE_TMP_PREFIX}${randomBytes(8).toString("hex")}`
   const tmpDir = join(parent, tmpName)
@@ -124,7 +149,7 @@ export async function cloneRepo(url: string, parent: string, roots: string[]): P
   // 保证总有一个非空、确定的最终目录名，不再依赖 git 自己在 parent 下随意起的名字
   const finalName = derivedName !== "" ? derivedName : tmpName.slice(CLONE_TMP_PREFIX.length)
   const finalDir = join(parent, finalName)
-  if (existsSync(finalDir)) return { ok: false, error: "目标目录已存在" }
+  if (existsSync(finalDir)) return { ok: false, error: "targetExists" }
 
   try {
     await runGit(parent, ["clone", "--", u, tmpName], 300_000) // 网络操作，超时 5 分钟
@@ -134,7 +159,7 @@ export async function cloneRepo(url: string, parent: string, roots: string[]): P
     // 炸出一句原始 ENOTEMPTY
     if (existsSync(finalDir)) {
       safeCleanupTmp(tmpDir)
-      return { ok: false, error: "目标目录已存在" }
+      return { ok: false, error: "targetExists" }
     }
     try {
       renameSync(tmpDir, finalDir)

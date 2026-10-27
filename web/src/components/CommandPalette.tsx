@@ -173,7 +173,7 @@ export function CommandPalette({
                   },
                 }}
               >
-                <Button size="small" className="rr-palette-more">
+                <Button size="small" className="rr-palette-more" aria-label={t("palette.more")} title={t("palette.more")}>
                   ⋯
                 </Button>
               </Dropdown>

@@ -106,6 +106,13 @@ export interface BatchProgress {
   current: string | null // 正在处理的仓库名
   results: BatchResultItem[]
   finished: boolean
+  // "single" = 单仓库动作（详情面板里的 拉取/更新/推送），"batch" = 用户在看板上手动发起的批量。
+  // 两者复用同一条 batch:progress 通道（单仓库动作也要靠它的回执兑现弹窗里的 ✓/✗），
+  // 但只有后者才该在顶栏弹「批量…完成」的横幅——单仓库的结果就地显示在详情面板里。
+  scope?: "batch" | "single"
+  // 批量执行命令时为 true（只预演、不执行）。前端据此给动作名加一个本地化的「预演」前缀——
+  // 服务端过去直接拼中文「预演: 」，英文/日文界面里会漏出中文。
+  dryRun?: boolean
 }
 
 export interface HeatmapDay {

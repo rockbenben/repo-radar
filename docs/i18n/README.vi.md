@@ -83,7 +83,7 @@ Thư mục quét, thư mục loại trừ và lệnh mở đều sửa được 
 
 ## Giới hạn đã biết
 
-- **Nâng cấp là thủ công có chủ đích.** Không tự động cập nhật: chạy trình cài mới đè lên bản cũ.
+- **Cập nhật trong ứng dụng là tùy chọn, không bao giờ bị ép buộc.** Kiểm tra lúc khởi động mặc định tắt; khi bật, ứng dụng chỉ hỏi GitHub phiên bản mới nhất. Tải xuống và cài đặt đều cần bạn xác nhận. Trên macOS vẫn phải cập nhật thủ công cho đến khi có chữ ký: tải bộ cài mới từ Releases.
 - **Dời kho mà lượt quét không nhận ra sẽ để lại một gợi ý, chứ không âm thầm mất dữ liệu.** Khi việc tự ghép nối thất bại, thẻ mới hiện dòng *«có vẻ là bản dời từ đường dẫn cũ»* — bấm **Di dời** thì thẻ nhãn, sao và ghi chú đi theo. Gợi ý chỉ bật với kho đã được quét ít nhất một lần trên bản cài này (sổ ghi cần từng thấy remote của nó) và không bao giờ hiện ở đích mà bạn chưa thêm vào thư mục quét.
 - **Linux không có khay hệ thống đáng tin cậy**, nên đóng cửa sổ là thoát hẳn.
 - **Những kho bạn thêm lẻ từng cái, nằm ngoài thư mục quét, không được nhận diện theo cách này** — dời đi thì bạn tự trỏ lại đường dẫn mới.

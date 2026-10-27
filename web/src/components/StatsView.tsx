@@ -77,6 +77,10 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
     <button key={a.id} type="button" className="r rr-r-clk" onClick={() => onOpenRepo(a.id)} title={t("common.openRepoTip")}>
       <span className="rank">{i + 1}</span>
       <span className="nm">{a.displayName ?? a.name}</span>
+      {/* 目录名：看板卡片上的标题是**目录名**，这里的主标题是 displayName
+          （package.json 名或远程名）——同一个仓库在两处两个名字。把目录名补在后面，
+          用户不必猜「repo-radar」对应磁盘上哪个文件夹 */}
+      {a.displayName && a.displayName !== a.name && <span className="dir">{a.name}</span>}
       <span className="ago">{a.lastActivityDate ? relativeTime(a.lastActivityDate) : t("stats.emptyRepo")}</span>
     </button>
   )
@@ -111,8 +115,12 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
           <div className="rr-actlist">{listHead}{top.map(row)}</div>
         </section>
         <section>
-          <h2>{t("stats.staleTop", { n: stale.length })}</h2>
-          <div className="rr-actlist">{listHead}{stale.map(row)}</div>
+          {stale.length > 0 && <h2>{t("stats.staleTop", { n: stale.length })}</h2>}
+          {stale.length > 0 ? (
+            <div className="rr-actlist">{listHead}{stale.map(row)}</div>
+          ) : (
+            <div className="rr-actlist-empty">{t("stats.noStale")}</div>
+          )}
         </section>
       </div>
     </div>

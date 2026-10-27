@@ -126,7 +126,7 @@ describe("计数类「已处理」在面板关着期间也不会被静默压制"
 
     render(view())
 
-    await waitFor(() => expect(screen.getByText("✓ 全部干净，无需处理")).toBeTruthy())
+    await waitFor(() => expect(screen.getByText("✓ 这个队列已清空")).toBeTruthy())
     expect(queueReasons()).toEqual([])
   })
 
@@ -162,7 +162,7 @@ describe("计数类「已处理」在面板关着期间也不会被静默压制"
 
     render(view())
 
-    await waitFor(() => expect(screen.getByText("✓ 全部干净，无需处理")).toBeTruthy())
+    await waitFor(() => expect(screen.getByText("✓ 这个队列已清空")).toBeTruthy())
     expect(queueReasons()).toEqual([])
     // 面板开着时的降档照常跑（水位跟着降到 2），格式不变——基线要等用户下次点「已处理」才补上
     await waitFor(() => expect(storedMark()).toBe("2"))

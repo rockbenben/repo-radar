@@ -1,6 +1,7 @@
 import { Card, Checkbox, Popover } from "antd"
 import { type MouseEvent, memo, useEffect, useState } from "react"
 import { gt, useT } from "../i18n"
+import { healthMessage } from "../lib/healthText"
 import { isSideBranch, langColor, remoteWeb } from "../lib/meta"
 import { relativeTime } from "../lib/time"
 import type { CommitInfo, HealthIssue, RepoStatus } from "../types"
@@ -119,6 +120,7 @@ function shortHealth(h: HealthIssue): string {
   }
 }
 
+// 卡片 chip 的 title：和详情共用 healthText，服务端中文 message 只作兜底
 // memo：仅当自身 props 变化才重渲。配合 App 里稳定的回调 + mergeRepo 保留未变仓库引用，
 // 一条 repo:updated / 一次选择 / 打字搜索只重渲受影响的卡，而非全部卡片。
 export const RepoCard = memo(function RepoCard({
@@ -234,7 +236,7 @@ export const RepoCard = memo(function RepoCard({
       {(chips.length > 0 || repo.mergedBranches.length > 0) && (
         <div className="rr-c-chips">
           {chips.map((h) => (
-            <span key={h.rule} className={`rr-chip ${SEV_CHIP[h.severity]}`} title={h.message}>
+            <span key={h.rule} className={`rr-chip ${SEV_CHIP[h.severity]}`} title={healthMessage(t, h)}>
               {shortHealth(h)}
             </span>
           ))}

@@ -135,6 +135,68 @@ describe("api", () => {
     t.cleanup()
   })
 
+  it("POST /api/update/check proxies the injected hook with the UI language; absent without it", async () => {
+    const t = setup()
+    // 没带自定义头：简单跨站 POST 无法伪造它（同 /api/shutdown）
+    expect((await t.app.request("/api/update/check", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status).toBe(403)
+    // 未注入（源码/PM2 模式）：端点存在但明确不可用
+    expect(
+      (await t.app.request("/api/update/check", { method: "POST", headers: { "content-type": "application/json", "x-repo-radar": "update" }, body: "{}" }))
+        .status,
+    ).toBe(400)
+
+    const calls: Array<string | undefined> = []
+    const app = createApi(t.store, t.configFile, {
+      checkUpdate: async (lang) => {
+        calls.push(lang)
+        return "upToDate"
+      },
+    })
+    const ok = await app.request("/api/update/check", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-repo-radar": "update" },
+      body: JSON.stringify({ lang: "zh-Hans" }),
+    })
+    expect(await ok.json()).toEqual({ outcome: "upToDate" })
+    expect(calls).toEqual(["zh-Hans"])
+
+    const bad = await app.request("/api/update/check", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-repo-radar": "update" },
+      body: JSON.stringify({ lang: 42 }),
+    })
+    expect(bad.status).toBe(400)
+    expect(calls).toEqual(["zh-Hans"])
+    t.cleanup()
+  })
+
+  it("POST /api/pick-directory proxies the desktop folder picker; absent without it", async () => {
+    const t = setup()
+    expect(
+      (await t.app.request("/api/pick-directory", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status,
+    ).toBe(403)
+    expect(
+      (
+        await t.app.request("/api/pick-directory", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-repo-radar": "pick" },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(400)
+
+    const app = createApi(t.store, t.configFile, { pickDirectory: async () => "C:\\Projects" })
+    const res = await app.request("/api/pick-directory", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-repo-radar": "pick" },
+      body: "{}",
+    })
+    expect(await res.json()).toEqual({ path: "C:\\Projects" })
+    const version = (await (await app.request("/api/version")).json()) as { canPickDirectory?: boolean }
+    expect(version.canPickDirectory).toBe(true)
+    t.cleanup()
+  })
+
   it("POST /api/watch toggles watching and validates the body", async () => {
     const t = setup()
     const calls: boolean[] = []

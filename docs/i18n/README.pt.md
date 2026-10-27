@@ -83,7 +83,7 @@ Diretórios de varredura, pastas excluídas e os comandos de abertura são edit�
 
 ## Limitações conhecidas
 
-- **Atualizações são manuais por escolha.** Sem auto-update: rode o novo instalador por cima do antigo.
+- **Atualizações dentro do app são opcionais, nunca forçadas.** A verificação na inicialização fica desligada por padrão; se você ativá-la, ela só pergunta ao GitHub qual é a versão mais recente. Baixar e instalar exigem sua confirmação. No macOS continua manual até a assinatura chegar: baixe o novo instalador em Releases.
 - **Mover um repo e a varredura não reconhecer deixa uma dica, não um sumiço silencioso.** Quando o casamento automático falha, o cartão novo oferece *«provavelmente uma cópia movida do caminho antigo»* — clique em **Migrar** e tags, estrela e notas vão junto. Só dispara em repos varridos pelo menos uma vez nesta instalação (o registro precisa ter visto o remoto deles) e nunca num destino que você ainda não adicionou como diretório de varredura.
 - **Linux não tem bandeja confiável**, então fechar a janela encerra o app.
 - **Repos adicionados um a um, fora de um diretório de varredura, não são reconhecidos assim** — se mover um, você mesmo aponta o novo caminho.

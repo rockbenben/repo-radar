@@ -92,14 +92,14 @@ afterEach(() => {
 })
 
 describe("只有冲突文件的仓库", () => {
-  it("卡片不显示「✓ 干净」（同一张卡不能一边说干净、一边挂着冲突 chip）", () => {
+  it("卡片不显示「✓ 无改动」（同一张卡不能一边说无改动、一边挂着冲突 chip）", () => {
     wrap(card(conflictOnly))
-    expect(screen.queryByText("✓ 干净")).toBeNull()
+    expect(screen.queryByText("✓ 无改动")).toBeNull()
   })
 
-  it("对照：真正干净的仓库仍显示「✓ 干净」", () => {
+  it("对照：真正干净的仓库仍显示「✓ 无改动」", () => {
     wrap(card(allZero))
-    expect(screen.getByText("✓ 干净")).toBeTruthy()
+    expect(screen.getByText("✓ 无改动")).toBeTruthy()
   })
 
   it("详情面板仍渲染改动区（查看改动 / 提交 / 收进 stash / 丢弃改动）", async () => {

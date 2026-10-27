@@ -4,6 +4,7 @@ import { mapLimit } from "./map-limit"
 interface WorklogCommit {
   repoId: string
   repoName: string
+  repoDir: string // 目录名（repoName 用的是 displayName，两个名字都带上前端才能对上看板卡片）
   hash: string // 短 hash（7 位）
   date: string // committer ISO 8601（含时区偏移），仅用于按绝对时刻排序
   day: string // 本地日期 YYYY-MM-DD（Node 从 %cI 按本机本地时区算，分组与范围过滤同一时区）
@@ -82,6 +83,9 @@ export async function getWorklog(
           return {
             repoId: r.id,
             repoName: r.displayName ?? r.name,
+            // 目录名：repoName 用的是 displayName（package.json 名 / 远程名），而看板卡片上的
+            // 标题是目录名——同一个仓库两处两个名字。把目录名一起带上去，前端补一个副标题
+            repoDir: r.name,
             hash,
             date,
             day: ok ? `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}` : (date ?? "").slice(0, 10),

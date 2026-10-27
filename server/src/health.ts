@@ -9,7 +9,7 @@ const RULES: Record<string, Rule> = {
       ? { rule: "conflicted", severity: "error", message: `${r.dirty.conflicted} 个文件处于冲突状态` }
       : null,
   "no-remote": (r) =>
-    r.remotes.length === 0 ? { rule: "no-remote", severity: "error", message: "没有远程仓库，仅存在于本机" } : null,
+    r.remotes.length === 0 ? { rule: "no-remote", severity: "info", message: "仅存在于本机，尚未备份或共享" } : null,
   "detached-head": (r) =>
     r.branch === null ? { rule: "detached-head", severity: "error", message: "处于游离 HEAD 状态" } : null,
   dirty: (r) => {

@@ -83,7 +83,7 @@ Direktori pemindaian, folder yang dikecualikan, dan perintah buka bisa diubah di
 
 ## Batasan yang diketahui
 
-- **Pembaruan sengaja dibuat manual.** Tidak ada auto-update: jalankan penginstal baru menimpa yang lama.
+- **Pembaruan di dalam aplikasi bersifat opsional, tidak pernah dipaksa.** Pemeriksaan saat mulai nonaktif secara bawaan; jika diaktifkan, aplikasi hanya menanyakan versi terbaru ke GitHub. Unduh dan pasang sama-sama menunggu persetujuan Anda. Di macOS pembaruan tetap manual sampai penandatanganan tersedia: ambil penginstal baru dari Releases.
 - **Pindah yang lolos dari pemindaian pengenalan meninggalkan petunjuk, bukan kehilangan diam-diam.** Saat pencocokan otomatis meleset, kartu baru menawarkan *«mungkin salinan yang dipindah dari jalur lama»* — klik **Pindahkan** dan tag, bintang, serta catatan ikut. Petunjuk hanya muncul untuk repo yang minimal sekali dipindai pada instalasi ini (buku besar perlu pernah melihat remote-nya) dan tidak pernah untuk tujuan yang belum Anda tambahkan sebagai direktori pemindaian.
 - **Linux tidak punya tray yang bisa diandalkan**, jadi menutup jendela berarti keluar.
 - **Repo yang ditambahkan satu per satu di luar direktori pemindaian tidak dikenali dengan cara ini** — kalau dipindah, Anda sendiri yang menunjuk path barunya.

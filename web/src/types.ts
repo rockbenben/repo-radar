@@ -111,6 +111,12 @@ export interface BatchProgress {
   current: string | null // 正在处理的仓库名
   results: BatchResultItem[]
   finished: boolean
+  // "single" = 单仓库动作（详情面板里的 拉取/更新/推送），"batch" = 看板上手动发起的批量。
+  // 前端据此决定要不要弹顶栏的「批量…完成」横幅（单仓库的结果就地显示在详情面板里）
+  scope?: "batch" | "single"
+  // 批量执行命令的「预演」模式：只列出将影响哪些仓库，不真的执行。
+  // 前端据此给动作名加一个本地化的「预演」前缀（服务端不再拼中文）。
+  dryRun?: boolean
 }
 
 export interface GithubStatus {
@@ -129,6 +135,7 @@ export interface HeatmapDay {
 export interface WorklogCommit {
   repoId: string
   repoName: string
+  repoDir: string // 目录名（repoName 是 displayName，两个名字都带上前端才能对上看板卡片）
   hash: string
   date: string // committer ISO 8601（含时区偏移），已在服务端按绝对时刻排好序
   day: string // 本地日期 YYYY-MM-DD（服务端本地时区，分组用）

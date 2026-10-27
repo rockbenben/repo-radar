@@ -73,7 +73,7 @@ describe("createProject", () => {
     expect((await createProject(r, "dup", [r])).ok).toBe(true)
     const again = await createProject(r, "dup", [r])
     expect(again.ok).toBe(false)
-    expect(again.error).toMatch(/已存在/)
+    expect(again.error).toBe("targetExists") // 错误码，不是本地化文案（文案由前端按界面语言翻译）
   })
 })
 
@@ -127,7 +127,7 @@ describe("cloneRepo", () => {
     expect(results.filter((r) => r.ok)).toHaveLength(1) // 恰好一个成功
     const fails = results.filter((r) => !r.ok)
     expect(fails).toHaveLength(1)
-    expect(fails[0].error).toBe("目标目录已存在") // 与预检查同一句话
+    expect(fails[0].error).toBe("targetExists") // 与预检查同一个错误码
     expect(fails[0].error).not.toMatch(/ENOTEMPTY|EEXIST|EPERM|rename\b/i) // 不泄漏原始 fs 报文
     expect(readdirSync(parent).some((e) => e.startsWith(CLONE_TMP_PREFIX))).toBe(false) // 双方的临时目录都清干净了
   })
@@ -178,7 +178,7 @@ describe("cloneRepo", () => {
     })
     const res = await cloneRepo(src, parent, [parent])
     expect(res.ok).toBe(false)
-    expect(res.error).toBe("目标目录已存在")
+    expect(res.error).toBe("targetExists")
     expect(existsSync(tmpDir)).toBe(true) // 清理确实失败了，临时目录还在
   })
 
@@ -218,7 +218,7 @@ describe("cloneRepo", () => {
     })
     const res = await cloneRepo(src, parent, [parent])
     expect(res.ok).toBe(false)
-    expect(res.error).not.toBe("目标目录已存在") // 不能靠错误码瞎猜
+    expect(res.error).not.toBe("targetExists") // 不能靠错误码瞎猜
     expect(res.error).toMatch(/EPERM/) // 给出可读的通用失败信息，带原始错误码
     expect(existsSync(tmpDir)).toBe(true) // 没有被清理——它其实是个克隆完整的仓库
   })
@@ -235,7 +235,7 @@ describe("cloneRepo", () => {
     })
     const res = await cloneRepo(src, parent, [parent])
     expect(res.ok).toBe(false)
-    expect(res.error).toBe("目标目录已存在")
+    expect(res.error).toBe("targetExists")
     expect(existsSync(tmpDir)).toBe(false) // 目标确实存在，这份多余的临时目录该被清掉
   })
 })

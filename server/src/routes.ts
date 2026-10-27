@@ -1,16 +1,17 @@
 import { type Context, Hono } from "hono"
 import { type Config, checkMinutes, loadConfig, mergeConfig, saveConfig, validateConfigPatch } from "./config"
 import { WsHub } from "./events"
-import { ACTION_ARGS, commitRepo, createBranch, createStash, currentGitIdentity, deleteBranches, discardChanges, dropStashes, getRepoDetail, getRepoDiff, listStashes, type RepoAction, stashAction, stashDiff, switchBranch } from "./git"
+import { ACTION_ARGS, commitRepo, createBranch, createStash, currentGitIdentity, deleteBranches, discardChanges, dropStashes, getRepoDetail, getRepoDiff, listStashes, type RepoAction, repoId, stashAction, stashDiff, switchBranch } from "./git"
 import { getGithubStatus } from "./github"
 import { buildManifest, importManifest, isManifest } from "./manifest"
 import { mapLimit } from "./map-limit"
 import { openTarget } from "./open"
 import { PORT } from "./port"
 import { trackPending, withRepoLock } from "./queue"
+import { normalizePath } from "./repo-identity"
 import { cloneRepo, createProject } from "./scaffold"
 import { aggregateHeatmap, buildActivity } from "./stats"
-import type { RepoStore } from "./store"
+import { deriveGroup, type RepoStore } from "./store"
 import { type BatchDeps, startBatch, startExec } from "./tasks"
 import type { RepoStatus } from "./types"
 import { collectUserEmails, getWorklog } from "./worklog"
@@ -47,7 +48,12 @@ export interface ApiExtras {
    * 服务器部署时端点不存在。返回值的含义由桌面端定义（upToDate/available/…），
    * 这里只当字符串透传，不在 server 里另抄一份判据。
    */
-  checkUpdate?: () => Promise<string>
+  checkUpdate?: (lang?: string) => Promise<string>
+  /**
+   * 桌面的原生目录选择器。服务器部署没有原生窗口，不注入这个钩子；
+   * web 据 /api/version 的能力位决定显不显示「选择文件夹」按钮。
+   */
+  pickDirectory?: () => Promise<string | null>
   shutdown?: () => void // /api/shutdown 的实际退出动作；不注入则端点不存在（仅单文件 exe 模式注入，服务器部署绝不暴露可杀进程的 HTTP 端点）
   autostart?: { get: () => { supported: boolean; enabled: boolean }; set: (enabled: boolean) => { supported: boolean; enabled: boolean } } // 开机自启（仅单文件 exe 模式注入）
 }
@@ -157,6 +163,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       app: "repo-radar",
       version: extras.version ?? "0.0.0",
       canQuit: extras.shutdown !== undefined,
+      canPickDirectory: extras.pickDirectory !== undefined,
       port: boundPort(),
     }),
   )
@@ -186,8 +193,19 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   // 手动查一次更新。**只在桌面应用注入**：那边跑 electron-updater、弹原生对话框，
   // 服务器部署没有「发布版」这回事，端点干脆不存在
   app.post("/api/update/check", async (c) => {
+    if (c.req.header("x-repo-radar") !== "update") return c.json({ error: "missing X-Repo-Radar header" }, 403)
     if (!extras.checkUpdate) return c.json({ error: "update check is only available in the desktop app" }, 400)
-    return c.json({ outcome: await extras.checkUpdate() })
+    const body = await jsonBody(c)
+    const lang = body.lang
+    if (lang !== undefined && typeof lang !== "string") return c.json({ error: "lang must be a string" }, 400)
+    return c.json({ outcome: await extras.checkUpdate(lang) })
+  })
+
+  // 原生目录选择：只在桌面应用注入。取消返回 null，选中的绝对路径原样交给 web。
+  app.post("/api/pick-directory", async (c) => {
+    if (c.req.header("x-repo-radar") !== "pick") return c.json({ error: "missing X-Repo-Radar header" }, 403)
+    if (!extras.pickDirectory) return c.json({ error: "folder picker is only available in the desktop app" }, 400)
+    return c.json({ path: await extras.pickDirectory() })
   })
 
   app.get("/api/repos", (c) => c.json(store.list()))
@@ -623,7 +641,9 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     if (!ACTIONS.has(action)) return c.json({ error: "unknown action" }, 404)
     const repo = store.get(c.req.param("id"))
     if (!repo) return c.json({ error: "repo not found" }, 404)
-    const taskId = startBatch(action as RepoAction, [repo.id], batchDeps)
+    // scope="single"：这是详情面板里的单个仓库动作，不是看板上的批量——前端据此不弹
+    // 顶栏那条「批量…完成」的横幅（结果就地显示在详情面板里）
+    const taskId = startBatch(action as RepoAction, [repo.id], batchDeps, "single")
     return c.json({ taskId })
   })
 
@@ -672,8 +692,41 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     }
     if (!isManifest(body.manifest)) return c.json({ error: "manifest must have a repos array of { path }" }, 400)
     const prev = loadConfig(configFile)
-    const { manualRepos, summary } = importManifest(body.manifest, prev.manualRepos)
-    const next: Config = { ...prev, manualRepos }
+    const { manualRepos, summary, added } = importManifest(body.manifest, prev.manualRepos)
+    // 标签与分组也要跟着清单走：README 承诺「路径、远程、分组、标签」换机时一起搬，
+    // 此前只搬了路径——换机后 config.json 的 tags 仍是空的，分组也没了，用户以为迁移完成了，
+    // 组织信息其实静默消失。
+    const tags = { ...prev.tags }
+    const groupOverrides = { ...prev.groupOverrides }
+    // 键是**仓库 id**，但不能自己拿路径哈希去猜：身份账本认领（仓库改名后沿用老 id）与
+    // id 碰撞（旧路径被新仓库占用时新仓库拿 repoId(path#2)）都会让它与 repoId(path) 不同——
+    // 猜错就会把标签写到**别的仓库**头上。已经在板上的仓库用 store 里的真 id；
+    // 本机还没扫到的新仓库只能按 repoId(path)（账本首次铸造的正是它）。
+    const knownIds = new Map(store.list().map((r) => [normalizePath(r.path), r.id]))
+    let restored = 0
+    let kept = 0 // 本机已有标签、清单那份没有覆盖的仓库数
+    for (const e of added) {
+      const id = knownIds.get(normalizePath(e.path)) ?? repoId(e.path)
+      let touched = false
+      // **本机已有的数据优先**：清单是另一台机器（或上一次导出）的快照，可能比本机旧。
+      // 无条件覆盖会把用户自己整理过的标签悄悄抹掉，而摘要还报「已恢复」。
+      if (e.tags.length > 0) {
+        if (tags[id] === undefined) {
+          tags[id] = e.tags
+          touched = true
+        } else kept++
+      }
+      // 分组只在「与本机自动推导出的分组不同」时才落成显式覆盖：相同的话写了也只是
+      // 把一个派生值钉死（换机器时目录结构变了，反倒覆盖了本机该有的分组）。
+      if (e.group !== "" && e.group !== deriveGroup(e.path, prev.roots) && groupOverrides[id] === undefined) {
+        groupOverrides[id] = e.group
+        touched = true
+      }
+      if (touched) restored++
+    }
+    summary.restored = restored
+    summary.kept = kept
+    const next: Config = { ...prev, manualRepos, tags, groupOverrides }
     saveConfig(configFile, next)
     // 落盘不算改完：导入进来的仓库多半落在所有扫描根之外（跨机器清单的常见情形），
     // 而给这类仓库建立监听句柄的唯一入口就是 applyConfig 的 manualRepos 分支。少了这一步，

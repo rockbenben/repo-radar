@@ -83,7 +83,7 @@ Directorios de escaneo, carpetas excluidas y comandos de apertura se editan en �
 
 ## Limitaciones conocidas
 
-- **Las actualizaciones son manuales a propósito.** Sin auto-update: pasa el nuevo instalador por encima del anterior.
+- **Las actualizaciones dentro de la app son opcionales, nunca forzadas.** La comprobación al iniciar está desactivada por defecto; si la activas, solo pregunta a GitHub cuál es la última versión. Descargar e instalar requieren tu confirmación. En macOS sigue siendo manual hasta que llegue la firma: descarga el nuevo instalador desde Releases.
 - **Moverse y que el escaneo no te reconozca deja una pista, no una pérdida silenciosa.** Cuando la coincidencia automática falla, la tarjeta nueva ofrece *«probablemente una copia movida de la ruta antigua»* — pulsa **Migrar** y las etiquetas, la estrella y las notas siguen al repo. Solo aparece en repos escaneados al menos una vez en esta instalación (el registro necesita haber visto su remoto) y nunca en un destino que no hayas añadido como directorio de escaneo.
 - **Linux no tiene una bandeja fiable**, así que cerrar la ventana cierra la app.
 - **Los repos añadidos uno a uno, fuera de un directorio de escaneo, no se reconocen así** — si mueves uno, apuntas tú mismo a la nueva ruta.

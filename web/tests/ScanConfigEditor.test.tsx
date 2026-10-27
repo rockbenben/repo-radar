@@ -127,6 +127,25 @@ describe("ScanConfigEditor — 保存把三段配置一起写回", () => {
     expect(puts[0]).toEqual(CONFIG)
   })
 
+  it("保存后本地列表同步：再添加一条根目录时不会覆盖第一条", async () => {
+    const puts = mockConfigApi()
+    render(<Harness open={true} />)
+    await waitFor(() => expect(screen.getByText("D:\\a")).toBeTruthy())
+
+    const rootInput = screen.getByPlaceholderText(/Projects/)
+    act(() => void fireEvent.change(rootInput, { target: { value: "E:\\b" } }))
+    clickSave()
+    await waitFor(() => expect(puts).toHaveLength(1))
+    expect(puts[0].roots).toEqual(["D:\\a", "E:\\b"])
+    // 保存成功后列表必须显示刚加的目录，而不是仍停在「还没有扫描目录」
+    expect(screen.getByText("E:\\b")).toBeTruthy()
+
+    act(() => void fireEvent.change(rootInput, { target: { value: "F:\\c" } }))
+    clickSave()
+    await waitFor(() => expect(puts).toHaveLength(2))
+    expect(puts[1].roots).toEqual(["D:\\a", "E:\\b", "F:\\c"])
+  })
+
   it("改一条打开方式命令：只有它变，roots / excludes 不受影响", async () => {
     const puts = mockConfigApi()
     render(<Harness open={true} />)

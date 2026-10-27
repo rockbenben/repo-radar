@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react"
-import { defineConfig } from "vite"
+import { defineConfig } from "vitest/config"
 
 // 开发代理跟随 REPO_RADAR_PORT：`npm run dev` 会把它同时传给 server 和 vite，
 // 端口改了而这里写死的话，dev 下整个 /api 静默 502。
@@ -13,5 +13,9 @@ export default defineConfig({
       "/api": `http://localhost:${port}`,
       "/ws": { target: `ws://localhost:${port}`, ws: true },
     },
+  },
+  // jsdom + React 用例在满载机器上会超过 5s；15s 只给慢机器留余量，不放宽断言
+  test: {
+    testTimeout: 15000,
   },
 })

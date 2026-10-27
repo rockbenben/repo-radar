@@ -144,7 +144,7 @@ describe("applyFilter", () => {
 
   it("filters by severity", () => {
     const rs = [
-      repo({ id: "e1", health: [{ rule: "no-remote", severity: "error", message: "x" }] }),
+      repo({ id: "e1", health: [{ rule: "conflicted", severity: "error", message: "x" }] }),
       repo({ id: "e2", error: "broken" }),
       repo({ id: "w1", health: [{ rule: "dirty", severity: "warn", message: "x" }] }),
       repo({ id: "ok" }),

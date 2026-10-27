@@ -1,10 +1,12 @@
 import { App as AntdApp, AutoComplete, Button, Checkbox, Input, Modal, Select, Tag } from "antd"
 import { useEffect, useRef, useState } from "react"
-import { type TFunc, useT } from "../i18n"
+import { useT } from "../i18n"
+import { errText } from "../lib/errText"
+import { healthMessage } from "../lib/healthText"
 import { cleanStashMessage, isSideBranch, langColor, remoteWeb } from "../lib/meta"
 import { runStashApplyPop } from "../lib/stash"
 import { relativeTime } from "../lib/time"
-import type { CommitInfo, GithubStatus, HealthIssue, HeatmapDay, RepoStatus, StashEntry } from "../types"
+import type { CommitInfo, GithubStatus, HeatmapDay, RepoStatus, StashEntry } from "../types"
 import { Heatmap } from "./Heatmap"
 import { StashActions } from "./StashActions"
 import { useStashDiff } from "./useStashDiff"
@@ -16,23 +18,6 @@ const EMPTY_DETAIL: DetailData = { recentCommits: [], stashes: [], branches: [],
 // 变更端点 { result } 的归一形状。code 是服务端的稳定枚举（见 git.ts 的 CommitCode / DiscardCode）：
 // 按语言组装文案要靠它，message 是中文原文，只作日志与兜底
 type MutRes = { ok: boolean; message: string; code?: string; empty?: boolean }
-
-// 体检明细：把服务端的健康规则译成当前语言的完整描述（数字从原文取）
-const HEALTH_KEY: Record<string, string> = {
-  conflicted: "conflicted",
-  "no-remote": "noRemote",
-  "detached-head": "detached",
-  dirty: "dirty",
-  unpushed: "unpushed",
-  "no-upstream": "noUpstream",
-  behind: "behind",
-  "stash-left": "stash",
-  stale: "stale",
-}
-function healthMessage(t: TFunc, h: HealthIssue): string {
-  const key = HEALTH_KEY[h.rule]
-  return key ? t(`healthMsg.${key}`, { n: h.message.match(/\d+/)?.[0] ?? "" }) : h.message
-}
 
 export function DetailPanel({
   repo,
@@ -430,7 +415,7 @@ export function DetailPanel({
       open
       onCancel={onClose}
       footer={null}
-      width={880}
+      width="min(880px, 92vw)"
       rootClassName="rr-detail"
       styles={{ body: { padding: 0, maxHeight: "76vh", overflowY: "auto" } }}
       title={
@@ -538,8 +523,18 @@ export function DetailPanel({
           <h3>{t("detail.sync")}</h3>
           <div className="rr-d-syncrow">
             {(["fetch", "pull", "push"] as const).map((a) => (
-              <Button key={a} size="small" className="mono" loading={syncing === a} disabled={syncing !== null} onClick={() => doSync(a)}>
-                {a}
+              <Button
+                key={a}
+                size="small"
+                className="mono"
+                loading={syncing === a}
+                disabled={syncing !== null}
+                onClick={() => doSync(a)}
+                /* 三个动作的区别只在「会不会改动我的工作区」，按钮上又只有两个字：
+                   没有这句说明，用户分不清点哪个。tooltip 说清后果，不加新的交互 */
+                title={t(`detail.${a}Tip`)}
+              >
+                {t(`action.${a}`)}
               </Button>
             ))}
             {(repo.ahead > 0 || repo.behind > 0) && (
@@ -552,7 +547,9 @@ export function DetailPanel({
           {(syncing || syncResult) && (
             <div className={`rr-d-syncmsg mono ${syncing ? "running" : syncResult!.ok === null ? "unknown" : syncResult!.ok ? "ok" : "fail"}`}>
               <span className="ic">{syncing ? "⟳" : syncResult!.ok === null ? "?" : syncResult!.ok ? "✓" : "✗"}</span>
-              <span className="act">{syncing ?? syncResult!.action}</span>
+              {/* 回显**按钮上那个名字**，不是裸 git 子命令名：中文界面里按钮写「拉取」、
+                  回显却是 fetch，用户会以为自己点错了动作（action.fetch 早期就译成了「拉取」） */}
+              <span className="act">{t(`action.${syncing ?? syncResult!.action}`)}</span>
               {!syncing && syncResult!.message && <span className="d" title={syncResult!.message}>· {syncResult!.message}</span>}
             </div>
           )}
@@ -794,7 +791,9 @@ export function DetailPanel({
             ) : gh === "loading" ? (
               <div className="issue info">{t("detail.querying")}</div>
             ) : !gh.ok ? (
-              <div className="issue warn">{gh.error ?? t("detail.queryFail")}</div>
+              /* gh 的报错分两类：服务端给的**错误码**（没装 gh / 没登录）按当前语言翻译；
+                 原样透传的 gh 原文（如 GraphQL 报错）保持原样——那里面有诊断价值 */
+              <div className="issue warn">{errText(t, gh.error) || t("detail.queryFail")}</div>
             ) : (
               <>
                 {/* 截断时显示「100+」：gh 有抓取上限，「100」与「恰好 100 个」不能长得一样 */}

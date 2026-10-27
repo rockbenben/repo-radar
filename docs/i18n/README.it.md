@@ -83,7 +83,7 @@ Directory da scansionare, cartelle escluse e comandi di apertura si modificano d
 
 ## Limiti noti
 
-- **Gli aggiornamenti sono manuali per scelta.** Niente auto-update: esegui il nuovo installer sopra il vecchio.
+- **Gli aggiornamenti in-app sono facoltativi, mai imposti.** Il controllo all'avvio è disattivato per impostazione predefinita; se lo attivi, chiede solo a GitHub qual è l'ultima versione. Download e installazione richiedono entrambi la tua conferma. Su macOS resta manuale finché non arriva la firma: scarica il nuovo installer da Releases.
 - **Uno spostamento che sfugge alla scansione che riconosce lascia un indizio, non una perdita silenziosa.** Quando il riconoscimento automatico non riesce, la nuova scheda offre *«probabilmente una copia spostata del vecchio percorso»* — clicca **Migra** e tag, stella e note seguono il repo. Compare solo per repo scansionati almeno una volta su questa installazione (il registro deve aver visto il loro remote) e mai per una destinazione che non hai aggiunto come directory di scansione.
 - **Linux non ha una tray affidabile**, quindi chiudere la finestra chiude l'app.
 - **I repo aggiunti uno a uno, fuori da una directory di scansione, non vengono riconosciuti così** — se ne sposti uno, il nuovo percorso lo indichi tu.

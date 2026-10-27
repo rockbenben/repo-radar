@@ -83,7 +83,7 @@ Répertoires à scanner, dossiers exclus et commandes d'ouverture se modifient d
 
 ## Limites connues
 
-- **Les mises à jour sont manuelles par choix.** Pas d'auto-update : relancez le nouvel installeur par-dessus l'ancien.
+- **Les mises à jour intégrées sont facultatives, jamais imposées.** La vérification au démarrage est désactivée par défaut ; si vous l'activez, elle demande seulement à GitHub la dernière version. Le téléchargement et l'installation demandent chacun votre confirmation. Sur macOS, la mise à jour reste manuelle jusqu'à la signature : prenez le nouvel installateur dans Releases.
 - **Un déplacement que l'analyse de reconnaissance rate laisse un indice, pas une perte silencieuse.** Quand la correspondance automatique échoue, la nouvelle carte propose *« probablement une copie déplacée de l'ancien chemin »* — cliquez sur **Migrer** et les étiquettes, l'étoile et les notes suivent le dépôt. Cela ne se déclenche que pour des dépôts analysés au moins une fois sur cette installation (le registre doit avoir vu leur remote) et jamais pour une destination que vous n'avez pas ajoutée comme répertoire à scanner.
 - **Linux n'a pas de zone de notification fiable**, donc fermer la fenêtre quitte l'application.
 - **Les dépôts ajoutés un par un, hors répertoire scanné, ne sont pas reconnus ainsi** — si vous en déplacez un, vous indiquez vous-même le nouveau chemin.

@@ -9,6 +9,9 @@ export interface ExecResult {
   ok: boolean
   code: number | null
   output: string // stdout + stderr 合并，尾部截断
+  /** 错误码（不是给人读的句子）：成功时为空串。文案由前端按界面语言翻译
+   *  （见 web/src/lib/errText.ts）——服务端拼中文，英文/日文界面里就会漏中文。 */
+  message: string
 }
 
 /**
@@ -31,11 +34,18 @@ export function runCommand(cwd: string, command: string, timeoutMs = EXEC_TIMEOU
       clearTimeout(timer)
       if (graceTimer !== null) clearTimeout(graceTimer)
       const trimmed = (out.length > OUTPUT_CAP ? `…${out.slice(-OUTPUT_CAP)}` : out).trim()
-      const note = orphaned ? `[超时 ${timeoutMs}ms 已终止；子进程可能仍在后台运行]` : `[超时 ${timeoutMs}ms 已终止]`
       if (killed) {
-        resolve({ ok: false, code, output: `${trimmed}\n${note}`.trim() })
+        // 超时说明放在 message（错误码）里，不再拼进 output：output 是命令自己的输出，
+        // 往里塞中文句子同样会漏到非中文界面里
+        const secs = Math.round(timeoutMs / 1000)
+        resolve({
+          ok: false,
+          code,
+          output: trimmed,
+          message: orphaned ? `execTimeoutOrphan:${secs}` : `execTimeout:${secs}`,
+        })
       } else {
-        resolve({ ok: code === 0, code, output: trimmed })
+        resolve({ ok: code === 0, code, output: trimmed, message: "" })
       }
     }
 
@@ -68,7 +78,8 @@ export function runCommand(cwd: string, command: string, timeoutMs = EXEC_TIMEOU
       settled = true
       clearTimeout(timer)
       if (graceTimer !== null) clearTimeout(graceTimer)
-      resolve({ ok: false, code: null, output: `无法执行：${err.message}` })
+      // 错误码 + 细节（"execFailed:<原因>"）：前端按界面语言翻译，细节原样附在后面
+      resolve({ ok: false, code: null, output: "", message: `execFailed:${err.message}` })
     })
     child.on("close", (code) => settle(code, false))
   })

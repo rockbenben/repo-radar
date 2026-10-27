@@ -71,6 +71,23 @@ body{margin:0;background:radial-gradient(130% 90% at 100% -10%, rgba(var(--sig-r
 .mono{font-family:var(--mono)}
 .tnum{font-variant-numeric:tabular-nums}
 
+/* ---- 滚动条：Chromium 在 Windows 上默认画的那根，是整个界面里唯一不属于设计系统的控件 ---- */
+/* 默认样式是 17px 宽、浅灰轨道、外加上下两个箭头按钮。在这套深色面板里它是**最亮的一块**，
+   视线先被它抢走；两个箭头按钮在这个尺寸下也几乎点不中（各 17px）。
+   换成 10px 的细条：轨道透明、拇指是一根低对比度的圆角条、悬停才变亮、箭头按钮整个去掉。
+   刻意不写 scrollbar-width / scrollbar-color：Chromium 一旦认了这两个标准属性就会忽略
+   ::-webkit-scrollbar 伪元素，这里就白写了。Firefox 不在支持范围内（应用只在 Electron 里跑），
+   那边保持浏览器默认 */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--dim2);border-radius:999px;
+  border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--dim);background-clip:content-box}
+::-webkit-scrollbar-corner{background:transparent}
+/* 箭头按钮：那两个小三角在 10px 宽的条里既挤又点不中。display:none 是 Chromium 唯一认的写法
+   （给 width/height:0 不生效） */
+::-webkit-scrollbar-button{display:none}
+
 /* ---- top bar ---- */
 .rr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:10px 22px;border-bottom:1px solid var(--line);
   background:linear-gradient(180deg,var(--panel3),transparent);position:sticky;top:0;z-index:20;backdrop-filter:blur(8px)}
@@ -102,6 +119,10 @@ body{margin:0;background:radial-gradient(130% 90% at 100% -10%, rgba(var(--sig-r
 .rr-kbd.ant-btn{font-family:var(--mono);font-size:11px;color:var(--dim);height:22px;padding:0 7px;
   border:1px solid var(--line);border-radius:5px;background:var(--panel3)}
 .rr-kbd.ant-btn:hover{color:var(--sig);border-color:var(--edge-h)}
+/* 命令面板行尾的「更多操作」：设计稿是紧凑描边 chip，不跟 antd 默认按钮同高 */
+.rr-palette-more.ant-btn{padding:0 6px;font-size:10px;line-height:16px;
+  color:var(--dim);border:1px solid var(--line);border-radius:4px;background:transparent}
+.rr-palette-more.ant-btn:hover{color:var(--sig);border-color:var(--edge-h)}
 /* 首次使用引导（零仓库时替代空 grid）+ 扫描目录管理弹窗 */
 .rr-welcome{display:flex;flex-direction:column;align-items:center;gap:12px;padding:72px 20px;text-align:center}
 .rr-welcome .tt{font-size:17px;font-weight:650;color:var(--hi)}
@@ -124,8 +145,12 @@ body{margin:0;background:radial-gradient(130% 90% at 100% -10%, rgba(var(--sig-r
 /* overflow 写成 `hidden auto` 而不是只给 overflow-y：CSS 规定一个轴设成非 visible 时，
    另一个轴的 visible 会被算成 auto——只写 overflow-y 会悄悄让横轴也可滚，此后任何一点横向
    溢出都长出一条横条（上一版就是这么来的）。这里明确：只纵向滚 */
+/* scrollbar-gutter:stable 给滚动条**预留**一条槽，于是内容盒比弹窗内壁窄了整整一根滚动条宽：
+   两栏长短不同时滚动条出现/消失，控件不会整体横跳一格。槽位只是把滚动条挪开，
+   控件仍然贴着槽位左沿——真正让出空隙的是下面那 8px 内边距 */
 .rr-settings-body .rr-settings,.rr-settings-body .rr-scancfg{min-width:0;
-  max-height:min(560px, calc(100vh - 260px));overflow:hidden auto}
+  max-height:min(560px, calc(100vh - 260px));overflow:hidden auto;scrollbar-gutter:stable;
+  padding-inline-end:8px}
 /* 页脚：左边版本读数，右边 GitHub。两者都不是设置项，与分栏无关，常驻在这里 */
 .rr-settings-foot{display:flex;align-items:center;gap:12px}
 .rr-settings-foot .rr-settings-gh{margin-inline-start:auto;margin-top:0;padding-top:0;border-top:0}
@@ -133,8 +158,13 @@ body{margin:0;background:radial-gradient(130% 90% at 100% -10%, rgba(var(--sig-r
 .rr-settings-foot .rr-ver{margin-left:0}
 /* 「保存并重新扫描」跟着这一栏走，用细线与上面内容分开；并吸在这一栏滚动区底部（B-S1）——
    roots/excludes/open 三段一长，按钮原本在正文末尾会滚出视野，用户加两条目录就找不到「保存」 */
+/* margin-inline-end:-8px + padding-inline-end:8px：背景与那条分隔细线往外铺 8px，
+   正好填掉滚动容器内边距在滚动条左侧留出的那条缝（否则吸底条右侧会露出一截异色带）；
+   内边距把按钮按回原位，所以按钮仍与上面各行的控件右对齐成一条竖线。
+   负边距只在横轴溢出——容器写的是 overflow:hidden auto（横轴 hidden），溢出被裁掉，不会长出横条 */
 .rr-scancfg-foot{position:sticky;bottom:0;display:flex;justify-content:flex-end;gap:8px;
-  padding:14px 0 2px;margin-top:6px;border-top:1px solid var(--line);background:var(--panel2)}
+  padding-block:14px 2px;padding-inline-end:8px;margin-block-start:6px;margin-inline-end:-8px;
+  border-top:1px solid var(--line);background:var(--panel2)}
 /* 标签定宽成列、控件全部落在同一条竖线上，而不是 space-between 把两头推开。
    弹窗宽 640 之后，space-between 让「主题」两个字后面横着 482px 空白才碰到控件，
    而每个控件宽度不同（Switch 28 / Select 96 / Segmented 85），右对齐也只对齐了右边缘——
@@ -228,7 +258,11 @@ body{margin:0;background:radial-gradient(130% 90% at 100% -10%, rgba(var(--sig-r
    状态组的主因。收窄后标签可能被省略号截断——顶栏五个下拉都已经有 tooltip，
    而且这是 900px 下的取舍：省一整行比完整显示「最近活跃」四个字更值 */
 .rr-bar-sel{width:124px}
-.rr-bar-sel.narrow{width:108px}
+/* 排序项的标签最长（英文 "Recently active"、德文 "Zuletzt aktiv"），按通用宽度会被截成
+   「Recently …」——当前在排序/分组方式上分一档宽度。窄窗口那一档照旧收窄（900px 下省一整行
+   比完整显示更重要，那里有 tooltip 兜底） */
+.rr-bar-sel.wide{width:148px}
+.rr-bar-sel.narrow{width:142px}
 /* 搜索框宽度从内联样式挪进类，好让窄屏能收（内联 style 优先级压过媒体查询，A-P2）。
    看板控件在 900 宽下原本占三行、吃掉 600 高视口的 38%；搜索框从 260 收到 150 让
    第一行的看板控件挤进一行，状态组顺势回到第二行——三行变两行，不删任何控件 */
@@ -238,7 +272,8 @@ body{margin:0;background:radial-gradient(130% 90% at 100% -10%, rgba(var(--sig-r
   .rr-readout .cell{padding:4px 8px}
   .rr-bar{padding-left:14px;padding-right:14px;gap:8px}
   .rr-bar-sel{width:106px}
-  .rr-bar-sel.narrow{width:96px}
+  .rr-bar-sel.wide{width:120px}
+  .rr-bar-sel.narrow{width:112px}
 }
 @media (max-width:1024px){
   .rr-search{width:150px}
@@ -397,7 +432,7 @@ button.rr-c-lang:hover{border-color:var(--edge-h);color:var(--text)}
 .rr-c-last .msg .q{color:var(--dim2)}
 .rr-c-last .ago{font-family:var(--mono);font-size:11.5px;color:var(--dim);flex:none;font-variant-numeric:tabular-nums}
 .rr-c-peek{flex:none;background:none;border:0;color:var(--dim);cursor:pointer;font-size:14px;line-height:1;
-  padding:1px 7px;border-radius:5px;transition:color .15s,background .12s}
+  padding:4px 7px;border-radius:5px;transition:color .15s,background .12s}
 .rr-c-peek:hover{color:var(--sig);background:var(--accent-soft)}
 .rr-preview{max-width:340px;font-size:12px}
 .rr-preview .ch{color:var(--warn);font-family:var(--mono);font-size:11px;margin-bottom:6px}
@@ -433,8 +468,6 @@ button.rr-c-lang:hover{border-color:var(--edge-h);color:var(--text)}
   font-family:var(--mono);font-size:12px;padding:5px 0;cursor:pointer;line-height:1.2;transition:background .12s,color .12s}
 .rr-c-rail .seg:first-child{border-left:0}
 .rr-c-rail .seg:hover{background:var(--accent-soft);color:var(--sig)}
-.rr-card:hover .rr-c-rail .seg:hover{color:var(--sig)}
-@media (hover:none){.rr-c-rail .seg{color:var(--text)}}
 
 /* checkable filter tag (attention lamps use antd CheckableTag fallback styling if needed) */
 /* 空态在**剩余空间里居中**，而不是顶在距顶 64px 处。日志页实测：文字落在 108px，
@@ -586,12 +619,18 @@ button.rr-c-lang:hover{border-color:var(--edge-h);color:var(--text)}
 /* 榜单列头（C-S1）：两块榜单行式相同、排序方向相反，方向原本只写在标题里；
    给三列各挂一个眉标，扫一眼就知道最右那列是「最后活跃」 */
 .rr-actlist-hd{display:flex;align-items:center;gap:10px;padding:0 0 4px;font-family:var(--mono);
-  font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2)}
+  font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
 .rr-actlist-hd .rank{width:20px;flex:none;text-align:right}
 .rr-actlist-hd .ago{margin-left:auto;flex:none}
+/* 榜单为空时的就地说明：不要复用整页 .rr-empty（那会在网格单元里被拉到页面中段） */
+.rr-actlist-empty{padding:10px 0;color:var(--dim);font-size:12.5px;line-height:1.5}
 .rr-actlist .r{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line2);font-size:13px}
 .rr-actlist .r .rank{font-family:var(--mono);font-size:11px;color:var(--dim);width:20px;flex:none;text-align:right;font-variant-numeric:tabular-nums}
 .rr-actlist .r .nm{font-family:var(--mono);color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 榜单行里的目录名：主标题是 displayName（package.json 名 / 远程名），目录名补在后面，
+   免得同一个仓库在看板与榜单里对不上号 */
+.rr-actlist .r .dir,.rr-wl-row .dir{font-family:var(--mono);font-size:11px;color:var(--dim);flex:none;
+  max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rr-actlist .r .ago{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dim);flex:none}
 /* 可点击的项目行/名字：跳回看板并打开该项目详情。按钮重置默认样式，保留行内布局 */
 .rr-actlist button.r{width:100%;font:inherit;color:inherit;background:none;border:0;border-top:1px solid var(--line2);text-align:left;cursor:pointer}

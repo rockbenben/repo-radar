@@ -43,7 +43,10 @@ describe("runCommand", () => {
       new Promise<never>((_, rej) => setTimeout(() => rej(new Error("runCommand 超时后未 settle")), 12_000)),
     ])
     expect(r.ok).toBe(false)
-    expect(r.output).toContain("超时")
+    // 超时说明走 message（错误码 execTimeout:<秒>），不再拼进 output——output 是命令自己的
+    // 输出，往里塞句子同样会漏到非中文界面里（文案由前端按界面语言翻译）
+    expect(r.message).toMatch(/^execTimeout(Orphan)?:\d+$/)
+    expect(r.output).not.toContain("超时")
   }, 20_000)
 
   it("正常结束的命令不受宽限期影响，仍按 close 的退出码返回", async () => {
@@ -51,6 +54,6 @@ describe("runCommand", () => {
     expect(r.ok).toBe(true)
     expect(r.code).toBe(0)
     expect(r.output).toContain("done-fast")
-    expect(r.output).not.toContain("超时")
+    expect(r.message).toBe("") // 正常结束没有错误码可报
   })
 })

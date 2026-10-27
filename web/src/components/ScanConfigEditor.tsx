@@ -25,6 +25,7 @@ export function ScanConfigEditor({
   hidden,
   onClose,
   onSaved,
+  pickDirectory,
 }: {
   open: boolean
   // 不在这一栏时只是藏起来、不卸载：切到别的栏再切回来，敲了一半还没保存的路径必须还在。
@@ -32,6 +33,9 @@ export function ScanConfigEditor({
   hidden?: boolean
   onClose: () => void
   onSaved: () => void
+  // 桌面端注入：打开系统文件夹选择器，把选中的绝对路径填进扫描目录输入框。
+  // 服务器部署没有原生窗口，这个 prop 不传，按钮不出现。
+  pickDirectory?: () => Promise<string | null>
 }) {
   const t = useT()
   const { message } = AntdApp.useApp()
@@ -118,6 +122,13 @@ export function ScanConfigEditor({
         body: JSON.stringify({ roots: next, excludes: nextEx, open: openCmds }),
       })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      // 保存成功后把本地状态同步成盘上的值：弹窗虽然关闭，但组件不卸载，下一次打开/
+      // 同一会话里再添加一条根目录时，本地 roots 若仍为空，第二次保存会把第一次的根目录覆盖掉
+      setRoots(next)
+      setInput("")
+      setExcludes(nextEx)
+      setExInput("")
+      setLoaded(true)
       onClose()
       onSaved() // 保存即重扫：改了 roots/excludes 后看板必须立刻对上（open 不需要，但一起重扫无害）
     } catch (err) {
@@ -145,9 +156,20 @@ export function ScanConfigEditor({
     </div>
   )
 
+  const pickRoot = pickDirectory
+    ? async () => {
+        try {
+          const path = await pickDirectory()
+          if (path) setInput(path)
+        } catch {
+          messageRef.current.error(tRef.current("roots.pickFail"))
+        }
+      }
+    : undefined
+
   // 加载完成前禁用：/api/config 慢下来时（扫描是同步的，几百个仓库能把事件循环堵上几秒）
   // 用户敲进去的那条会被随后到达的响应整份覆盖掉，而保存一直是禁用的，他连提交的机会都没有
-  const adder = (value: string, set: (v: string) => void, add: () => void, placeholder: string) => (
+  const adder = (value: string, set: (v: string) => void, add: () => void, placeholder: string, onPick?: () => Promise<void>) => (
     <div style={{ display: "flex", gap: 8 }}>
       <Input
         size="small"
@@ -158,6 +180,11 @@ export function ScanConfigEditor({
         placeholder={placeholder}
         className="mono"
       />
+      {onPick && (
+        <Button size="small" disabled={!loaded} onClick={() => void onPick()}>
+          {t("roots.pick")}
+        </Button>
+      )}
       <Button size="small" disabled={!loaded} onClick={add}>
         {t("roots.add")}
       </Button>
@@ -186,7 +213,7 @@ export function ScanConfigEditor({
           {adder(input, setInput, () => {
             setRoots(merged(roots, input))
             setInput("")
-          }, t("roots.placeholder"))}
+          }, t("roots.placeholder"), pickRoot)}
 
           <div className="rr-sect">{t("excludes.title")}</div>
           <div className="rr-roots-hint">{t("excludes.hint")}</div>

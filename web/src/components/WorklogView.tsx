@@ -174,6 +174,9 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
                 <button type="button" className="repo rr-repo-clk" onClick={() => onOpenRepo(c.repoId)} title={t("common.openRepoTip")}>
                   {c.repoName}
                 </button>
+                {/* 目录名：repoName 是 displayName（package.json 名 / 远程名），看板卡片上的
+                    标题是目录名——补一个副标题，两个名字才对得上 */}
+                {c.repoDir && c.repoDir !== c.repoName && <span className="dir">{c.repoDir}</span>}
                 <span className="msg" title={c.subject}>
                   {c.subject}
                 </span>

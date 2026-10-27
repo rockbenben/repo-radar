@@ -16,13 +16,20 @@ const BATCH_CONCURRENCY = 4
 const RUN_ID = Math.random().toString(36).slice(2, 8)
 let counter = 0
 
-export function startBatch(action: RepoAction, repoIds: string[], deps: BatchDeps): string {
+/**
+ * 起一批 git 动作。
+ *
+ * scope="single"：单仓库动作（详情面板里的 拉取/更新/推送 走的是同一个任务机制，
+ * 弹窗要靠它的回执兑现 ✓/✗）。标记出来是为了让前端知道「这不是用户发起的批量」——
+ * 顶栏那条「批量…完成」的横幅只该出现在真批量上。
+ */
+export function startBatch(action: RepoAction, repoIds: string[], deps: BatchDeps, scope: "batch" | "single" = "batch"): string {
   const taskId = `batch-${RUN_ID}-${++counter}`
   const results: BatchResultItem[] = []
   const total = repoIds.length
 
   const progress = (current: string | null, finished: boolean): void => {
-    const payload: BatchProgress = { taskId, action, done: results.length, total, current, results: [...results], finished }
+    const payload: BatchProgress = { taskId, action, done: results.length, total, current, results: [...results], finished, scope }
     deps.broadcast("batch:progress", payload)
   }
 
@@ -63,10 +70,14 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
   const taskId = `exec-${RUN_ID}-${++counter}`
   const results: BatchResultItem[] = []
   const total = repoIds.length
-  const action = dryRun ? `预演: ${command}` : command
+  // action 就是命令原文：横幅与输出面板标题都用它。**不在这里拼「预演: 」**——
+  // 服务端一拼中文，非中文界面里就会漏出中文（实测英文界面显示
+  // “Batch 预演: echo hello … done: 1 ok”）。预演这件事用 payload 的 dryRun 标记传，
+  // 前端按当前语言加前缀。
+  const action = command
 
   const progress = (current: string | null, finished: boolean): void => {
-    const payload: BatchProgress = { taskId, action, done: results.length, total, current, results: [...results], finished }
+    const payload: BatchProgress = { taskId, action, done: results.length, total, current, results: [...results], finished, scope: "batch", dryRun }
     deps.broadcast("batch:progress", payload)
   }
 
@@ -79,7 +90,8 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
         repoId: id,
         name: repo?.name ?? id,
         ok: Boolean(repo),
-        message: repo ? "将执行" : "repo not found",
+        // 错误码而不是中文句子：文案由前端按界面语言翻译（见 web/src/lib/errText.ts）
+        message: repo ? "willExecute" : "repo not found",
         output: repo ? repo.path : undefined,
       })
     }
@@ -97,7 +109,9 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
     progress(repo.name, false)
     try {
       const res = await withRepoLock(id, () => runCommand(repo.path, command))
-      results.push({ repoId: id, name: repo.name, ok: res.ok, message: `退出码 ${res.code ?? "—"}`, output: res.output, code: res.code })
+      // message 只放**错误码**（成功时留空）：退出码由 code 字段带着，前端按界面语言渲染
+      // （实测过去这里拼的是中文「退出码 N」，非中文界面里会漏中文）
+      results.push({ repoId: id, name: repo.name, ok: res.ok, message: res.message, output: res.output, code: res.code })
     } catch (err) {
       results.push({ repoId: id, name: repo.name, ok: false, message: String(err) })
     }

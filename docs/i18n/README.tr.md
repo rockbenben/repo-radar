@@ -85,7 +85,7 @@ Tarama dizinleri, hariç tutulan klasörler ve açma komutları ⚙ Ayarlar → 
 
 ## Bilinen sınırlar
 
-- **Yükseltmeler bilinçli olarak elle yapılır.** Otomatik güncelleme yok: yeni yükleyiciyi eskisinin üzerine çalıştırın.
+- **Uygulama içi güncellemeler isteğe bağlıdır, asla zorunlu değildir.** Başlangıç denetimi varsayılan olarak kapalıdır; açtığınızda yalnızca GitHub'a en son sürümü sorar. İndirme ve kurulum için ayrı ayrı onayınız gerekir. macOS'te imzalama gelene kadar güncelleme manuel kalır: yeni yükleyiciyi Releases sayfasından indirin.
 - **Tanıyan taramanın kaçırdığı taşınma, sessiz bir kayıp değil bir ipucu bırakır.** Otomatik eşleşme tutmadığında yeni kart *«eski yolun taşınmış bir kopyasına benziyor»* sunar — **Taşı**'ya basın, etiketler, yıldız ve notlar peşinden gelsin. İpucu yalnızca bu kurulumda en az bir kez taranmış depolar için devreye girer (defter onların remote'unu görmüş olmalı) ve henüz tarama dizini olarak eklemediğiniz bir hedef için asla.
 - **Linux'ta güvenilir bir tepsi yok**, bu yüzden pencereyi kapatmak uygulamayı kapatır.
 - **Tarama dizini dışında tek tek eklenen depolar bu yolla tanınmaz** — birini taşırsanız yeni yolu siz gösterirsiniz.
