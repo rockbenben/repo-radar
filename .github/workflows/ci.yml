@@ -31,8 +31,15 @@ jobs:
       - run: node scripts/check-release-config.mjs
       - if: hashFiles('node_modules/electron/install.js') != ''
         run: node node_modules/electron/install.js
-      - run: npm run check:workflows # workflow 的 run: 块只在 tag 时执行，这里提前做 bash -n
+      - run: npm run check:workflows
         shell: bash
       - run: npm run lint # biome check：lint + import 顺序，格式化不在它职责内
       - run: npm test # root 脚本 = server/web/desktop 三份 typecheck + 三套测试
       - run: npm run build
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml

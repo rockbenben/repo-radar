@@ -1,52 +1,44 @@
 name: release
 
 on:
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+  group: stable-release
+  queue: max
 
 jobs:
-  validate:
+  plan:
     runs-on: ubuntu-latest
     outputs:
-      commit: ${{ steps.version.outputs.commit }}
+      version: ${{ steps.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 26
-          cache: npm
-      - name: Validate the release tag
-        id: version
+      - name: Determine version from published releases and commits
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF_TYPE" != tag || ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Run this workflow on an existing stable vX.Y.Z tag"
-            exit 1
-          fi
-          version="$(node -p "require('./package.json').version")"
-          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
-            exit 1
-          fi
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - run: npm ci --ignore-scripts
-      - run: node scripts/check-release-config.mjs
-      - run: npm run check:workflows
-        shell: bash
+          version="$(node scripts/plan-release.mjs)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release candidate: ${version:-none}" >> "$GITHUB_STEP_SUMMARY"
 
   build:
-    needs: validate
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -59,13 +51,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 26
           cache: npm
       - run: npm ci
+      - name: Stamp the application before compiling and packaging
+        shell: bash
+        run: npm pkg set "version=$RELEASE_VERSION"
       - run: node node_modules/electron/install.js
       - run: npm run lint
       - run: npm test
@@ -81,6 +76,7 @@ jobs:
         run: node scripts/check-release-assets.mjs dist-electron "$RELEASE_BUILD"
       - uses: actions/upload-artifact@v7
         with:
+          overwrite: true
           name: dist-${{ matrix.label }}
           path: |
             dist-electron/*.exe
@@ -91,14 +87,18 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [validate, build]
+    needs: [plan, build]
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      RELEASE_TAG: v${{ needs.plan.outputs.version }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.validate.outputs.commit }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
@@ -131,11 +131,21 @@ jobs:
           set -euo pipefail
           cd out
           find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+      - name: Recheck the release plan before publishing
+        id: recheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(node scripts/plan-release.mjs "$RELEASE_VERSION")"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v3
+        if: steps.recheck.outputs.state != 'published'
         with:
-          tag_name: ${{ github.ref_name }}
-          target_commitish: ${{ needs.validate.outputs.commit }}
-          draft: false
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          draft: true
           prerelease: false
           make_latest: legacy
           fail_on_unmatched_files: true
@@ -150,6 +160,12 @@ jobs:
 
             Git must be installed and available on PATH. GitHub features also use the GitHub CLI.
             Verify downloads against `SHA256SUMS`. The Windows and Linux in-app updaters use the `latest*.yml` manifests.
+      - name: Publish the complete draft
+        if: steps.recheck.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest
       - name: Verify published assets and digests
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,8 +173,10 @@ jobs:
         run: |
           set -euo pipefail
           release="$RUNNER_TEMP/release.json"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" > "$release"
-          jq -e --arg tag "$GITHUB_REF_NAME" '.tag_name == $tag and .draft == false and .prerelease == false' "$release" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$release"
+          jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .draft == false and .prerelease == false' "$release" >/dev/null
+          published_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+          [[ "$published_commit" == "$GITHUB_SHA" ]] || { echo "::error::$RELEASE_TAG points to $published_commit"; exit 1; }
           cd out
           { cat SHA256SUMS; sha256sum SHA256SUMS; } | while read -r digest path; do
             file="${path#./}"
@@ -167,8 +185,8 @@ jobs:
               || { echo "::error::Missing or mismatched published asset: $file"; exit 1; }
           done
           latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
-          newest="$(printf '%s\n' "$latest" "$GITHUB_REF_NAME" | sort -V | tail -n 1)"
+          newest="$(printf '%s\n' "$latest" "$RELEASE_TAG" | sort -V | tail -n 1)"
           if [[ ! "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$latest" != "$newest" ]]; then
-            echo "::error::The updater's latest release ($latest) is older than $GITHUB_REF_NAME or is not stable"
+            echo "::error::The updater's latest release ($latest) is older than $RELEASE_TAG or is not stable"
             exit 1
           fi

@@ -59,17 +59,16 @@ Release targets consistency is checked with `node scripts/check-release-config.m
 
 ## Releases
 
-From a clean checkout of `main`, replace `X.Y.Z` with the release version:
+After a push to main passes CI, the release workflow reads commits since the highest published
+stable GitHub Release. A Conventional Commit with ! or a BREAKING CHANGE footer bumps the major
+version, feat bumps minor, and fix or perf bumps patch. The largest bump wins. Other commits
+accumulate until the next release. Existing tags and unrelated drafts reserve their numbers;
+CI advances the patch if the calculated tag is already occupied.
 
-```bash
-npm version X.Y.Z -m "chore(release): prepare %s"
-git push --atomic origin main tag vX.Y.Z
-```
-
-npm updates `package.json` and `package-lock.json`, commits both, and creates `vX.Y.Z` on that commit.
-Pushing the tag starts the release workflow, which checks the tag against the package version,
-builds and verifies the installers and updater manifests, and publishes the release.
-To rebuild an existing tag, run the release workflow on that tag ref.
+The tracked package version is a development placeholder. CI stamps the release version into each
+build checkout before compiling the app. After verifying all installers and update manifests it
+publishes the draft and its tag on the tested commit. Retry failed jobs on the original CI run.
+The publish job rechecks the candidate before uploading and verifies the public asset digests.
 
 Windows x64 and both Linux AppImage architectures have updater manifests. The two macOS DMGs use
 manual updates. Release notes include download and signing information for the shipped packages.

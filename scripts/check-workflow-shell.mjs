@@ -3,7 +3,7 @@ import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
-// release.yml 的 run: 块只在打 tag 时执行，ci.yml 的三平台门禁不解析 workflow。
+// 三平台构建不执行发布脚本，单独检查工作流中的 shell 块。
 // 缺一个 fi 的发布脚本能一路绿到发版——这里把每个 block scalar 抽出来做 bash -n。
 // 不引 actionlint：只查 shell 语法，零依赖、零第三方 action。
 const dir = resolve(process.argv[2] ?? ".github/workflows")

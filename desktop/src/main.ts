@@ -1,9 +1,7 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { app, type BrowserWindow, dialog, Menu, session, shell, type Tray } from "electron"
-// 版本号唯一事实源是根 package.json（release CI 校验 git tag 与其 version 一致）；
-// desktop/package.json 故意不带 version 字段，不能用 app.getVersion()——未打包时它会
-// 回退成 Electron 自身的版本号（如 45.4.1）。esbuild 打包时会把这个 JSON import 内联进产物。
+// CI 在编译前将发布版本写入根 package.json，esbuild 将其内联进主进程。
 import { version as appVersion } from "../../package.json"
 import { createBackend } from "../../server/src/backend"
 import { loadConfig } from "../../server/src/config"

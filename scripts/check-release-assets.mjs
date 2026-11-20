@@ -63,7 +63,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   try {
     const [directory, lane] = process.argv.slice(2)
     if (!directory) throw new Error("Usage: node scripts/check-release-assets.mjs <directory> [build]")
-    const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"))
+    const version = process.env.RELEASE_VERSION ?? JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version
     await checkReleaseAssets(directory, version, lane)
     console.log(`Release assets verified for ${version}${lane ? ` (${lane})` : ""}`)
   } catch (err) {
