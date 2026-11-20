@@ -1,3 +1,8 @@
+; 按系统 DPI 绘制向导，避免 Windows 放大低分辨率的图标和文字。
+!macro customHeader
+  ManifestDPIAware true
+!macroend
+
 ; 卸载时清掉运行时写入的开机自启项。NSIS 卸载器只认安装期创建的文件与注册表项，
 ; 而自启是应用跑起来之后自己写进 HKCU Run 的（见 desktop/src/autostart.ts 的 setAutostart，
 ; 调用的是 Electron 的 app.setLoginItemSettings）；不在这里删就会留下一个指向已删除 exe 的

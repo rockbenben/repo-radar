@@ -78,7 +78,8 @@ app.setName("repo-radar")
 // 取值必须与 electron-builder.yml 的 appId **逐字相同**：NSIS 安装器会把开始菜单快捷方式的 AUMID
 // 设成 appId，系统靠这个值把 toast 关联回快捷方式。两者不一致时，系统找不到对应快捷方式，
 // 通知就不显示——而且照样没有任何报错。改动其中一处，另一处必须同步改。
-app.setAppUserModelId("com.rockbenben.repo-radar")
+const appUserModelId = "com.rockbenben.repo-radar"
+app.setAppUserModelId(appUserModelId)
 
 // Finder/Dock 双击 .app 启动时拿到的是 launchd 的精简 PATH（/usr/bin:/bin:…），
 // Homebrew 装的 gh（GitHub 集成）和 code（一键打开编辑器）会静默找不到——补上常见安装目录。
@@ -186,6 +187,12 @@ function bootstrap(): void {
       url: isDev ? "http://127.0.0.1:5173" : `http://127.0.0.1:${backend.port}`,
       stateFile: windowStateFile,
       iconPath: windowsIconPath ?? appIconPath,
+      taskbarDetails: windowsIconPath && app.isPackaged ? {
+        appId: appUserModelId,
+        appIconPath: windowsIconPath,
+        relaunchCommand: `"${process.execPath}"`,
+        relaunchDisplayName: app.name,
+      } : undefined,
       isQuitting: () => quitting,
       hideOnClose,
     })

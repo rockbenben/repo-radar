@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import { BrowserWindow, screen, shell } from "electron"
+import { type AppDetailsOptions, BrowserWindow, screen, shell } from "electron"
 import { TITLE_BAR_THEME, titleBarOverlay } from "./titlebar"
 import { loadState, MIN_HEIGHT, MIN_WIDTH, saveState, type WindowState } from "./window-state"
 
@@ -80,6 +80,7 @@ export interface WindowOptions {
   url: string
   stateFile: string
   iconPath: string
+  taskbarDetails?: AppDetailsOptions
   isQuitting: () => boolean
   hideOnClose: boolean // false 时关窗即真正关闭（Linux；见 main.ts 里的取舍说明）
 }
@@ -133,6 +134,8 @@ export function createWindow(options: WindowOptions): BrowserWindow {
       ...(integratedTitleBar && { preload: join(__dirname, "preload.cjs") }),
     },
   })
+  // Windows 任务栏组使用 Shell 窗口属性，独立于 BrowserWindow 的 icon。
+  if (options.taskbarDetails) win.setAppDetails(options.taskbarDetails)
   if (state.maximized) win.maximize()
   win.once("ready-to-show", () => win.show())
 
