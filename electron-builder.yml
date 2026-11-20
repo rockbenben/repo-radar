@@ -1,6 +1,6 @@
 # 应用根 = 仓库根（不是 desktop/）。原因：desktop/src/main.ts 用 join(__dirname, "..", "..")
 # 从 desktop/dist/main.cjs 回推仓库根，来定位 web/dist 和 ASAR 内的托盘 PNG。
-appId: com.rockbenben.repo-radar          # 必须与 main.ts 里的 setAppUserModelId 逐字相同
+appId: com.rockbenben.repo-radar
 productName: repo-radar
 # 统一发布资产命名。nsis 默认会产出 `repo-radar Setup <version>.exe`——带空格，作为 GitHub
 # Release 下载链接会被编码成一串 %20，命令行下载还要加引号，且与 mac/linux 的连字符命名不一致。
@@ -36,12 +36,15 @@ files:
 asar: true
 
 win:
+  appId: com.rockbenben.repo-radar.Desktop  # 与 main.ts 的 Windows 安装版标识一致
   target: nsis
   icon: scripts/icon.ico
   extraResources:
     - from: scripts/icon.ico
       to: icon.ico
 nsis:
+  # 沿用旧 appId 派生的 GUID，以原地升级已有安装。
+  guid: c22c52bc-3afa-5460-9659-015bb3ff9cae
   installerLanguages: [en_US]
   displayLanguageSelector: false
   artifactName: ${name}-${version}-${arch}-setup.${ext}   # -setup 标明是安装器，与 mac/linux 的绿色包区分

@@ -22,6 +22,7 @@ export interface AutostartState {
 }
 
 const NAME = "repo-radar"
+const WINDOWS_LOGIN_ITEM_NAME = "com.rockbenben.repo-radar"
 const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 const desktopEntryFile = (home = homedir()): string => join(home, ".config", "autostart", `${NAME}.desktop`)
 
@@ -147,14 +148,16 @@ export function getAutostart(home = homedir()): AutostartState {
   // 显式返回 supported:false，界面据此把开关渲染成"不支持"，语义诚实。
   if (!app.isPackaged) return { supported: false, enabled: false }
   if (process.platform === "linux") return { supported: true, enabled: existsSync(desktopEntryFile(home)) }
-  // 写入与读回必须用同一组 args，否则 Windows 上永远匹配不上：Electron 在 Windows 上是拿
-  // 传入的 args 拼出命令行，与注册表里存的值做精确字符串比较（见 electron.d.ts 里
-  // getLoginItemSettings 的说明："If you provided path and args options to
-  // app.setLoginItemSettings, then you need to pass the same arguments here for openAtLogin
-  // to be set correctly"）。setAutostart 写入时带的是 args:[TRAY_FLAG]，这里不传就会用空数组
-  // 拼出 `"<exe>"` 去与注册表里的 `"<exe>" --tray` 比较，永远不相等，openAtLogin 就恒为 false——
-  // 用户打开开关后界面立刻弹回关闭，而自启其实已经注册成功。
-  return { supported: true, enabled: app.getLoginItemSettings({ args: [TRAY_FLAG] }).openAtLogin }
+  const settings = app.getLoginItemSettings({ args: [TRAY_FLAG] })
+  // Windows 的 openAtLogin 只按当前 AUMID 查注册表。launchItems 按当前 EXE 枚举，
+  // 可以读回沿用旧值名的登录项。
+  const enabled = process.platform === "win32"
+    ? settings.launchItems.some((item) =>
+      item.scope === "user" && item.name === WINDOWS_LOGIN_ITEM_NAME &&
+      item.enabled && item.args.length === 1 && item.args[0] === TRAY_FLAG,
+    )
+    : settings.openAtLogin
+  return { supported: true, enabled }
 }
 
 /** 只在模块内使用：对外经 autostartExtra 的 set 回调用，不额外开一个导出面 */
@@ -180,7 +183,9 @@ function setAutostart(enabled: boolean, home = homedir()): AutostartState {
       // 这几个字段只在 macOS 12 及更早版本上有效，而 macOS 12 已被 Chromium 放弃。
       // 现在 macOS 上的等价手段是 getLoginItemSettings().wasOpenedAtLogin
       // （「这次是不是登录时被自动拉起来的」），语义比「被隐藏拉起」更准。
-      app.setLoginItemSettings({ openAtLogin: enabled, args: [TRAY_FLAG] })
+      // 保留既有 Windows 注册表值名，升级后仍能用开关关闭旧版启用的登录项。
+      const name = process.platform === "win32" ? WINDOWS_LOGIN_ITEM_NAME : undefined
+      app.setLoginItemSettings({ openAtLogin: enabled, args: [TRAY_FLAG], name })
     }
   }
   return getAutostart(home)
@@ -189,7 +194,7 @@ function setAutostart(enabled: boolean, home = homedir()): AutostartState {
 /**
  * 这份实例要不要把「开机自启」这条能力接给后端（main.ts 的 extras.autostart）。
  *
- * 自启在三个平台上都是**全局唯一一条 OS 条目**：Windows 是 HKCU Run 下值名等于 AUMID 的那一条
+ * 自启在三个平台上都是**全局唯一一条 OS 条目**：Windows 是 HKCU Run 下固定值名的那一条
  * （com.rockbenben.repo-radar，见 build/installer.nsh）、Linux 是固定路径的
  * ~/.config/autostart/repo-radar.desktop（路径里没有任何 profile 成分）、macOS 是 LaunchServices
  * 里的同一个 .app。而写进去的命令行只有 `"<exe>" --tray`，**带不上 REPO_RADAR_CONFIG /

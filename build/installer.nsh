@@ -3,6 +3,17 @@
   ManifestDPIAware true
 !macroend
 
+; electron-builder 在覆盖安装时可能保留现有快捷方式。同步现有链接的 AUMID，
+; 让开始菜单、桌面、任务栏和通知都识别同一个应用。
+!macro customInstall
+  ${If} ${FileExists} "$newStartMenuLink"
+    WinShell::SetLnkAUMI "$newStartMenuLink" "${APP_ID}"
+  ${EndIf}
+  ${If} ${FileExists} "$newDesktopLink"
+    WinShell::SetLnkAUMI "$newDesktopLink" "${APP_ID}"
+  ${EndIf}
+!macroend
+
 ; 卸载时清掉运行时写入的开机自启项。NSIS 卸载器只认安装期创建的文件与注册表项，
 ; 而自启是应用跑起来之后自己写进 HKCU Run 的（见 desktop/src/autostart.ts 的 setAutostart，
 ; 调用的是 Electron 的 app.setLoginItemSettings）；不在这里删就会留下一个指向已删除 exe 的
@@ -10,17 +21,8 @@
 ;
 ; 删两个值名，因为它们对应两套不同代码路径写入的、值名各不相同的条目：
 ;
-; 1) "com.rockbenben.repo-radar" —— 当前 Electron 版实际写入的值名。
-;    确认依据：没有读实机注册表（不能真的往用户机器写自启项去验证），而是直接读了
-;    Electron 43.1.1（本项目锁定版本）的 C++ 源码：
-;    https://github.com/electron/electron/blob/v43.1.1/shell/browser/browser_win.cc
-;    Browser::SetLoginItemSettings 里：
-;      PCWSTR key_name = !settings.name.empty() ? settings.name.c_str() : GetAppUserModelID();
-;    autostart.ts 里调用 app.setLoginItemSettings({ openAtLogin, args, openAsHidden }) 没有传
-;    settings.name，所以落到 GetAppUserModelID()——即 desktop/src/main.ts 里
-;    app.setAppUserModelId("com.rockbenben.repo-radar") 设的那个值（与 electron-builder.yml
-;    的 appId 逐字相同，二者本来就要求同步修改）。app.setName("repo-radar") 只影响
-;    Electron 内部用的应用名（如未打包时的 userData 目录名），不影响这个值名。
+; 1) "com.rockbenben.repo-radar" —— 旧 AUMID，也是 autostart.ts 显式传给
+;    app.setLoginItemSettings 的 Windows 注册表值名。任务栏迁移后继续用该值名。
 ;
 ; 2) "repo-radar" —— 旧 SEA（Node.js Single Executable Application）版遗留的值名，
 ;    见 autostart.ts 里 cleanupLegacyEntries() 对同名条目的清理逻辑（那是非 Electron 时代

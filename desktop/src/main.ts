@@ -75,11 +75,14 @@ app.setName("repo-radar")
 // 不设置的话 Notification.isSupported() 仍然返回 true（它只判断系统是否支持通知这个概念），
 // 但 new Notification(...).show() 可能悄无声息地不显示——没有任何报错，问题完全无声。
 // 本项目主力平台就是 Windows，这行必须补上。
-// 取值必须与 electron-builder.yml 的 appId **逐字相同**：NSIS 安装器会把开始菜单快捷方式的 AUMID
+// 取值必须与 electron-builder.yml 的 win.appId **逐字相同**：NSIS 安装器会把开始菜单快捷方式的 AUMID
 // 设成 appId，系统靠这个值把 toast 关联回快捷方式。两者不一致时，系统找不到对应快捷方式，
 // 通知就不显示——而且照样没有任何报错。改动其中一处，另一处必须同步改。
-const appUserModelId = "com.rockbenben.repo-radar"
-app.setAppUserModelId(appUserModelId)
+// 旧标识曾被开发态 Electron 共用，Explorer 可能继续显示旧分组的 Electron 图标。
+const appUserModelId = "com.rockbenben.repo-radar.Desktop"
+if (process.platform === "win32") {
+  app.setAppUserModelId(app.isPackaged ? appUserModelId : "com.rockbenben.repo-radar.Development")
+}
 
 // Finder/Dock 双击 .app 启动时拿到的是 launchd 的精简 PATH（/usr/bin:/bin:…），
 // Homebrew 装的 gh（GitHub 集成）和 code（一键打开编辑器）会静默找不到——补上常见安装目录。

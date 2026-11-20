@@ -28,7 +28,7 @@ vi.mock("electron", () => ({
   app: {
     isPackaged: false,
     getPath: vi.fn(() => "/mock/exe"),
-    getLoginItemSettings: vi.fn(() => ({ openAtLogin: false })),
+    getLoginItemSettings: vi.fn(() => ({ openAtLogin: false, launchItems: [] })),
     setLoginItemSettings: vi.fn(),
   },
 }))
@@ -597,22 +597,32 @@ describe("cleanupLegacyEntries — Windows 端到端：reg delete 失败不能�
   })
 })
 
-// setAutostart 写入时带 args:[TRAY_FLAG]，Electron 在 Windows 上是拿传入的 args
-// 拼出命令行与注册表里的值做精确字符串比较——读回时如果不传同一组 args，空 args 拼出来的是
-// `"<exe>"`，而存的是 `"<exe>" --tray`，永远不相等，openAtLogin 就会恒为 false。
-// 已读 node_modules/electron/electron.d.ts 的 getLoginItemSettings 文档确认：
-// "If you provided `path` and `args` options to `app.setLoginItemSettings`, then you need to
-// pass the same arguments here for `openAtLogin` to be set correctly."
-describe("getAutostart — Windows 读回状态必须与写入时用同一组 args", () => {
-  it("windows 平台调用 getLoginItemSettings 时带上与 setAutostart 相同的 args", () => {
+describe("Windows autostart across the taskbar identity migration", () => {
+  it("reads the existing login item and removes that same item when disabled", () => {
     // app.isPackaged 在真实 Electron 类型里是只读属性，mock 对象上没有这个限制——
     // 这里过一层 unknown 断言只是绕开 TS 的只读检查，不是绕开真实运行时行为
     const mockApp = app as unknown as { isPackaged: boolean }
     stubPlatform("win32")
     mockApp.isPackaged = true
     try {
-      getAutostart()
-      expect(app.getLoginItemSettings).toHaveBeenCalledWith({ args: ["--tray"] })
+      vi.mocked(app.getLoginItemSettings).mockReturnValueOnce({
+        ...app.getLoginItemSettings(),
+        openAtLogin: false,
+        launchItems: [{
+          name: "com.rockbenben.repo-radar",
+          path: "/mock/exe",
+          args: ["--tray"],
+          scope: "user",
+          enabled: true,
+        }],
+      })
+      expect(getAutostart()).toEqual({ supported: true, enabled: true })
+      expect(autostartExtra(true)?.set(false)).toEqual({ supported: true, enabled: false })
+      expect(app.setLoginItemSettings).toHaveBeenLastCalledWith({
+        openAtLogin: false,
+        args: ["--tray"],
+        name: "com.rockbenben.repo-radar",
+      })
     } finally {
       mockApp.isPackaged = false
     }
