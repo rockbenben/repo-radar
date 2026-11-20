@@ -2,9 +2,8 @@ import { App as AntdApp, Button, Segmented, Select } from "antd"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { gt, useT } from "../i18n"
 import { ymd } from "../lib/time"
-import type { WorklogCommit } from "../types"
+import type { WorklogCommit, WorklogResponse } from "../types"
 
-type Me = { name: string; email: string; emails?: string[] } | null // emails = 各仓库有效邮箱并集（含本地覆盖）
 const ALL = "" // 提交人筛选：空串 = 全部
 
 const daysAgo = (n: number) => {
@@ -17,7 +16,7 @@ const escMd = (s: string) => s.replace(/([\\`*_[\]#|<>~])/g, "\\$1")
 
 const PRESETS = [0, 2, 6, 29] // 今天 / 近3天 / 近7天 / 近30天（含今天）
 
-export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) {
+export function WorklogView({ lastScanAt, onOpenRepo }: { lastScanAt: string | null; onOpenRepo: (id: string) => void }) {
   const t = useT()
   const { message } = AntdApp.useApp()
   const [since, setSince] = useState(() => daysAgo(6))
@@ -25,10 +24,11 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
   const [data, setData] = useState<WorklogCommit[] | null>(null)
   const [failed, setFailed] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [me, setMe] = useState<Me>(null)
+  const [me, setMe] = useState<WorklogResponse["me"]>(null)
   const [author, setAuthor] = useState<string>(ALL) // 选中的提交人邮箱；ALL = 全部
   const authorInited = useRef(false) // 只在首个响应把默认设成「只看我」，之后尊重用户选择
 
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: lastScanAt 用于扫描完成后重新读取同一日期范围。
   useEffect(() => {
     // 范围为空（清空了日期框）或反转时别发请求、别卡转圈，直接清成空态
     if (since === "" || until === "" || since > until) {
@@ -43,11 +43,11 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
     let cancelled = false
     fetch(`/api/worklog?since=${since}&until=${until}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((body) => {
+      .then((body: WorklogResponse) => {
         if (cancelled) return
-        setData(body.commits as WorklogCommit[])
-        setFailed((body.failed as string[]) ?? [])
-        const m = (body.me as Me) ?? null
+        setData(body.commits)
+        setFailed(body.failed ?? [])
+        const m = body.me ?? null
         setMe(m)
         if (!authorInited.current) {
           authorInited.current = true
@@ -58,7 +58,8 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
     return () => {
       cancelled = true
     }
-  }, [since, until])
+  }, [since, until, lastScanAt])
+  // biome-ignore-end lint/correctness/useExhaustiveDependencies: 扫描完成触发集豁免块结束
 
   const applyPreset = (n: number) => {
     setSince(daysAgo(n))
@@ -120,7 +121,11 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
   }
 
   return (
-    <div className="rr-stats rr-worklog">
+    <main className="rr-main rr-secondary rr-worklog">
+      <div className="rr-board-head">
+        <h1>{t("nav.worklog")}</h1>
+        {shown.length > 0 && <Button onClick={copyMd}>{t("worklog.copyMd")}</Button>}
+      </div>
       <div className="rr-wl-bar">
         <Segmented
           size="small"
@@ -130,9 +135,11 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
         />
         <span className="range">
           {/* 清空日期框会传空串：忽略之，保留原值，避免范围变空导致整片空态 */}
-          <input type="date" value={since} max={until} onChange={(e) => e.target.value !== "" && setSince(e.target.value > until ? until : e.target.value)} />
+          {/* biome-ignore lint/complexity/useMathMinMax: ISO 日期字符串不能用 Math.min/max */}
+          <input type="date" aria-label={t("worklog.startDate")} value={since} max={until} onChange={(e) => e.target.value !== "" && setSince(e.target.value > until ? until : e.target.value)} />
           <span className="sep">~</span>
-          <input type="date" value={until} min={since} max={ymd(new Date())} onChange={(e) => e.target.value !== "" && setUntil(e.target.value < since ? since : e.target.value)} />
+          {/* biome-ignore lint/complexity/useMathMinMax: ISO 日期字符串不能用 Math.min/max */}
+          <input type="date" aria-label={t("worklog.endDate")} value={until} min={since} max={ymd(new Date())} onChange={(e) => e.target.value !== "" && setUntil(e.target.value < since ? since : e.target.value)} />
         </span>
         <Select
           size="small"
@@ -143,13 +150,8 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
           popupMatchSelectWidth={false}
           style={{ minWidth: 110 }}
         />
-        {data !== null && shown.length > 0 && (
-          <>
-            <span className="sum">{t("worklog.summary", { commits: shown.length, repos: repoCount, days: groups.length })}</span>
-            <Button size="small" onClick={copyMd} style={{ marginLeft: "auto" }}>
-              {t("worklog.copyMd")}
-            </Button>
-          </>
+        {shown.length > 0 && (
+          <span className="sum">{t("worklog.summary", { commits: shown.length, repos: repoCount, days: groups.length })}</span>
         )}
       </div>
 
@@ -164,7 +166,7 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
         groups.map(([day, cs]) => (
           <section key={day} className="rr-wl-day">
             <div className="rr-ghd">
-              <span className="nm">{day}</span>
+              <h2 className="nm">{day}</h2>
               <span className="ct">{cs.length}</span>
               <span className="ln" />
             </div>
@@ -176,7 +178,7 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
                 </button>
                 {/* 目录名：repoName 是 displayName（package.json 名 / 远程名），看板卡片上的
                     标题是目录名——补一个副标题，两个名字才对得上 */}
-                {c.repoDir && c.repoDir !== c.repoName && <span className="dir">{c.repoDir}</span>}
+                {c.repoDir && c.repoDir !== c.repoName && <span className="dir" title={c.repoDir}>{c.repoDir}</span>}
                 <span className="msg" title={c.subject}>
                   {c.subject}
                 </span>
@@ -186,6 +188,6 @@ export function WorklogView({ onOpenRepo }: { onOpenRepo: (id: string) => void }
           </section>
         ))
       )}
-    </div>
+    </main>
   )
 }

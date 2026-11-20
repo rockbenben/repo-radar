@@ -6,15 +6,14 @@ import { healthMessage } from "../lib/healthText"
 import { cleanStashMessage, isSideBranch, langColor, remoteWeb } from "../lib/meta"
 import { runStashApplyPop } from "../lib/stash"
 import { relativeTime } from "../lib/time"
-import type { CommitInfo, GithubStatus, HeatmapDay, RepoStatus, StashEntry } from "../types"
+import type { CommitResult, GithubStatus, HeatmapDay, HeatmapResponse, RepoDetail, RepoDiff, RepoStatus, StashEntry } from "../types"
 import { Heatmap } from "./Heatmap"
 import { StashActions } from "./StashActions"
 import { useStashDiff } from "./useStashDiff"
 
 const NEW_BRANCH = " new-branch" // 分支下拉里「新建分支」选项的哨兵值（不会与真实分支名撞）
 
-type DetailData = { recentCommits: CommitInfo[]; stashes: StashEntry[]; branches: string[]; remoteBranches: string[] }
-const EMPTY_DETAIL: DetailData = { recentCommits: [], stashes: [], branches: [], remoteBranches: [] }
+const EMPTY_DETAIL: RepoDetail = { recentCommits: [], stashes: [], branches: [], remoteBranches: [] }
 // 变更端点 { result } 的归一形状。code 是服务端的稳定枚举（见 git.ts 的 CommitCode / DiscardCode）：
 // 按语言组装文案要靠它，message 是中文原文，只作日志与兜底
 type MutRes = { ok: boolean; message: string; code?: string; empty?: boolean }
@@ -35,7 +34,7 @@ export function DetailPanel({
   allTags: string[]
   onPatchMeta: (
     id: string,
-    patch: { favorite?: boolean; tags?: string[]; group?: string | null; note?: string | null; archived?: boolean },
+    patch: { favorite?: boolean; tags?: string[]; group?: string | null; note?: string | null; archived?: boolean; autoPull?: boolean | null },
   ) => void
   onOpen: (id: string, target: "editor" | "terminal" | "explorer") => void
   onCopyPath: (path: string) => void
@@ -45,7 +44,7 @@ export function DetailPanel({
 }) {
   const { message, modal } = AntdApp.useApp()
   const t = useT()
-  const [detail, setDetail] = useState<DetailData | null>(null)
+  const [detail, setDetail] = useState<RepoDetail | null>(null)
   const [switching, setSwitching] = useState(false)
   const [stashing, setStashing] = useState(false) // 正在「收进 stash」
   const [newBranchOpen, setNewBranchOpen] = useState(false)
@@ -60,7 +59,7 @@ export function DetailPanel({
   const [tagInput, setTagInput] = useState("")
   const [groupInput, setGroupInput] = useState(repo.group)
   const [noteInput, setNoteInput] = useState(repo.note ?? "")
-  const [diff, setDiff] = useState<{ diff: string; untracked: string[] } | null>(null)
+  const [diff, setDiff] = useState<RepoDiff | { error: string } | null>(null)
   const [diffOpen, setDiffOpen] = useState(false)
   const [commitMsg, setCommitMsg] = useState("")
   const [pushToo, setPushToo] = useState(false)
@@ -97,12 +96,14 @@ export function DetailPanel({
   const diffReq = useRef(0)
   const fetchDiff = async () => {
     const seq = ++diffReq.current
+    setDiff(null)
     try {
       const r = await fetch(`/api/repos/${repo.id}/diff`)
-      const d = r.ok ? await r.json() : { diff: "", untracked: [] }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = (await r.json()) as RepoDiff
       if (seq === diffReq.current) setDiff(d)
-    } catch {
-      if (seq === diffReq.current) setDiff({ diff: "", untracked: [] })
+    } catch (err) {
+      if (seq === diffReq.current) setDiff({ error: err instanceof Error ? err.message : String(err) })
     }
   }
   // 每次展开都重取。**不能记忆化**：diff 正下方就是提交输入框和「提交」按钮，而标题里的改动数
@@ -110,7 +111,7 @@ export function DetailPanel({
   // 那两个文件写提交信息，实际提交的却是当前工作区的另一批内容
   const loadDiff = async () => {
     if (diffOpen) {
-      setDiffOpen(false)
+      closeDiff()
       return
     }
     setDiffOpen(true)
@@ -134,7 +135,7 @@ export function DetailPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message: msg, push: pushToo }),
       })
-      const data = (await r.json()) as { ok: boolean; code?: string; message: string; detail?: string }
+      const data = (await r.json()) as CommitResult
       if (data.ok) {
         const toast =
           data.code === "committedPushed"
@@ -186,10 +187,10 @@ export function DetailPanel({
   }
 
   // 取详情：失败/非 200 返回 null，让调用方决定「显示空」还是「保留旧数据」
-  const fetchDetail = async (): Promise<DetailData | null> => {
+  const fetchDetail = async (): Promise<RepoDetail | null> => {
     try {
       const r = await fetch(`/api/repos/${repo.id}/detail`)
-      return r.ok ? ((await r.json()) as DetailData) : null
+      return r.ok ? ((await r.json()) as RepoDetail) : null
     } catch {
       return null
     }
@@ -349,8 +350,7 @@ export function DetailPanel({
     setTagInput("")
     setGroupInput(repo.group)
     setNoteInput(repo.note ?? "")
-    setDiff(null)
-    setDiffOpen(false)
+    closeDiff()
     setCommitMsg("")
     setPushToo(false)
     setGh(null)
@@ -360,7 +360,7 @@ export function DetailPanel({
     })
     fetch(`/api/stats/heatmap?days=182&repoId=${repo.id}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
+      .then((d: HeatmapResponse | null) => {
         if (!cancelled) setHeat(d ? d.days : [])
       })
       .catch(() => {
@@ -416,8 +416,9 @@ export function DetailPanel({
       onCancel={onClose}
       footer={null}
       width="min(880px, 92vw)"
+      centered
       rootClassName="rr-detail"
-      styles={{ body: { padding: 0, maxHeight: "76vh", overflowY: "auto" } }}
+      classNames={{ container: "rr-detail-container", body: "rr-detail-body" }}
       title={
         <span className="rr-d-title">
           <button type="button"
@@ -429,7 +430,7 @@ export function DetailPanel({
           </button>
           {slot && <span className="rr-c-slot">{slot}</span>}
           <span className="mono nm">{titleName}</span>
-          {repo.archived && <span className="rr-d-arch">{t("card.archived")}</span>}
+          {repo.archived && <span className="rr-d-arch" title={t("annun.archivedViewTip")}>{t("card.archived")}</span>}
         </span>
       }
     >
@@ -440,7 +441,9 @@ export function DetailPanel({
             {detail && detail.branches.length > 0 ? (
               // 切换器旁保留分支状态告警：游离 HEAD 前置红标、非 main 后置提示，避免下拉遮盖状态
               <span className="rr-d-branchwrap">
-                {repo.branch === null && <span className="br det">✖ {t("card.detached")}</span>}
+                {repo.branch === null && repo.error === null && (
+                  <span className="br det" title={t("lamp.detachedTip")}>✖ {t("card.detached")}</span>
+                )}
                 <Select
                   size="small"
                   variant="borderless"
@@ -465,7 +468,7 @@ export function DetailPanel({
                 {repo.branch !== null && isSideBranch(repo.branch) && <span className="side">({t("card.nonMain")})</span>}
               </span>
             ) : repo.branch === null ? (
-              <span className="br det">✖ {t("card.detached")}</span>
+              repo.error === null && <span className="br det" title={t("lamp.detachedTip")}>✖ {t("card.detached")}</span>
             ) : (
               <span className="br">
                 ⎇ {repo.branch}
@@ -605,7 +608,7 @@ export function DetailPanel({
             </Button>
             {diffOpen && (
               <>
-                {diff && diff.untracked.length > 0 && (
+                {diff && "untracked" in diff && diff.untracked.length > 0 && (
                   <div className="kv" style={{ marginTop: 8 }}>
                     {t("detail.untracked", { files: diff.untracked.join("、") })}
                   </div>
@@ -614,6 +617,11 @@ export function DetailPanel({
                   {diff === null ? (
                     <div className="ln" style={{ color: "var(--dim)" }}>
                       {t("detail.diffLoading")}
+                    </div>
+                  ) : "error" in diff ? (
+                    <div className="ln">
+                      <span role="alert">{t("detail.readFail", { err: diff.error })}</span>
+                      <button type="button" className="rr-retry" onClick={fetchDiff}>{t("common.retry")}</button>
                     </div>
                   ) : diff.diff === "" ? (
                     <div className="ln" style={{ color: "var(--dim)" }}>
@@ -713,6 +721,21 @@ export function DetailPanel({
               {repo.archived ? t("detail.unarchive") : t("detail.archive")}
             </Button>
           </div>
+        </section>
+        <section>
+          <h3>{t("settings.autoPull")}</h3>
+          <Select
+            size="small"
+            aria-label={t("settings.autoPull")}
+            style={{ minWidth: 155 }}
+            value={repo.autoPull == null ? "inherit" : repo.autoPull ? "on" : "off"}
+            options={[
+              { value: "inherit", label: t("settings.autoPullInherit") },
+              { value: "on", label: t("settings.autoPullOn") },
+              { value: "off", label: t("fetch.off") },
+            ]}
+            onChange={(mode) => onPatchMeta(repo.id, { autoPull: mode === "inherit" ? null : mode === "on" })}
+          />
         </section>
         </div>
         <div className="rr-d-col">

@@ -103,13 +103,13 @@ export function issueActive(r: RepoStatus, kind: string): boolean {
 }
 
 export type AttentionKey = "no-remote" | "detached" | "unpushed" | "dirty" | "behind" | "stash"
-export const ATTENTION: { key: AttentionKey; labelKey: string; sev: "crit" | "warn" | "" ; test: (r: RepoStatus) => boolean }[] = [
+export const ATTENTION: { key: AttentionKey; labelKey: string; tipKey?: string; sev: "crit" | "warn" | ""; test: (r: RepoStatus) => boolean }[] = [
   { key: "no-remote", labelKey: "lamp.noRemote", sev: "", test: (r) => r.remotes.length === 0 },
-  { key: "detached", labelKey: "lamp.detached", sev: "crit", test: (r) => r.branch === null },
+  { key: "detached", labelKey: "lamp.detached", tipKey: "lamp.detachedTip", sev: "crit", test: (r) => r.error === null && r.branch === null },
   { key: "unpushed", labelKey: "lamp.unpushed", sev: "warn", test: (r) => r.ahead > 0 },
   { key: "dirty", labelKey: "lamp.dirty", sev: "warn", test: (r) => r.dirty.staged + r.dirty.unstaged + r.dirty.untracked > 0 },
   { key: "behind", labelKey: "lamp.behind", sev: "warn", test: (r) => r.behind > 0 },
-  { key: "stash", labelKey: "lamp.stash", sev: "", test: (r) => r.stashCount > 0 },
+  { key: "stash", labelKey: "lamp.stash", tipKey: "lamp.stashTip", sev: "", test: (r) => r.stashCount > 0 },
 ]
 // 可一键批量处理的告警类型 → 对应的 git 操作
 export const LAMP_OP: Partial<Record<AttentionKey, "push" | "pull">> = { unpushed: "push", behind: "pull" }

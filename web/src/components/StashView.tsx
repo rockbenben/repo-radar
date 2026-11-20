@@ -4,7 +4,7 @@ import { gt, useT } from "../i18n"
 import { cleanStashMessage } from "../lib/meta"
 import { runStashApplyPop } from "../lib/stash"
 import { relativeTime } from "../lib/time"
-import type { RepoStashes, StashEntry } from "../types"
+import type { RepoStashes, StashEntry, StashesResponse } from "../types"
 import { StashActions } from "./StashActions"
 import { useStashDiff } from "./useStashDiff"
 
@@ -27,7 +27,7 @@ export function StashView({ onLog }: { onLog: (ok: boolean, text: string) => voi
     try {
       const r = await fetch("/api/stashes")
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const body = (await r.json()) as { repos: RepoStashes[] }
+      const body = (await r.json()) as StashesResponse
       setData(body.repos)
       setError(null)
       // 丢弃已消失的选择，避免残留幽灵选中
@@ -145,7 +145,7 @@ export function StashView({ onLog }: { onLog: (ok: boolean, text: string) => voi
       {groups.map((g) => (
         <section key={g.id} className="rr-stash-repo">
           <div className="rr-ghd">
-            <span className="nm">{g.displayName ?? g.name}</span>
+            <h2 className="nm" title={g.name}>{g.displayName ?? g.name}</h2>
             <span className="ct">{g.stashes.length}</span>
             <span className="ln" />
           </div>
@@ -154,7 +154,7 @@ export function StashView({ onLog }: { onLog: (ok: boolean, text: string) => voi
             return (
               // biome-ignore lint/suspicious/noArrayIndexKey: 序号兜底——两条 stash 撞同一 sha 时 key 也不会重复（它们字节相同，勾选联动可接受）
               <div className={`rr-stash-row${sel.has(k) ? " on" : ""}`} key={`${s.sha}:${i}`}>
-                <Checkbox checked={sel.has(k)} onChange={() => toggle(k)} />
+                <Checkbox aria-label={cleanStashMessage(s.message) || g.name} checked={sel.has(k)} onChange={() => toggle(k)} />
                 <span className="age">{s.date ? relativeTime(s.date) : ""}</span>
                 {s.branch && <span className="br">{t("stash.onBranch", { branch: s.branch })}</span>}
                 <span className="msg" title={s.message}>

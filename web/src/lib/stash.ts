@@ -1,5 +1,6 @@
 import type { App as AntdApp } from "antd"
 import type { TFunc } from "../i18n"
+import type { DiffPreview, RepoMutation, StashActionResult } from "../types"
 
 const JSON_HEADERS = { "content-type": "application/json" }
 type MsgApi = ReturnType<typeof AntdApp.useApp>["message"]
@@ -12,7 +13,7 @@ export async function fetchStashDiff(repoId: string, sha: string, t: TFunc): Pro
       const eb = (await r.json().catch(() => ({}))) as { error?: string }
       return r.status === 404 ? t("stash.diffGone") : (eb.error ?? `HTTP ${r.status}`)
     }
-    const body = (await r.json()) as { diff?: string }
+    const body = (await r.json()) as DiffPreview
     return body.diff && body.diff !== "" ? body.diff : t("stash.diffEmpty")
   } catch (err) {
     return String(err)
@@ -32,7 +33,7 @@ export async function runStashApplyPop(
   try {
     const r = await fetch(`/api/repos/${repoId}/stash`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ action, sha }) })
     // 4xx/5xx 返回的是 { error }，没有 result；用可选链取，别在 result 缺失时抛 TypeError
-    const body = (await r.json()) as { result?: { ok: boolean; message: string; conflict?: boolean }; error?: string }
+    const body = (await r.json()) as Partial<RepoMutation<StashActionResult>> & { error?: string }
     const res = body.result
     if (res?.ok) {
       message.success(action === "pop" ? t("stash.popOk") : t("stash.applyOk"))

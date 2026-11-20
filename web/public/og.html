@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>repo-radar social preview</title>
+  <style>body { margin: 0; } svg { display: block; }</style>
+</head>
+<body>
+<svg aria-label="repo-radar social preview" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" font-family="ui-monospace, 'JetBrains Mono', 'Cascadia Code', Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#0d1320"/><stop offset="1" stop-color="#080b11"/>
+    </linearGradient>
+    <radialGradient id="ambient" cx="0.82" cy="0.05" r="0.9">
+      <stop offset="0" stop-color="#4cc2ff" stop-opacity=".13"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="scan" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#4cc2ff" stop-opacity=".14"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="topline" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4cc2ff" stop-opacity="0"/><stop offset=".18" stop-color="#4cc2ff" stop-opacity=".55"/><stop offset="1" stop-color="#4cc2ff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="gridMask" cx="0.28" cy="0.42" r="0.75"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient>
+    <mask id="gm"><rect width="1280" height="640" fill="url(#gridMask)"/></mask>
+    <pattern id="grid" width="46" height="46" patternUnits="userSpaceOnUse">
+      <path d="M46 0H0V46" fill="none" stroke="#131c2b" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- ground -->
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)" mask="url(#gm)" opacity=".7"/>
+  <rect width="1280" height="640" fill="url(#ambient)"/>
+
+  <!-- ===== identity + thesis (left) ===== -->
+  <image href="logo.svg" x="77" y="86" width="100" height="100"/>
+
+  <!-- wordmark -->
+  <text x="208" y="156" font-size="43" font-weight="650" letter-spacing="-1">
+    <tspan fill="#9fb0c8">repo</tspan><tspan fill="#4cc2ff">·</tspan><tspan fill="#e6edf7">radar</tspan>
+  </text>
+
+  <g font-family="system-ui, 'Segoe UI', sans-serif" fill="#eef4fc" font-weight="750" font-size="64" letter-spacing="-2">
+    <text x="74" y="300">See which Git</text>
+    <text x="74" y="374">repos need you.</text>
+  </g>
+  <text font-size="27" fill="#a8bbd5" font-family="system-ui, 'Segoe UI', sans-serif">
+    <tspan x="76" y="446">Unfinished work across your local repos,</tspan>
+    <tspan x="76" y="483">ranked by urgency.</tspan>
+  </text>
+
+  <g transform="translate(654 108)">
+    <rect width="550" height="424" rx="22" fill="#111a29" stroke="#354c68" stroke-width="2"/>
+    <rect x="1" y="1" width="548" height="180" rx="21" fill="url(#scan)"/>
+    <rect x="22" width="506" height="2" fill="url(#topline)"/>
+
+    <circle cx="40" cy="52" r="6" fill="#5bceff"/>
+    <text x="61" y="61" font-size="26" font-weight="700" letter-spacing="2" fill="#b9d5ee">NEEDS ACTION</text>
+    <path d="M34 94H516 M34 198H516 M34 302H516" stroke="#2b3b50" stroke-width="2"/>
+
+    <g font-size="25" font-weight="650">
+      <circle cx="41" cy="146" r="6" fill="#ff7484"/>
+      <text x="60" y="155" fill="#e7eef9">reflowpdf</text>
+      <text x="515" y="155" text-anchor="end" fill="#ff919d">CI failing</text>
+
+      <circle cx="41" cy="250" r="6" fill="#ffc36b"/>
+      <text x="60" y="259" fill="#e7eef9">img-prompt</text>
+      <text x="515" y="259" text-anchor="end" fill="#ffcc80">PRs waiting</text>
+
+      <circle cx="41" cy="354" r="6" fill="#ffc36b"/>
+      <text x="60" y="363" fill="#e7eef9">daily-notes</text>
+      <text x="515" y="363" text-anchor="end" fill="#ffcc80">Unpushed commits</text>
+    </g>
+  </g>
+</svg>
+</body>
+</html>

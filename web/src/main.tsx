@@ -21,12 +21,23 @@ function Root() {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", mode)
+    window.repoRadarWindow?.setTheme(mode)
     try {
       localStorage.setItem("rr.theme", mode)
     } catch {
       /* localStorage 不可用时静默 */
     }
   }, [mode])
+
+  useEffect(() => {
+    if (!window.repoRadarWindow) return
+    const overlay = navigator.windowControlsOverlay
+    if (!overlay) return
+    const syncOverlay = () => document.documentElement.toggleAttribute("data-window-controls-overlay", overlay.visible)
+    syncOverlay()
+    overlay.addEventListener("geometrychange", syncOverlay)
+    return () => overlay.removeEventListener("geometrychange", syncOverlay)
+  }, [])
 
   useEffect(() => {
     document.documentElement.lang = lang

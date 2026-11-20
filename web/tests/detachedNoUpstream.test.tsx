@@ -6,6 +6,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { DetailPanel } from "../src/components/DetailPanel"
 import { RepoCard } from "../src/components/RepoCard"
 import { I18nProvider } from "../src/i18n"
+import { ATTENTION } from "../src/lib/attention"
 import type { RepoStatus } from "../src/types"
 
 /**
@@ -79,11 +80,20 @@ describe("card.noUpstream 与 health 的 no-upstream 判据一致", () => {
   it("游离 HEAD 时不说这句（服务端那份有 branch !== null）", () => {
     card({ ...base, branch: null })
     expect(screen.queryByText("未跟踪上游")).toBeNull()
+    expect(screen.getByText(/游离 HEAD/).title).toContain("不会推进任何分支")
   })
   it("上游配着、只是远程分支被删时不说这句", () => {
     card({ ...base, upstream: "origin/feat" })
     expect(screen.queryByText("未跟踪上游")).toBeNull()
   })
+})
+
+it("读取失败的仓库不显示游离 HEAD，也不计入状态筛选", () => {
+  const repo = { ...base, branch: null, error: "git status exited with 128" }
+  card(repo)
+  expect(screen.queryByText(/游离 HEAD/)).toBeNull()
+  expect(screen.getByText(repo.error)).toBeTruthy()
+  expect(ATTENTION.find(({ key }) => key === "detached")?.test(repo)).toBe(false)
 })
 
 /**

@@ -1,12 +1,12 @@
-import { Card, Checkbox, Popover } from "antd"
+import { Card, Checkbox, Dropdown, Popover } from "antd"
 import { type MouseEvent, memo, useEffect, useState } from "react"
 import { gt, useT } from "../i18n"
 import { healthMessage } from "../lib/healthText"
 import { isSideBranch, langColor, remoteWeb } from "../lib/meta"
 import { relativeTime } from "../lib/time"
-import type { CommitInfo, HealthIssue, RepoStatus } from "../types"
+import type { CommitInfo, HealthIssue, RepoDetail, RepoStatus } from "../types"
 
-// 卡片内快速预览：点"⋯"弹出最近提交，不用打开详情弹窗。内容按需拉取。
+// 按需预览最近提交，不用打开详情弹窗。
 function CommitPreview({ repoId, changes }: { repoId: string; changes: number }) {
   const t = useT()
   const [open, setOpen] = useState(false)
@@ -20,7 +20,7 @@ function CommitPreview({ repoId, changes }: { repoId: string; changes: number })
     setCommits(null) // 先回到「加载中」：宁可空一下，也别把旧列表当成新的展示
     fetch(`/api/repos/${repoId}/detail?basic=1`) // 只要最近提交，跳过 stash/分支重活
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
+      .then((d: RepoDetail | null) => {
         if (!cancelled) setCommits(d?.recentCommits ?? [])
       })
       .catch(() => {
@@ -59,8 +59,11 @@ function CommitPreview({ repoId, changes }: { repoId: string; changes: number })
       title={<span className="mono" style={{ fontSize: 12 }}>{t("preview.title")}</span>}
       content={content}
     >
-      <button type="button" className="rr-c-peek" onClick={(e) => e.stopPropagation()} title={t("preview.title")}>
-        ⋯
+      <button type="button" className="rr-c-peek" onClick={(e) => e.stopPropagation()} title={t("preview.title")} aria-label={t("preview.title")}>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="8" cy="8" r="5.5" />
+          <path d="M8 4.8v3.5l2.3 1.3" />
+        </svg>
       </button>
     </Popover>
   )
@@ -69,6 +72,7 @@ function CommitPreview({ repoId, changes }: { repoId: string; changes: number })
 export interface RepoCardProps {
   repo: RepoStatus
   clock: number // 每分钟 +1 的钟摆：让 memo 化的卡片定期重渲，相对时间（「5 分钟前」）才不会在长开页面里冻住
+  compact?: boolean
   selected: boolean
   onToggleSelect: (id: string) => void
   onOpen: (id: string, target: "editor" | "terminal" | "explorer") => void
@@ -125,6 +129,7 @@ function shortHealth(h: HealthIssue): string {
 // 一条 repo:updated / 一次选择 / 打字搜索只重渲受影响的卡，而非全部卡片。
 export const RepoCard = memo(function RepoCard({
   repo,
+  compact = false,
   selected,
   onToggleSelect,
   onOpen,
@@ -156,34 +161,25 @@ export const RepoCard = memo(function RepoCard({
 
   return (
     <Card
-      className={`rr-card ${sev}${selected ? " sel" : ""}${repo.archived ? " arch" : ""}`}
+      data-repo-id={repo.id}
+      className={`rr-card${compact ? " rr-card-compact" : ""} ${sev}${selected ? " sel" : ""}${repo.archived ? " arch" : ""}`}
       variant="borderless"
       onClick={() => onShowDetail(repo.id)}
     >
       <div className="rr-c-top">
         <span className="rr-c-check">
-          <Checkbox checked={selected} onClick={stop} onChange={() => onToggleSelect(repo.id)} />
+          <Checkbox aria-label={repo.name} checked={selected} onClick={stop} onChange={() => onToggleSelect(repo.id)} />
         </span>
-        <button type="button"
-          className={`rr-c-fav${repo.favorite ? " on" : ""}`}
-          onClick={(e) => {
-            stop(e)
-            onToggleFavorite(repo.id, !repo.favorite)
-          }}
-          title={repo.favorite ? t("card.favOff") : t("card.favOn")}
-        >
-          ★
-        </button>
         {slot && (
           <span className="rr-c-slot" title={`#${slot}`}>
             {slot}
           </span>
         )}
-        <button type="button" className="rr-c-name" onClick={(e) => { stop(e); onShowDetail(repo.id) }}>
+        <button type="button" className="rr-c-name" title={repo.name} onClick={(e) => { stop(e); onShowDetail(repo.id) }}>
           {baseName}
         </button>
-        {repo.archived && <span className="rr-c-arch">{t("card.archived")}</span>}
-        {repo.language && (
+        {!compact && repo.archived && <span className="rr-c-arch" title={t("annun.archivedViewTip")}>{t("card.archived")}</span>}
+        {!compact && repo.language && (
           <button type="button"
             className="rr-c-lang"
             title={t("card.filterLang", { lang: repo.language })}
@@ -196,69 +192,84 @@ export const RepoCard = memo(function RepoCard({
             {repo.language}
           </button>
         )}
+        <button type="button"
+          className={`rr-c-fav${repo.favorite ? " on" : ""}`}
+          onClick={(e) => {
+            stop(e)
+            onToggleFavorite(repo.id, !repo.favorite)
+          }}
+          aria-pressed={repo.favorite}
+          aria-label={repo.favorite ? t("card.favOff") : t("card.favOn")}
+          title={repo.favorite ? t("card.favOff") : t("card.favOn")}
+        >
+          {repo.favorite ? "★" : "☆"}
+        </button>
       </div>
 
-      {repo.note && (
+      {!compact && repo.note && (
         <div className="rr-c-notetext" title={repo.note}>
           📝 {repo.note}
         </div>
       )}
-      {desc && <div className="rr-c-desc">{desc}</div>}
+      {!compact && desc && <div className="rr-c-desc">{desc}</div>}
 
-      <div className="rr-c-status">
-        {repo.branch === null ? (
-          <span className="br det">✖ {t("card.detached")}</span>
-        ) : (
-          <span className="br">
-            ⎇ {repo.branch}
-            {isSideBranch(repo.branch) && <span className="side"> ({t("card.nonMain")})</span>}
-          </span>
-        )}
-        {changes === 0 && repo.branch !== null ? (
-          <span className="clean">✓ {t("card.clean")}</span>
-        ) : (
-          <>
-            {repo.dirty.staged > 0 && <span className="stg">+{repo.dirty.staged}</span>}
-            {repo.dirty.unstaged > 0 && <span className="mod">~{repo.dirty.unstaged}</span>}
-            {repo.dirty.untracked > 0 && <span className="mod">?{repo.dirty.untracked}</span>}
-          </>
-        )}
-        {repo.ahead > 0 && <span className="ahead">↑{repo.ahead}</span>}
-        {repo.behind > 0 && <span className="behind">↓{repo.behind}</span>}
-        {/* 判据必须与 health.ts 的 no-upstream 逐条对齐——那边有 branch !== null，这里漏了它就会在
-            游离 HEAD 上挂出「未跟踪上游」，而同一仓库的体检区不列这条，两处直说矛盾；游离时也压根
-            没有分支可跟踪，照提示去 git push -u 直接报错。upstream 非 null = 上游分支已被删 */}
-        {repo.ahead === -1 && repo.upstream === null && repo.branch !== null && repo.remotes.length > 0 && (
-          <span className="rr-chip i">{t("card.noUpstream")}</span>
-        )}
-      </div>
-
-      {(chips.length > 0 || repo.mergedBranches.length > 0) && (
-        <div className="rr-c-chips">
-          {chips.map((h) => (
-            <span key={h.rule} className={`rr-chip ${SEV_CHIP[h.severity]}`} title={healthMessage(t, h)}>
-              {shortHealth(h)}
-            </span>
-          ))}
-          {repo.mergedBranches.length > 0 && (
-            <span className="rr-chip i" title={t("health.cleanBranchesTip", { list: repo.mergedBranches.join("、") })}>
-              {t("health.cleanBranches", { n: repo.mergedBranches.length })}
+      <div className="rr-c-signals">
+        <div className="rr-c-status">
+          {repo.branch === null ? (
+            repo.error === null && <span className="br det" title={t("lamp.detachedTip")}>✖ {t("card.detached")}</span>
+          ) : (
+            <span className="br" title={repo.branch}>
+              ⎇ {repo.branch}
+              {!compact && isSideBranch(repo.branch) && <span className="side"> ({t("card.nonMain")})</span>}
             </span>
           )}
+          {changes === 0 && repo.branch !== null ? (
+            <span className="clean">✓ {t("card.clean")}</span>
+          ) : (
+            <>
+              {repo.dirty.staged > 0 && <span className="stg">+{repo.dirty.staged}</span>}
+              {repo.dirty.unstaged > 0 && <span className="mod">~{repo.dirty.unstaged}</span>}
+              {repo.dirty.untracked > 0 && <span className="mod">?{repo.dirty.untracked}</span>}
+            </>
+          )}
+          {repo.ahead > 0 && <span className="ahead">↑{repo.ahead}</span>}
+          {repo.behind > 0 && <span className="behind">↓{repo.behind}</span>}
+          {/* 判据必须与 health.ts 的 no-upstream 逐条对齐——那边有 branch !== null，这里漏了它就会在
+              游离 HEAD 上挂出「未跟踪上游」，而同一仓库的体检区不列这条，两处直说矛盾；游离时也压根
+              没有分支可跟踪，照提示去 git push -u 直接报错。upstream 非 null = 上游分支已被删 */}
+          {repo.ahead === -1 && repo.upstream === null && repo.branch !== null && repo.remotes.length > 0 && (
+            <span className="rr-chip i" title={t("card.noUpstream")}>{t("card.noUpstream")}</span>
+          )}
         </div>
-      )}
+
+        {(chips.length > 0 || repo.mergedBranches.length > 0) && (
+          <div className="rr-c-chips">
+            {chips.map((h) => (
+              <span key={h.rule} className={`rr-chip ${SEV_CHIP[h.severity]}`} title={healthMessage(t, h)}>
+                {shortHealth(h)}
+              </span>
+            ))}
+            {repo.mergedBranches.length > 0 && (
+              <span className="rr-chip i" title={t("health.cleanBranchesTip", { list: repo.mergedBranches.join("、") })}>
+                {t("health.cleanBranches", { n: repo.mergedBranches.length })}
+              </span>
+            )}
+          </div>
+        )}
+
+      </div>
 
       {/* 弹簧：网格里矮内容的卡片被拉到同排高度时，多余空间吸收在这里——
           「最近提交 + 底部控制条」因此永远锚成页脚，而不是提交行悬在半空 */}
-      <div className="rr-c-spring" />
+      {!compact && <div className="rr-c-spring" />}
       <div className="rr-c-last">
         {repo.error ? (
-          <span className="msg" style={{ color: "var(--crit)" }}>
+          <span className="msg" title={repo.error} style={{ color: "var(--crit)" }}>
             {repo.error}
           </span>
         ) : repo.lastCommit ? (
           <>
-            <span className="msg">
+            <span className="msg" title={repo.lastCommit.message}>
               <span className="q">“</span>
               {repo.lastCommit.message}
               <span className="q">”</span>
@@ -279,29 +290,31 @@ export const RepoCard = memo(function RepoCard({
         )}
       </div>
 
-      <div className="rr-c-foot">
-        {web && (
-          <a className="rem" href={web.url} target="_blank" rel="noreferrer" onClick={stop} title={web.url}>
-            {web.label}
-          </a>
-        )}
-        {repo.tags.length > 0 && (
-          <span className="tags">
-            {repo.tags.map((tag) => (
-              <button type="button"
-                key={tag}
-                title={t("card.filterTag", { tag })}
-                onClick={(e) => {
-                  stop(e)
-                  onFilterTag(tag)
-                }}
-              >
-                {tag}
-              </button>
-            ))}
-          </span>
-        )}
-      </div>
+      {!compact && (
+        <div className="rr-c-foot">
+          {web && (
+            <a className="rem" href={web.url} target="_blank" rel="noreferrer" onClick={stop} title={web.url}>
+              {web.label}
+            </a>
+          )}
+          {repo.tags.length > 0 && (
+            <span className="tags">
+              {repo.tags.map((tag) => (
+                <button type="button"
+                  key={tag}
+                  title={t("card.filterTag", { tag })}
+                  onClick={(e) => {
+                    stop(e)
+                    onFilterTag(tag)
+                  }}
+                >
+                  {tag}
+                </button>
+              ))}
+            </span>
+          )}
+        </div>
+      )}
 
       {repo.suspect && (
         <div className="rr-c-suspect">
@@ -318,16 +331,38 @@ export const RepoCard = memo(function RepoCard({
       {/* biome-ignore lint/a11y/noStaticElementInteractions: onClick 只为挡冒泡——操作栏空白处
           点到不该触发「打开详情」，栏内按钮各有自己的 handler */}
       <div className="rr-c-acts" role="presentation" onClick={stop}>
-        <div className="rr-c-rail">
-          {OPENS.map((o) => (
-            <button type="button" key={o.key} className="seg" title={t("card.openWith", { label: t(o.tk) })} onClick={() => onOpen(repo.id, o.key)}>
-              {t(o.tk)}
+        {compact ? (
+          <>
+            <button type="button" className="rr-row-action" onClick={() => onOpen(repo.id, "editor")}>
+              {t("card.editor")}
             </button>
-          ))}
-          <button type="button" className="seg" title={t("card.copyTip", { path: repo.path })} onClick={() => onCopyPath(repo.path)}>
-            {t("card.copy")}
-          </button>
-        </div>
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: [
+                  { key: "terminal", label: t("card.terminal"), onClick: () => onOpen(repo.id, "terminal") },
+                  { key: "explorer", label: t("card.dir"), onClick: () => onOpen(repo.id, "explorer") },
+                  { key: "copy", label: t("card.copy"), onClick: () => onCopyPath(repo.path) },
+                ],
+              }}
+            >
+              <button type="button" className="rr-row-action" aria-label={t("palette.more")} title={t("palette.more")}>
+                ⋯
+              </button>
+            </Dropdown>
+          </>
+        ) : (
+          <div className="rr-c-rail">
+            {OPENS.map((o) => (
+              <button type="button" key={o.key} className="seg" title={t("card.openWith", { label: t(o.tk) })} onClick={() => onOpen(repo.id, o.key)}>
+                {t(o.tk)}
+              </button>
+            ))}
+            <button type="button" className="seg" title={t("card.copyTip", { path: repo.path })} onClick={() => onCopyPath(repo.path)}>
+              {t("card.copy")}
+            </button>
+          </div>
+        )}
       </div>
     </Card>
   )

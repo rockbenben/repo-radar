@@ -45,7 +45,7 @@ const INSTRUMENT_LIGHT = {
 
 export type ThemeMode = "dark" | "light"
 
-const SANS = `system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`
+const SANS = `"Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif`
 
 export function radarTheme(mode: ThemeMode): ThemeConfig {
   const p = mode === "dark" ? INSTRUMENT : INSTRUMENT_LIGHT
@@ -70,12 +70,22 @@ export function radarTheme(mode: ThemeMode): ThemeConfig {
     components: {
       Card: { colorBgContainer: p.card, colorBorderSecondary: p.line },
       // 弹窗贴合仪表舱：内容/头部用面板底色（而非 antd 默认的中性深灰浮层），标题高亮，遮罩偏冷调
-      Modal: { contentBg: p.panel, headerBg: p.panel, titleColor: p.hi, titleFontSize: 14 },
+      Modal: { contentBg: p.panel, headerBg: p.panel, titleColor: p.hi, titleFontSize: 16 },
       Drawer: { colorBgElevated: p.panel2 },
       Input: { colorBgContainer: p.panel2, colorBorder: p.line },
       Select: { colorBgContainer: p.panel2, colorBorder: p.line },
-      Segmented: { colorBgLayout: p.panel2, itemSelectedBg: p.panel },
+      Segmented: {
+        trackBg: "var(--panel2)",
+        itemColor: "var(--dim)",
+        itemHoverColor: "var(--hi)",
+        itemHoverBg: "var(--btn)",
+        itemActiveBg: "var(--btn-h)",
+        itemSelectedBg: "var(--seg-sel)",
+        itemSelectedColor: "var(--hi)",
+        boxShadowTertiary: "inset 0 0 0 1px var(--seg-edge)",
+      },
       Button: {
+        ...(mode === "dark" && { colorPrimary: "#28638c", colorPrimaryHover: "#32719c", colorPrimaryActive: "#215171" }),
         defaultBg: mode === "dark" ? "#152033" : "#eef2f8",
         defaultBorderColor: p.line,
         defaultColor: p.text,

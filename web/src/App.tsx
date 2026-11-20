@@ -1,5 +1,5 @@
-import { App as AntdApp, Button, Dropdown, Input, Modal, Popconfirm, Segmented, Select, Switch } from "antd"
-import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { App as AntdApp, Button, Dropdown, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Switch, Tooltip } from "antd"
+import { type ChangeEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { CockpitHero, GITHUB_KINDS, type QueueItem } from "./components/CockpitHero"
 import { CommandPalette } from "./components/CommandPalette"
 import { DetailPanel } from "./components/DetailPanel"
@@ -37,8 +37,8 @@ import { isGithubUrl } from "./lib/meta"
 import { type LogEntry, loadLog, loadViews, pref, type SavedView, savePref } from "./lib/prefs"
 import { mergeRepo, parentOf } from "./lib/repos"
 import { relativeTime } from "./lib/time"
-import { connectEvents, type ServerEvent } from "./lib/ws"
-import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
+import { connectEvents } from "./lib/ws"
+import type { BatchProgress, BatchResultItem, RepoStatus, ScanStatus, ServerEvent, TaskStarted } from "./types"
 
 const JSON_HEADERS = { "content-type": "application/json" }
 
@@ -54,6 +54,8 @@ const KBD_MOD = IS_MAC ? "⌘" : "Ctrl"
 // 批量/单仓库的 git 动作词。中文界面里把裸动词拼进句子会中英夹丝（「批量 push 完成」），
 // 过一张 action.* 表；en 及其余语言的 action.* 就是原动词，等价于不转。exec 等未收录动作原样返回。
 const ACTION_KEYS = new Set(["fetch", "pull", "push"])
+
+type RepoLayout = "cards" | "list"
 
 // 设置弹窗的两栏，按**交互模型**分：常规里点完即生效，扫描与打开方式要显式保存并重扫。
 // 第二项复用已有的 scan.title，只有「常规」是新词
@@ -138,6 +140,10 @@ export default function App({
     (ok: boolean, text: string) => setLog((prev) => [{ t: Date.now(), ok, text }, ...prev].slice(0, 80)),
     [],
   )
+  const [repoLayout, setRepoLayout] = useState<RepoLayout>(() => pref("repoLayout", "cards") === "list" ? "list" : "cards")
+  const boardRef = useRef<HTMLElement>(null)
+  const headerRef = useRef<HTMLElement>(null)
+  const layoutAnchor = useRef<{ id: string; top: number } | null>(null)
   const [groupMode, setGroupMode] = useState<"folder" | "language" | "none">(
     () => pref("group", "none") as "folder" | "language" | "none",
   )
@@ -167,10 +173,11 @@ export default function App({
   // port：后端实际绑定的端口。默认端口绑不上时会自动换一个，而端口是本页 origin 的一部分——
   // 显示出来用户才知道自己实际跑在哪（书签/脚本要用），也才解释得了换端口后 localStorage
   // 里的视图和活动日志为何像是"没了"
-  const [instance, setInstance] = useState<{ version: string; canQuit: boolean; canPickDirectory: boolean; port: number }>({
+  const [instance, setInstance] = useState<{ version: string; canQuit: boolean; canPickDirectory: boolean; manualUpdates: boolean; port: number }>({
     version: "",
     canQuit: false,
     canPickDirectory: false,
+    manualUpdates: false,
     port: 0,
   })
   // 自动化开关的占位值必须与服务端默认值一致：/api/config 拉到之前（以及拉失败时）显示的
@@ -181,7 +188,9 @@ export default function App({
   const [autoWatch, setAutoWatch] = useState(false)
   const [autoScanMin, setAutoScanMin] = useState(30) // 兜底全量重扫间隔（分钟，0=关；默认 30）
   const [configLoaded, setConfigLoaded] = useState(false)
-  const [autoFetchMin, setAutoFetchMin] = useState(0) // 定时后台 fetch 间隔（分钟，0=关）
+  const [autoFetchMinutes, setAutoFetchMinutes] = useState(0)
+  const [fetchMinutesInput, setFetchMinutesInput] = useState<number | null>(0)
+  const [autoPull, setAutoPull] = useState(false)
   const [watchLimit, setWatchLimit] = useState(200) // 同时监听的仓库数上限（0=无上限；默认 200）
   // 实际挂上监听的仓库数 / 本该监听的总数。截断只写服务端日志的话，常驻托盘的应用
   // 等于什么都没说——用户没法回答「为什么这个仓库不自动刷新」，所以要在面板上如实显示
@@ -193,8 +202,6 @@ export default function App({
   const [checkUpdates, setCheckUpdates] = useState(false)
   const [checkingUpdate, setCheckingUpdate] = useState(false) // 手动检查进行中（原生对话框在主进程那边弹）
   const manifestFileRef = useRef<HTMLInputElement>(null)
-  const [bootAnim, setBootAnim] = useState(false) // 初次载入时的开机错峰淡入（仅一次，不在筛选/刷新时重播）
-  const bootedRef = useRef(false)
   const [newOpen, setNewOpen] = useState(false)
   const [newParent, setNewParent] = useState("")
   const [newName, setNewName] = useState("")
@@ -277,6 +284,7 @@ export default function App({
   const showRepoDetail = (id: string) => {
     if (!repos.some((r) => r.id === id)) return
     setView("board")
+    setShowStash(false)
     setDetailId(id)
   }
 
@@ -285,7 +293,7 @@ export default function App({
   const syncScanStatus = useCallback(() => {
     return fetch("/api/scan")
       .then((res) => (res.ok ? res.json() : null))
-      .then((s: { lastScanAt: string | null; watch: { watched: number; total: number } } | null) => {
+      .then((s: ScanStatus | null) => {
         if (!s) return
         if (s.lastScanAt) setLastScanAt(s.lastScanAt)
         if (s.watch) setWatchCov(s.watch)
@@ -314,9 +322,8 @@ export default function App({
       setLoadError(null)
       const data = (await res.json()) as RepoStatus[]
       applyScanResult(data)
-      // WebSocket 正常时 scan:done 已经把这个值填好了；这里补一次是为了 WS 断着的情况——
-      // 服务端和界面在同一台机器上，客户端的 now 与服务端的完成时刻只差毫秒级
-      setLastScanAt(new Date().toISOString())
+      // HTTP 与 WebSocket 用同一个扫描时刻，两个视图对同一轮只刷新一次。
+      setLastScanAt(res.headers.get("X-Repo-Radar-Scan-At") ?? new Date().toISOString())
     } catch (err) {
       // tRef 而不是 t：稳定身份不能捕获当轮渲染的翻译闭包
       setLoadError(tRef.current("msg.loadError", { err: String(err) }))
@@ -397,15 +404,26 @@ export default function App({
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
-  // 仓库首次出现时播一次"开机"错峰淡入；bootedRef 确保只此一次
-  useEffect(() => {
-    if (!bootedRef.current && repos.length > 0) {
-      bootedRef.current = true
-      setBootAnim(true)
-      const t = setTimeout(() => setBootAnim(false), 900)
-      return () => clearTimeout(t)
+  useLayoutEffect(() => {
+    savePref("repoLayout", repoLayout)
+    const anchor = layoutAnchor.current
+    layoutAnchor.current = null
+    if (!anchor) return
+    const row = boardRef.current?.querySelector(`[data-repo-id="${CSS.escape(anchor.id)}"]`)
+    if (row) window.scrollBy(0, row.getBoundingClientRect().top - anchor.top)
+  }, [repoLayout])
+
+  const changeRepoLayout = (next: RepoLayout) => {
+    const headerBottom = headerRef.current?.getBoundingClientRect().bottom ?? 0
+    const rows = boardRef.current?.querySelectorAll<HTMLElement>("[data-repo-id]")
+    // 换布局时保住当前正在看的仓库，列表开头仍保留原来的首屏。
+    if (rows?.length && rows[0].getBoundingClientRect().top < headerBottom) {
+      const firstVisible = Array.from(rows).find((row) => row.getBoundingClientRect().bottom > headerBottom)
+      const id = firstVisible?.dataset.repoId
+      if (id && firstVisible) layoutAnchor.current = { id, top: Math.max(headerBottom, firstVisible.getBoundingClientRect().top) }
     }
-  }, [repos])
+    setRepoLayout(next)
+  }
 
   useEffect(() => savePref("sort", filter.sort), [filter.sort])
   useEffect(() => savePref("view", view), [view])
@@ -448,7 +466,7 @@ export default function App({
       return { repoId: id, name: "", ok: false, message: String(err) }
     }
     if (!res.ok) return { repoId: id, name: "", ok: false, message: `HTTP ${res.status}` }
-    const { taskId } = (await res.json()) as { taskId: string }
+    const { taskId } = (await res.json()) as TaskStarted
     // 完成事件可能比 POST 响应先到（WS 与 HTTP 是两条通道）：先查已完成任务表，命中同 taskId 就直接返回。
     // 下面注册 resolver 与这次判断在同一同步执行段内，中间不会插入新的 WS 事件，故无遗漏窗口。
     const fb = finishedBatches.current.get(taskId)
@@ -486,14 +504,16 @@ export default function App({
     try {
       const res = await fetch(`/api/repos/${id}/open`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ target }) })
       // 端点回传更新后的仓库（含新的 lastOpened），合并以便「最近打开」排序即时生效
-      if (res.ok) {
-        const updated = (await res.json()) as RepoStatus | { ok: true }
-        if ("id" in updated) setRepos((rs) => mergeRepo(rs, updated))
+      if (!res.ok) {
+        const error = (await res.json().catch(() => null)) as { error?: string } | null
+        throw new Error(error?.error ?? `HTTP ${res.status}`)
       }
-    } catch {
-      // 打开是本机副作用，网络异常时静默
+      const updated = (await res.json()) as RepoStatus | { ok: true }
+      if ("id" in updated) setRepos((rs) => mergeRepo(rs, updated))
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err))
     }
-  }, [])
+  }, [message])
 
   async function exportManifest() {
     try {
@@ -571,7 +591,7 @@ export default function App({
   )
 
   const patchMeta = useCallback(
-    async (id: string, patch: { favorite?: boolean; tags?: string[]; group?: string | null; note?: string | null; archived?: boolean }) => {
+    async (id: string, patch: { favorite?: boolean; tags?: string[]; group?: string | null; note?: string | null; archived?: boolean; autoPull?: boolean | null }) => {
       try {
         const res = await fetch(`/api/repos/${id}/meta`, { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify(patch) })
         if (!res.ok) return
@@ -708,7 +728,7 @@ export default function App({
 
   // 自动化开关状态存服务端 config：三个后台行为**一律默认关闭**——autoWatch 文件监听虽然纯
   // 本地、不走网络，但常驻成本与「看一眼各仓库状态」这个用途不成比例（几个项目同时在跑构建时
-  // 内核缓冲区持续溢出，每次溢出都要补一轮全量重扫）；autoFetchMinutes 定时拉取走网络、
+  // 内核缓冲区持续溢出，每次溢出都要补一轮全量重扫）；定时远程刷新走网络、
   // notifications 系统通知会打扰。默认路径是兜底定时重扫 + 手动重扫。
   // 抽成具名函数：挂载时调一次，配置错误态里的「重试」按钮也调它——一份逻辑，两处触发
   const loadConfigStatus = useCallback(() => {
@@ -723,7 +743,10 @@ export default function App({
         setAutoWatch(!!c.autoWatch)
         setAutoScanMin(typeof c.autoScanMinutes === "number" ? c.autoScanMinutes : 0)
         setWatchLimit(typeof c.watchLimit === "number" ? c.watchLimit : 0)
-        setAutoFetchMin(typeof c.autoFetchMinutes === "number" ? c.autoFetchMinutes : 0)
+        const fetchMinutes = typeof c.autoFetchMinutes === "number" ? c.autoFetchMinutes : 0
+        setAutoFetchMinutes(fetchMinutes)
+        setFetchMinutesInput(fetchMinutes)
+        setAutoPull(c.autoPull === true)
         setNotifications(!!c.notifications)
         setCheckUpdates(!!c.checkUpdates)
         setHasRoots(configHasRoots(c))
@@ -757,7 +780,7 @@ export default function App({
     fetch("/api/version")
       .then((r) => (r.ok ? r.json() : null))
       .then((v) => {
-        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true, canPickDirectory: v.canPickDirectory === true, port: Number(v.port) || 0 })
+        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true, canPickDirectory: v.canPickDirectory === true, manualUpdates: v.manualUpdates === true, port: Number(v.port) || 0 })
       })
       .catch(() => {})
     // loadConfigStatus 是 useCallback([]) 稳定引用，列进依赖数组不会多触发一次——只是照规则补齐
@@ -812,7 +835,7 @@ export default function App({
     }
   }
   // 通知开关只是个纯配置字段（主进程在事件发生时现读 config），不需要服务端立即起停任何东西，
-  // 所以直接走通用的 PUT /api/config，不用像 autoWatch/autoFetch 那样走专用端点
+  // 所以直接走通用的 PUT /api/config，重扫定时器和文件监听各走专用端点。
   async function toggleNotifications() {
     const next = !notifications
     setNotifications(next)
@@ -893,16 +916,37 @@ export default function App({
       message.error(t("msg.scanEveryFail"))
     }
   }
-  async function changeAutoFetch(minutes: number) {
-    const prev = autoFetchMin
-    setAutoFetchMin(minutes)
+  async function saveRemoteRefreshInterval() {
+    const minutes = fetchMinutesInput
+    if (minutes === null || minutes === autoFetchMinutes) {
+      setFetchMinutesInput(autoFetchMinutes)
+      return
+    }
     try {
-      const r = await fetch("/api/auto-fetch", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ minutes }) })
+      const r = await fetch("/api/config", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ autoFetchMinutes: minutes }),
+      })
       if (!r.ok) throw new Error()
-      message.success(minutes > 0 ? t("msg.fetchOn", { n: minutes }) : t("msg.fetchOff"))
+      setAutoFetchMinutes(minutes)
     } catch {
-      setAutoFetchMin(prev) // 失败回滚
-      message.error(t("msg.fetchFail"))
+      setFetchMinutesInput(autoFetchMinutes)
+      message.error(t("msg.saveFail"))
+    }
+  }
+
+  async function changeAutoPull(enabled: boolean) {
+    try {
+      const r = await fetch("/api/config", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ autoPull: enabled }),
+      })
+      if (!r.ok) throw new Error()
+      setAutoPull(enabled)
+    } catch {
+      message.error(t("msg.saveFail"))
     }
   }
 
@@ -1039,10 +1083,11 @@ export default function App({
   }, [visible, groupMode, t])
   const failed = batch?.results.filter((r) => !r.ok) ?? []
 
-  const renderCard = (r: RepoStatus) => (
+  const renderRepo = (r: RepoStatus) => (
     <RepoCard
       key={r.id}
       repo={r}
+      compact={repoLayout === "list"}
       selected={selected.has(r.id)}
       clock={clockTick}
       onToggleSelect={toggleSelect}
@@ -1057,239 +1102,150 @@ export default function App({
     />
   )
 
+  const hasFilters = Boolean(attention || filter.query || filter.group || filter.tags?.length || filter.severity)
+  const clearFilters = () => {
+    setFilter((f) => ({ ...f, query: "", group: null, severity: null, tags: [] }))
+    setAttention(null)
+    setViewName(null)
+  }
+
+  const showOverview = view === "board" && !showStash && !showArchived && active.length > 0
+  const scanTime = lastScanAt && (
+    <p className="rr-scan-time" title={new Date(lastScanAt).toLocaleString(lang, { hour12: false })}>
+      {t("bar.lastScan", { t: relativeTime(lastScanAt) })}
+    </p>
+  )
+
+  const stashLink = (stashTotal > 0 || showStash) && (
+    <Tooltip title={showStash ? undefined : t("annun.stashViewTip")} trigger={["hover", "focus"]}>
+      <Button
+        onClick={() => {
+          if (!showStash) setShowArchived(false)
+          setShowStash(!showStash)
+        }}
+      >
+        {showStash ? t("annun.backToRepos") : t("annun.stashView", { n: stashTotal })}
+      </Button>
+    </Tooltip>
+  )
+  const archiveLink = (counts.archived > 0 || showArchived) && (
+    <Tooltip title={showArchived ? undefined : t("annun.archivedViewTip")} trigger={["hover", "focus"]}>
+      <Button
+        onClick={() => {
+          if (!showArchived) setShowStash(false)
+          setShowArchived(!showArchived)
+        }}
+      >
+        {showArchived ? t("annun.backToRepos") : t("annun.archivedView", { n: counts.archived })}
+      </Button>
+    </Tooltip>
+  )
+
+  const brand = (
+    <div className="rr-brand">
+      <ScopeMark size={32} />
+      <span>repo<span className="d">·</span>radar</span>
+    </div>
+  )
+
   return (
     <>
-      <div className="rr-bar">
-        <ScopeMark size={24} />
-        <span className="rr-brand">
-          repo<span className="d">·</span>radar
-        </span>
-        <span className="rr-sep" />
-        <Segmented
-          className="rr-nav"
-          size="small"
-          value={view}
-          onChange={(v) => setView(v as "board" | "stats" | "log" | "worklog")}
-          options={[
-            { label: t("nav.board"), value: "board" },
-            { label: t("nav.stats"), value: "stats" },
-            { label: t("nav.worklog"), value: "worklog" },
-            { label: t("nav.log"), value: "log" },
-          ]}
-        />
-        {/* 看板专属控件（搜索/筛选/排序/视图）——只在看板页出现；切到统计/工作记录/日志时整栏清爽 */}
-        {view === "board" && (
-          <>
-            <span className="rr-sep" />
-            <Input
-              allowClear
-              value={filter.query}
-              onChange={(e) => setFilter({ ...filter, query: e.target.value })}
-              // 放大镜做成 prefix 而不是拼进 placeholder：开始输入后图标仍在（affordance 不消失），
-              // 占位文案保持纯文本。内联 SVG 走 currentColor，与设置面板底部的 GitHub 图标同一做法
-              prefix={
-                <svg className="rr-search-ic" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-                  <circle cx="7" cy="7" r="4.6" />
-                  <path d="M10.4 10.4 L14 14" strokeLinecap="round" />
-                </svg>
-              }
-              placeholder={t("bar.search")}
-              className="rr-search"
-              size="small"
-            />
-            <Button size="small" type="text" className="rr-kbd" onClick={() => setPaletteOpen(true)} title={t("bar.paletteTip")}>
-              {KBD_MOD} K
-            </Button>
-            <span className="rr-sep" />
-            {/* 三个下拉长得一模一样，且「按分组筛选」和「分组方式」都带「分组」二字——
-                选了值之后（如分组筛选选中某个文件夹名）控件角色彻底消失。prefix 微图标
-                是常驻的角色标记：漏斗=筛选、双向箭头=排序、栅格=分组方式 */}
-            <Select
-              size="small"
-              value={filter.group ?? ""}
-              className="rr-bar-sel"
-              prefix={<SelIcon kind="filter" />}
-              title={t("bar.groupFilterTip")}
-              onChange={(v) => setFilter({ ...filter, group: v || null })}
-              options={[{ label: t("bar.allGroups"), value: "" }, ...groups.map((g) => ({ label: g, value: g }))]}
-            />
-            {allTags.length > 0 && (
-              <Select
-                mode="multiple"
-                size="small"
-                allowClear
-                maxTagCount="responsive"
-                style={{ minWidth: 124, maxWidth: 240 }}
-                placeholder={t("bar.tagFilter")}
-                value={filter.tags ?? []}
-                onChange={(vals) => setFilter((f) => ({ ...f, tags: vals }))}
-                title={t("bar.tagFilterTip")}
-                options={allTags.map((tag) => ({ label: `#${tag}`, value: tag }))}
-              />
-            )}
-            <Select
-              size="small"
-              value={filter.sort}
-              className="rr-bar-sel wide"
-              prefix={<SelIcon kind="sort" />}
-              title={t("bar.sortTip")}
-              onChange={(v) => setFilter({ ...filter, sort: v as FilterState["sort"] })}
-              // 按预期使用频率排：最近活跃是默认档，最近打开垫底——它只在你点过卡片上的
-              // 编辑器/终端/目录按钮时才有数据，直接在编辑器里打开仓库不算，因此绝大多数
-              // 仓库那一栏是空的，实际能用上的人很少。语义见 bar.sortTip
-              options={[
-                { label: t("sort.activity"), value: "activity" },
-                { label: t("sort.commit"), value: "commit" },
-                { label: t("sort.name"), value: "name" },
-                { label: t("sort.opened"), value: "opened" },
-              ]}
-            />
-            <Select
-              size="small"
-              value={groupMode}
-              className="rr-bar-sel narrow"
-              prefix={<SelIcon kind="group" />}
-              title={t("bar.groupModeTip")}
-              onChange={(v) => setGroupMode(v)}
-              options={[
-                { label: t("group.folder"), value: "folder" },
-                { label: t("group.language"), value: "language" },
-                { label: t("group.none"), value: "none" },
-              ]}
-            />
-            <span className="rr-sep" />
-            {views.length > 0 && (
-              <Select
-                size="small"
-                style={{ width: 118 }}
-                placeholder={t("bar.view")}
-                title={t("bar.viewTip")}
-                value={viewName ?? undefined}
-                allowClear
-                onClear={() => setViewName(null)}
-                onChange={(n) => {
-                  const v = views.find((x) => x.name === n)
-                  if (v) applyView(v)
-                }}
-                options={views.map((v) => ({ label: v.name, value: v.name }))}
-              />
-            )}
-          </>
-        )}
-        {/* 读数 + 三个全局动作合成一个**整体**。此前它们是 .rr-bar 里的散兵，而 .rr-bar 是
-            单个 flex-wrap 行：900px（应用支持的最小宽度）下换行断在这一组中间，实测第三行
-            只剩「重新扫描/＋新增/⚙」共 157px，右侧空掉 742px。合成一组后整块一起换行，
-            右对齐仍然成立，也不再受各语言按钮宽度差异的摆布 */}
-        <div className="rr-bar-status">
-        <span className="rr-readout">
-          <span className="cell" title={t("gauge.fleet")}>
-            <span className="v">{counts.fleet}</span>
-            <span className="k">FLEET</span>
-          </span>
-          <span className="cell" title={t("gauge.crit")}>
-            <span className={`v${counts.crit > 0 ? " crit" : ""}`}>{counts.crit}</span>
-            <span className="k">CRIT</span>
-          </span>
-          <span className="cell" title={t("gauge.warn")}>
-            <span className={`v${counts.warn > 0 ? " warn" : ""}`}>{counts.warn}</span>
-            <span className="k">WARN</span>
-          </span>
-          <span className="cell" title={t("gauge.clean")}>
-            <span className="v ok">{counts.clean}</span>
-            <span className="k">CLEAN</span>
-          </span>
-          {/* 看板数据有多新——没有这个，兜底重扫是否真的在跑就完全看不见。做成第五格仪表
-              而不是按钮旁的游离文本：扫描新鲜度和舰队状态是同一类读数，且仪表格在扫描期间
-              保持稳定（旧实现扫描时文本消失、按钮变宽，整条顶栏跟着抖）。没扫过时显示占位「—」
-              而不是整格消失——格子忽在忽不在会让仪表组宽度跳动（A-P3）。
-              相对时间必须按真实 Date.now() 算：把每分钟的 clockTick 当 now 传进去，窗口被
-              最小化时浏览器会节流那个 interval，而 WebSocket 照收，于是 lastScanAt 可能比
-              快照更新，算出正的差值、渲染成「3 分钟后」。走动靠 clockTick 触发的整体重渲 */}
-          <span
-            className="cell"
-            title={lastScanAt ? `${t("bar.lastScan", { t: relativeTime(lastScanAt) })} · ${new Date(lastScanAt).toLocaleString(lang, { hour12: false })}` : undefined}
-          >
-            <span className="v time">{lastScanAt ? relativeTime(lastScanAt) : "—"}</span>
-            <span className="k">SCAN</span>
-          </span>
-        </span>
-        <Button size="small" loading={scanning} onClick={rescan} disabled={!hasRoots} title={hasRoots ? undefined : t("empty.welcomeCta")}>
-          {scanning ? (scanProgress ? t("bar.scanProgress", { done: scanProgress.scanned, total: scanProgress.total }) : t("bar.scanning")) : t("bar.rescan")}
-        </Button>
-        <Dropdown
-          menu={{
-            items: [
-              { key: "scan", label: t("empty.welcomeCta") },
-              { type: "divider" },
-              { key: "new", label: t("add.new") },
-              { key: "clone", label: t("add.clone") },
-              { type: "divider" },
-              { key: "export", label: t("add.export") },
-              { key: "import", label: t("add.import") },
-            ],
-            onClick: ({ key }) => {
-              if (key === "scan") openScanSettings()
-              else if (key === "new") openNewProject()
-              else if (key === "clone") openClone()
-              else if (key === "export") exportManifest()
-              else if (key === "import") manifestFileRef.current?.click()
-            },
-          }}
-        >
-          <Button size="small" type="primary" ghost>
-            {t("bar.add")} ▾
-          </Button>
-        </Dropdown>
-        <input
-          ref={manifestFileRef}
-          type="file"
-          accept="application/json,.json"
-          style={{ display: "none" }}
-          onChange={importManifestFile}
-        />
-        {/* 保存视图是看板动作，但放进这个整体组（A-P1）：此前它留在看板控件块尾部，
-            1280 宽下独自掉到顶栏第二行最左、右侧空一片。并入本组后跟读数组一起换行、一起右对齐 */}
-        {view === "board" && repos.length > 0 && (
-          <Button
-            size="small"
-            type="text"
-            onClick={() => {
-              setNewViewName(viewName ?? "")
-              setSaveViewOpen(true)
+      <header className="rr-shell-header" ref={headerRef}>
+        <div className="rr-window-bar">{brand}</div>
+        <div className="rr-bar">
+          {brand}
+          <Segmented<typeof view>
+            className="rr-nav"
+            value={view}
+            onChange={(next) => {
+              setView(next)
+              window.scrollTo(0, 0)
             }}
-            title={t("bar.saveViewTip")}
-          >
-            {t("bar.saveView")}
-          </Button>
-        )}
-        <Button
-          size="small"
-          className="rr-gear"
-          /* 高亮只标「用户自己额外开的后台行为」。文件监听改成默认关闭之后它也算一个——
-             而且是这一组里最贵的那个（常驻句柄 + 溢出补票的全量重扫）。此前它默认开着，
-             算进来会让齿轮永远亮着、信号归零，所以那时刻意排除在外 */
-          type={autoWatch || autoFetchMin > 0 || notifications || checkUpdates ? "primary" : "default"}
-          ghost={autoWatch || autoFetchMin > 0 || notifications || checkUpdates}
-          /* 图标按钮没有可读文字，tooltip 就是它的名字，说清「点了会发生什么」即可。
-             原来那条是「设置：主题 · 自动扫描 · 定时拉取 · 提醒」——枚举了 4 项而设置里现在有十来项，
-             还把「GitHub 提醒」称作「提醒」，界面上同一个东西两个叫法 */
-          title={t("settings.title")}
-          onClick={() => setSettingsOpen(true)}
-        >
-          ⚙
-        </Button>
+            options={[
+              { label: t("nav.board"), value: "board" },
+              { label: t("nav.stats"), value: "stats" },
+              { label: t("nav.worklog"), value: "worklog" },
+              { label: t("nav.log"), value: "log" },
+            ]}
+          />
+          {view === "board" && !showStash && repos.length > 0 && (
+            <Segmented<RepoLayout>
+              className="rr-layout-switch"
+              aria-label={t("board.layout")}
+              size="small"
+              value={repoLayout}
+              onChange={changeRepoLayout}
+              options={[
+                { label: t("board.cards"), value: "cards" },
+                { label: t("board.list"), value: "list" },
+              ]}
+            />
+          )}
+          <div className="rr-bar-status">
+            {!showOverview && scanTime}
+            <Button loading={scanning} onClick={rescan} disabled={!hasRoots} title={hasRoots ? undefined : t("empty.welcomeCta")}>
+              {scanning ? (scanProgress ? t("bar.scanProgress", { done: scanProgress.scanned, total: scanProgress.total }) : t("bar.scanning")) : t("bar.rescan")}
+            </Button>
+            <Dropdown
+              menu={{
+                items: [
+                  { key: "scan", label: t("empty.welcomeCta") },
+                  { type: "divider" },
+                  { key: "new", label: t("add.new") },
+                  { key: "clone", label: t("add.clone") },
+                  { type: "divider" },
+                  { key: "export", label: t("add.export") },
+                  { key: "import", label: t("add.import") },
+                ],
+                onClick: ({ key }) => {
+                  if (key === "scan") openScanSettings()
+                  else if (key === "new") openNewProject()
+                  else if (key === "clone") openClone()
+                  else if (key === "export") exportManifest()
+                  else if (key === "import") manifestFileRef.current?.click()
+                },
+              }}
+            >
+              <Button type="primary">
+                {t("bar.add")} ▾
+              </Button>
+            </Dropdown>
+            <input
+              ref={manifestFileRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: "none" }}
+              onChange={importManifestFile}
+            />
+            <Button
+              className="rr-gear"
+              aria-label={t("settings.title")}
+              /* 高亮只标「用户自己额外开的后台行为」。文件监听改成默认关闭之后它也算一个——
+                 而且是这一组里最贵的那个（常驻句柄 + 溢出补票的全量重扫）。此前它默认开着，
+                 算进来会让齿轮永远亮着、信号归零，所以那时刻意排除在外 */
+              type={autoWatch || autoFetchMinutes > 0 || notifications || (!instance.manualUpdates && checkUpdates) ? "primary" : "default"}
+              ghost={autoWatch || autoFetchMinutes > 0 || notifications || (!instance.manualUpdates && checkUpdates)}
+              /* 图标按钮没有可读文字，tooltip 就是它的名字，说清「点了会发生什么」即可。
+                 原来那条是「设置：主题 · 自动扫描 · 定时拉取 · 提醒」——枚举了 4 项而设置里现在有十来项，
+                 还把「GitHub 提醒」称作「提醒」，界面上同一个东西两个叫法 */
+              title={t("settings.title")}
+              onClick={() => setSettingsOpen(true)}
+            >
+              ⚙
+            </Button>
+          </div>
         </div>
-        {/* 设置从顶栏弹层改成弹窗：这里没有一项是高频操作（语言、告警灯、四个后台开关、扫描目录
-            全是「设一次」），弹层「不打断上下文」的优势换不到东西；而它长到 644px 之后，在最小
-            窗口（600 高）下已经必须滚动，且里面还有个按钮再开一层弹窗。
-            两栏的分界是**交互模型**：常规里的东西点完即生效，扫描与打开方式要按「保存并重新扫描」。
-            版本与 GitHub 链接不是设置，放页脚常驻，不占分栏 */}
         <Modal
           open={settingsOpen}
           onCancel={() => setSettingsOpen(false)}
           title={t("settings.title")}
-          width={640}
-          rootClassName="rr-settings-modal"
+          width={740}
+          centered
+          classNames={{
+            container: "rr-settings-container",
+            body: "rr-settings-viewport",
+            footer: "rr-settings-footer",
+          }}
           footer={
             <div className="rr-settings-foot">
               {instance.version !== "" && (
@@ -1311,11 +1267,7 @@ export default function App({
           }
         >
           <div className="rr-settings-body">
-            {/* 两栏用 Segmented 而不是左侧导航栏：只有两项，划走 150px 装两个词不划算；
-                而且这个控件顶栏导航已经在用，视觉语言现成 */}
             <Segmented
-              size="small"
-              block
               value={settingsTab}
               onChange={(v) => setSettingsTab(v as SettingsTab)}
               options={SETTINGS_TABS.map(({ key, labelKey }) => ({ label: t(labelKey), value: key }))}
@@ -1331,8 +1283,7 @@ export default function App({
                   value={lang}
                   style={{ width: 138 }}
                   onChange={(v) => setLang(v)}
-                  showSearch
-                  optionFilterProp="label"
+                  showSearch={{ optionFilterProp: "label" }}
                   options={LANGS.map((l) => ({ label: l.name, value: l.code }))}
                 />
               </div>
@@ -1360,7 +1311,7 @@ export default function App({
                 <div className="rr-lamp-pick">
                   {ATTENTION.map((a) => {
                     const on = lamps.includes(a.key)
-                    return (
+                    const button = (
                       <button
                         key={a.key}
                         type="button"
@@ -1377,6 +1328,9 @@ export default function App({
                         {t(a.labelKey)}
                       </button>
                     )
+                    return a.tipKey ? (
+                      <Tooltip key={a.key} title={t(a.tipKey)} trigger={["hover", "focus"]}>{button}</Tooltip>
+                    ) : button
                   })}
                 </div>
               </div>
@@ -1458,22 +1412,26 @@ export default function App({
               <div className="grp">{t("settings.grpNetwork")}</div>
               <div className="row">
                 <span className="lb">
-                  {t("settings.autoFetch")}<span className="hint">{t("settings.autoFetchHint")}</span>
+                  {t("settings.remoteRefreshInterval")}<span className="hint">{t("settings.remoteRefreshHint")}</span>
                 </span>
-                <Select
+                <InputNumber
                   size="small"
-                  value={autoFetchMin}
+                  aria-label={t("settings.remoteRefreshInterval")}
                   style={{ width: 96 }}
-                  onChange={changeAutoFetch}
+                  min={0}
+                  precision={0}
+                  value={fetchMinutesInput}
+                  onChange={setFetchMinutesInput}
+                  onBlur={() => void saveRemoteRefreshInterval()}
+                  onPressEnter={(event) => event.currentTarget.blur()}
                   disabled={!configLoaded}
-                  options={[
-                    { label: t("fetch.off"), value: 0 },
-                    { label: t("fetch.min", { n: 5 }), value: 5 },
-                    { label: t("fetch.min", { n: 15 }), value: 15 },
-                    { label: t("fetch.min", { n: 30 }), value: 30 },
-                    { label: t("fetch.min", { n: 60 }), value: 60 },
-                  ]}
                 />
+              </div>
+              <div className="row">
+                <span className="lb">
+                  {t("settings.autoPull")}<span className="hint">{t("settings.autoPullHint")}</span>
+                </span>
+                <Switch size="small" aria-label={t("settings.autoPull")} checked={autoPull} onChange={changeAutoPull} disabled={!configLoaded} />
               </div>
               <div className="row">
                 <span className="lb">
@@ -1484,18 +1442,21 @@ export default function App({
               {/* 更新检查：开关管的是「每次启动顺手问一句」，按钮管的是「现在问」。
                   两件事分开是因为它们回答的不是同一个问题——用户可能不想让应用
                   每次启动都联网，但此刻想知道有没有新版 */}
+              {!instance.manualUpdates && (
+                <div className="row">
+                  <span className="lb">
+                    {t("settings.checkUpdates")}<span className="hint">{t("settings.checkUpdatesHint")}</span>
+                  </span>
+                  <Switch size="small" aria-label={t("settings.checkUpdates")} checked={checkUpdates} onChange={toggleCheckUpdates} disabled={!configLoaded} />
+                </div>
+              )}
               <div className="row">
                 <span className="lb">
-                  {t("settings.checkUpdates")}<span className="hint">{t("settings.checkUpdatesHint")}</span>
-                </span>
-                <Switch size="small" aria-label={t("settings.checkUpdates")} checked={checkUpdates} onChange={toggleCheckUpdates} disabled={!configLoaded} />
-              </div>
-              <div className="row">
-                <span className="lb">
-                  {t("settings.checkUpdatesNow")}<span className="hint">{t("settings.checkUpdatesNowHint")}</span>
+                  {instance.manualUpdates ? t("settings.checkUpdates") : t("settings.checkUpdatesNow")}
+                  {!instance.manualUpdates && <span className="hint">{t("settings.checkUpdatesNowHint")}</span>}
                 </span>
                 <Button size="small" loading={checkingUpdate} onClick={() => void checkUpdateNow()}>
-                  {t("settings.checkUpdatesNowBtn")}
+                  {instance.manualUpdates ? t("update.openReleases") : t("settings.checkUpdatesNowBtn")}
                 </Button>
               </div>
               {/* 系统：本机/本实例相关的两个动作。它们和上面的开关一样即时生效，
@@ -1547,125 +1508,10 @@ export default function App({
             />
           </div>
         </Modal>
-      </div>
-
-      {view === "board" && (
-        <div className="rr-annun">
-          {ATTENTION.map((a) => {
-            const n = attn[a.key]
-            if (n === 0 || !lamps.includes(a.key)) return null
-            return (
-              <button
-                key={a.key}
-                type="button"
-                className={`rr-lamp ${a.sev}${attention === a.key ? " on" : ""}`}
-                onClick={() => setAttention(attention === a.key ? null : a.key)}
-                aria-pressed={attention === a.key}
-              >
-                <span className="dotm" />
-                <span className="lb">{t(a.labelKey)}</span>
-                <span className="ct">{n}</span>
-              </button>
-            )
-          })}
-          <span style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            {attention && LAMP_OP[attention] && visible.length > 0 && (
-              <Button
-                size="small"
-                type="primary"
-                ghost
-                onClick={() => runBatch(LAMP_OP[attention]!, visible.map((r) => r.id))}
-              >
-                {t("annun.batchAll", { op: actionWord(LAMP_OP[attention]!), n: visible.length })}
-              </Button>
-            )}
-            {selected.size > 0 && (
-              <>
-                <span className="mono" style={{ fontSize: 11, color: "var(--dim)" }}>
-                  {t("annun.selected", { n: selected.size })}
-                </span>
-                {(["fetch", "pull", "push"] as const).map((a) => (
-                  <Button key={a} size="small" onClick={() => runBatch(a, [...selected])}>
-                    {t("annun.batch", { action: actionWord(a) })}
-                  </Button>
-                ))}
-                <Input
-                  size="small"
-                  style={{ width: 120 }}
-                  placeholder={t("annun.tagPlaceholder")}
-                  value={batchTag}
-                  onChange={(e) => setBatchTag(e.target.value)}
-                  onPressEnter={() => {
-                    const tg = batchTag.trim()
-                    if (!tg) return
-                    for (const id of selected) {
-                      const r = repos.find((x) => x.id === id)
-                      if (r && !r.tags.includes(tg)) patchMeta(id, { tags: [...r.tags, tg] })
-                    }
-                    setBatchTag("")
-                  }}
-                />
-                <Input
-                  size="small"
-                  style={{ width: 190 }}
-                  placeholder={t("annun.execPlaceholder")}
-                  value={execCmd}
-                  onChange={(e) => setExecCmd(e.target.value)}
-                  onPressEnter={() => runExec(false)}
-                  title={t("annun.execTip")}
-                />
-                <Button size="small" onClick={() => runExec(false)} disabled={execCmd.trim() === ""}>
-                  {t("annun.run")}
-                </Button>
-                <Button size="small" type="text" onClick={() => runExec(true)} disabled={execCmd.trim() === ""} title={t("annun.dryRunTip")}>
-                  {t("annun.dryRun")}
-                </Button>
-                <Button size="small" type="text" onClick={() => setSelected(new Set())}>
-                  {t("annun.clear")}
-                </Button>
-              </>
-            )}
-            {/* 告警灯=筛选，右侧两个=视图切换（A-S1）：加一条竖向分隔，并把切换器从
-                「灭掉的灯」式的 text 按钮改成与「重新扫描」同族的描边按钮框，两类控件不再同形 */}
-            {(stashTotal > 0 || showStash || counts.archived > 0 || showArchived) && <span className="rr-annun-div" aria-hidden="true" />}
-            {(stashTotal > 0 || showStash) && (
-              <Button
-                size="small"
-                type={showStash ? "primary" : "default"}
-                ghost={showStash}
-                onClick={() =>
-                  setShowStash((v) => {
-                    if (!v) setShowArchived(false) // 两个子视图互斥
-                    return !v
-                  })
-                }
-                title={t("annun.stashViewTip")}
-              >
-                {showStash ? t("annun.backToRepos") : t("annun.stashView", { n: stashTotal })}
-              </Button>
-            )}
-            {(counts.archived > 0 || showArchived) && (
-              <Button
-                size="small"
-                type={showArchived ? "primary" : "default"}
-                ghost={showArchived}
-                onClick={() =>
-                  setShowArchived((v) => {
-                    if (!v) setShowStash(false)
-                    return !v
-                  })
-                }
-                title={t("annun.archivedViewTip")}
-              >
-                {showArchived ? t("annun.backToRepos") : t("annun.archivedView", { n: counts.archived })}
-              </Button>
-            )}
-          </span>
-        </div>
-      )}
+      </header>
 
       {batch && (
-        <div className="rr-annun" style={{ paddingTop: 8, paddingBottom: 8 }}>
+        <div className="rr-annun" role="status">
           <span
             className="mono"
             style={{
@@ -1717,15 +1563,15 @@ export default function App({
       </Modal>
 
       {view === "worklog" ? (
-        <WorklogView onOpenRepo={showRepoDetail} />
+        <WorklogView lastScanAt={lastScanAt} onOpenRepo={showRepoDetail} />
       ) : view === "stats" ? (
-        <StatsView onOpenRepo={showRepoDetail} />
+        <StatsView lastScanAt={lastScanAt} onOpenRepo={showRepoDetail} />
       ) : view === "log" ? (
-        <div className="rr-stats">
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>
-            <h2 style={{ margin: 0 }}>{t("log.title")}</h2>
+        <main className="rr-main rr-secondary">
+          <div className="rr-board-head">
+            <h1>{t("log.title")}</h1>
             {log.length > 0 && (
-              <Button size="small" type="text" style={{ marginLeft: "auto" }} onClick={() => setLog([])}>
+              <Button onClick={() => setLog([])}>
                 {t("log.clear")}
               </Button>
             )}
@@ -1733,7 +1579,7 @@ export default function App({
           {log.length === 0 ? (
             <div className="rr-empty">{t("log.empty")}</div>
           ) : (
-            <div className="rr-actlist">
+            <div className="rr-actlist rr-log-list">
               {log.map((e) => (
                 <div className="r" key={e.t}>
                   <span style={{ color: e.ok ? "var(--ok)" : "var(--crit)", fontFamily: "var(--mono)" }}>
@@ -1747,27 +1593,250 @@ export default function App({
               ))}
             </div>
           )}
-        </div>
+        </main>
       ) : showStash ? (
-        <main className="rr-main">
+        <main className="rr-main rr-secondary">
+          <div className="rr-board-head">
+            <h1>{t("annun.stashView", { n: stashTotal })}</h1>
+            <div className="rr-board-links">
+              {archiveLink}
+              {stashLink}
+            </div>
+          </div>
           <StashView onLog={addLog} />
         </main>
       ) : (
-        <main className="rr-main">
-          {!filter.query && !attention && !showArchived && repos.length > 0 && (
-            <CockpitHero
-              queue={actionQueueVisible}
-              onOpenRepo={showRepoDetail}
-              onOpenStash={() => setShowStash(true)}
-              onPush={(id) => runBatch("push", [id])}
-              onDismiss={dismissItem}
-              open={cockpitOpen}
-              onToggle={() => setCockpitOpen((v) => !v)}
-            />
+        <main className="rr-main" ref={boardRef}>
+          {showOverview && (
+            <div className="rr-overview">
+              <section className="rr-health">
+                <div className="rr-health-head">
+                  <h2>{t("board.health")}</h2>
+                  <strong title={t("stats.totalRepos")}>{counts.fleet}</strong>
+                </div>
+                <div className="rr-health-bar" aria-hidden="true">
+                  {counts.crit > 0 && <span className="crit" style={{ flexGrow: counts.crit }} />}
+                  {counts.warn > 0 && <span className="warn" style={{ flexGrow: counts.warn }} />}
+                  {counts.clean > 0 && <span className="ok" style={{ flexGrow: counts.clean }} />}
+                </div>
+                <dl className="rr-health-legend">
+                  <div className="crit"><dt>{t("board.critical")}</dt><dd>{counts.crit}</dd></div>
+                  <div className="warn"><dt>{t("board.warning")}</dt><dd>{counts.warn}</dd></div>
+                  <div className="ok"><dt>{t("board.healthy")}</dt><dd>{counts.clean}</dd></div>
+                </dl>
+                {scanTime}
+              </section>
+              <CockpitHero
+                queue={actionQueueVisible}
+                onOpenRepo={showRepoDetail}
+                onOpenStash={() => setShowStash(true)}
+                onPush={(id) => runBatch("push", [id])}
+                onDismiss={dismissItem}
+                open={cockpitOpen}
+                onToggle={() => setCockpitOpen((v) => !v)}
+              />
+            </div>
+          )}
+          <div className="rr-board-head">
+            <h1>
+              {showArchived ? t("annun.archivedView", { n: visible.length }) : t("board.repositories")}
+              {!showArchived && repos.length > 0 && <span aria-live="polite">{t("board.count", { n: visible.length })}</span>}
+            </h1>
+            <div className="rr-board-links">
+              {stashLink}
+              {archiveLink}
+            </div>
+          </div>
+          {repos.length > 0 && (
+            <div className="rr-board-tools">
+              <div className="rr-search-group">
+                <Input
+                  allowClear
+                  value={filter.query}
+                  onChange={(e) => setFilter({ ...filter, query: e.target.value })}
+                  prefix={
+                    <svg className="rr-search-ic" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+                      <circle cx="7" cy="7" r="4.6" />
+                      <path d="M10.4 10.4 L14 14" strokeLinecap="round" />
+                    </svg>
+                  }
+                  placeholder={t("bar.search")}
+                  className="rr-search"
+                  aria-label={t("bar.search")}
+                />
+                <Button size="small" type="text" className="rr-kbd" onClick={() => setPaletteOpen(true)} aria-label={t("bar.paletteTip")} title={t("bar.paletteTip")}>
+                  {KBD_MOD} K
+                </Button>
+              </div>
+              <div className="rr-list-controls">
+                <Select
+                  value={filter.group ?? ""}
+                  className="rr-bar-sel"
+                  prefix={<SelIcon kind="filter" />}
+                  aria-label={t("bar.groupFilterTip")}
+                  title={t("bar.groupFilterTip")}
+                  onChange={(v) => setFilter({ ...filter, group: v || null })}
+                  options={[{ label: t("bar.allGroups"), value: "" }, ...groups.map((g) => ({ label: g, value: g }))]}
+                />
+                {allTags.length > 0 && (
+                  <Select
+                    mode="multiple"
+                    allowClear
+                    maxTagCount="responsive"
+                    className="rr-bar-sel tags"
+                    placeholder={t("bar.tagFilter")}
+                    value={filter.tags ?? []}
+                    onChange={(vals) => setFilter((f) => ({ ...f, tags: vals }))}
+                    aria-label={t("bar.tagFilter")}
+                    title={t("bar.tagFilterTip")}
+                    options={allTags.map((tag) => ({ label: `#${tag}`, value: tag }))}
+                  />
+                )}
+                <Select
+                  value={filter.sort}
+                  className="rr-bar-sel wide"
+                  prefix={<SelIcon kind="sort" />}
+                  aria-label={t("bar.sortTip")}
+                  title={t("bar.sortTip")}
+                  onChange={(v) => setFilter({ ...filter, sort: v as FilterState["sort"] })}
+                  options={[
+                    { label: t("sort.activity"), value: "activity" },
+                    { label: t("sort.commit"), value: "commit" },
+                    { label: t("sort.name"), value: "name" },
+                    { label: t("sort.opened"), value: "opened" },
+                  ]}
+                />
+                <Select
+                  value={groupMode}
+                  className="rr-bar-sel narrow"
+                  prefix={<SelIcon kind="group" />}
+                  aria-label={t("bar.groupModeTip")}
+                  title={t("bar.groupModeTip")}
+                  onChange={(v) => setGroupMode(v)}
+                  options={[
+                    { label: t("group.folder"), value: "folder" },
+                    { label: t("group.language"), value: "language" },
+                    { label: t("group.none"), value: "none" },
+                  ]}
+                />
+                {views.length > 0 && (
+                  <Select
+                    className="rr-bar-sel"
+                    placeholder={t("bar.view")}
+                    aria-label={t("bar.view")}
+                    title={t("bar.viewTip")}
+                    value={viewName ?? undefined}
+                    allowClear
+                    onClear={() => setViewName(null)}
+                    onChange={(n) => {
+                      const v = views.find((x) => x.name === n)
+                      if (v) applyView(v)
+                    }}
+                    options={views.map((v) => ({ label: v.name, value: v.name }))}
+                  />
+                )}
+                <Button
+                  size="small"
+                  type="text"
+                  onClick={() => {
+                    setNewViewName(viewName ?? "")
+                    setSaveViewOpen(true)
+                  }}
+                  title={t("bar.saveViewTip")}
+                >
+                  {t("bar.saveView")}
+                </Button>
+              </div>
+            </div>
+          )}
+          {repos.length > 0 && (hasFilters || ATTENTION.some((a) => attn[a.key] > 0 && lamps.includes(a.key))) && (
+            <div className="rr-state-filters">
+              {ATTENTION.map((a) => {
+                const n = attn[a.key]
+                if (attention !== a.key && (n === 0 || !lamps.includes(a.key))) return null
+                const button = (
+                  <button
+                    key={a.key}
+                    type="button"
+                    className={`rr-lamp ${a.sev}${attention === a.key ? " on" : ""}`}
+                    onClick={() => setAttention(attention === a.key ? null : a.key)}
+                    aria-pressed={attention === a.key}
+                  >
+                    <span className="dotm" />
+                    <span className="lb">{t(a.labelKey)}</span>
+                    <span className="ct">{n}</span>
+                  </button>
+                )
+                return a.tipKey ? (
+                  <Tooltip key={a.key} title={t(a.tipKey)} trigger={["hover", "focus"]}>{button}</Tooltip>
+                ) : button
+              })}
+              {hasFilters && <Button type="text" onClick={clearFilters}>{t("board.clearFilters")}</Button>}
+            </div>
+          )}
+          {((attention && LAMP_OP[attention] && visible.length > 0) || selected.size > 0) && (
+            <div className="rr-batch-tools">
+              {attention && LAMP_OP[attention] && visible.length > 0 && (
+                <Button
+                  size="small"
+                  type="primary"
+                  ghost
+                  onClick={() => runBatch(LAMP_OP[attention]!, visible.map((r) => r.id))}
+                >
+                  {t("annun.batchAll", { op: actionWord(LAMP_OP[attention]!), n: visible.length })}
+                </Button>
+              )}
+              {selected.size > 0 && (
+                <>
+                  <span className="mono" style={{ fontSize: 11, color: "var(--dim)" }}>
+                    {t("annun.selected", { n: selected.size })}
+                  </span>
+                  {(["fetch", "pull", "push"] as const).map((a) => (
+                    <Button key={a} size="small" onClick={() => runBatch(a, [...selected])}>
+                      {t("annun.batch", { action: actionWord(a) })}
+                    </Button>
+                  ))}
+                  <Input
+                    size="small"
+                    style={{ width: 120 }}
+                    placeholder={t("annun.tagPlaceholder")}
+                    value={batchTag}
+                    onChange={(e) => setBatchTag(e.target.value)}
+                    onPressEnter={() => {
+                      const tg = batchTag.trim()
+                      if (!tg) return
+                      for (const id of selected) {
+                        const r = repos.find((x) => x.id === id)
+                        if (r && !r.tags.includes(tg)) patchMeta(id, { tags: [...r.tags, tg] })
+                      }
+                      setBatchTag("")
+                    }}
+                  />
+                  <Input
+                    size="small"
+                    style={{ width: 190 }}
+                    placeholder={t("annun.execPlaceholder")}
+                    value={execCmd}
+                    onChange={(e) => setExecCmd(e.target.value)}
+                    onPressEnter={() => runExec(false)}
+                    title={t("annun.execTip")}
+                  />
+                  <Button size="small" onClick={() => runExec(false)} disabled={execCmd.trim() === ""}>
+                    {t("annun.run")}
+                  </Button>
+                  <Button size="small" type="text" onClick={() => runExec(true)} disabled={execCmd.trim() === ""} title={t("annun.dryRunTip")}>
+                    {t("annun.dryRun")}
+                  </Button>
+                  <Button size="small" type="text" onClick={() => setSelected(new Set())}>
+                    {t("annun.clear")}
+                  </Button>
+                </>
+              )}
+            </div>
           )}
           {(() => {
             const faves = active.filter((r) => r.favorite)
-            const browsing = !filter.query && !attention && !showArchived
+            const browsing = !hasFilters && !showArchived
             if (faves.length === 0 || !browsing) return null
             const favSev = (r: RepoStatus) =>
               r.error || r.health.some((h) => h.severity === "error")
@@ -1788,8 +1857,8 @@ export default function App({
             )
           })()}
           {sections === null ? (
-            <div className={`rr-grid${bootAnim ? " boot" : ""}`} style={{ marginTop: 14 }}>
-              {visible.map(renderCard)}
+            <div className={repoLayout === "list" ? "rr-repo-list" : "rr-grid"}>
+              {visible.map(renderRepo)}
             </div>
           ) : (
             sections.map(([group, rs]) => (
@@ -1799,7 +1868,7 @@ export default function App({
                   <span className="ct">{t("board.count", { n: rs.length })}</span>
                   <span className="ln" />
                 </div>
-                <div className={`rr-grid${bootAnim ? " boot" : ""}`}>{rs.map(renderCard)}</div>
+                <div className={repoLayout === "list" ? "rr-repo-list" : "rr-grid"}>{rs.map(renderRepo)}</div>
               </section>
             ))
           )}
@@ -1836,7 +1905,7 @@ export default function App({
                 <div className="rr-welcome">
                   <div className="tt">{t("empty.welcomeTitle")}</div>
                   <div className="ht">{t("empty.welcomeHint")}</div>
-                  <Button type="primary" ghost onClick={openScanSettings}>
+                  <Button type="primary" onClick={openScanSettings}>
                     {t("empty.welcomeCta")}
                   </Button>
                 </div>
@@ -1848,7 +1917,7 @@ export default function App({
                 <div className="rr-empty">
                   {showArchived
                     ? t("empty.noArchived")
-                    : attention || filter.query || filter.group || (filter.tags?.length ?? 0) > 0
+                    : hasFilters
                       ? t("empty.noMatch")
                       : t("empty.noRepos", { roots: scanRoots.join(" · ") })}
                 </div>

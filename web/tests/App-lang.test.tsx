@@ -2,7 +2,7 @@
 import { App as AntApp, ConfigProvider } from "antd"
 import { useState } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import App from "../src/App"
 import { I18nProvider, type LangCode } from "../src/i18n"
 import type { BatchProgress, RepoStatus } from "../src/types"
@@ -37,9 +37,9 @@ class FakeWebSocket {
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })
 
-const CONFIG = { roots: ["D:\\repos"], manualRepos: [], autoWatch: true, autoScanMinutes: 30, watchLimit: 200, autoFetchMinutes: 0, notifications: false }
+const CONFIG = { roots: ["D:\\repos"], manualRepos: [], autoWatch: true, autoScanMinutes: 30, watchLimit: 200, autoPull: false, notifications: false }
 
-function stubFetch(repos: RepoStatus[]): void {
+function stubFetch(repos: RepoStatus[], manualUpdates = false): void {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown, init?: { method?: string }) => {
@@ -48,7 +48,7 @@ function stubFetch(repos: RepoStatus[]): void {
       if (url.includes("/api/scan")) return (init?.method ?? "GET").toUpperCase() === "POST" ? json(repos) : json({ lastScanAt: null, watch: { watched: 0, total: 0 } })
       if (url.includes("/api/repos")) return json(repos)
       if (url.includes("/api/config")) return json(CONFIG)
-      if (url.includes("/api/version")) return json({ version: "test", canQuit: false, port: 17420 })
+      if (url.includes("/api/version")) return json({ version: "test", canQuit: false, manualUpdates, port: 17420 })
       if (url.includes("/api/autostart")) return json({ supported: false, enabled: false })
       return json({})
     }),
@@ -168,4 +168,31 @@ describe("「按语言」分组的「未识别语言」组名跟随当前界面�
 
     expect(groupNames()).toEqual(["TypeScript"])
   })
+})
+
+it("offers the release page instead of an automatic-update toggle on macOS", async () => {
+  stubFetch([], true)
+  render(<Harness />)
+  switchToEnglish()
+  act(() => screen.getByTitle("Settings").click())
+  const button = await screen.findByRole("button", { name: "Open releases" })
+  expect(screen.queryByRole("switch", { name: "Check for new versions" })).toBeNull()
+  await act(async () => button.click())
+  expect(fetch).toHaveBeenCalledWith("/api/update/check", expect.objectContaining({ method: "POST" }))
+})
+
+it("saves a custom remote refresh interval independently of automatic pull", async () => {
+  stubFetch([])
+  render(<Harness />)
+  act(() => screen.getByTitle("设置").click())
+  const interval = await screen.findByRole("spinbutton", { name: "远程刷新间隔（分钟）" })
+  await waitFor(() => expect((interval as HTMLInputElement).disabled).toBe(false))
+  fireEvent.focus(interval)
+  fireEvent.change(interval, { target: { value: "60" } })
+  fireEvent.blur(interval)
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/config", expect.objectContaining({
+    method: "PUT",
+    body: JSON.stringify({ autoFetchMinutes: 60 }),
+  })))
+  expect(screen.getByRole("switch", { name: "自动拉取" }).getAttribute("aria-checked")).toBe("false")
 })

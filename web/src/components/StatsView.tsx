@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react"
 import { gt, useT } from "../i18n"
 import { relativeTime } from "../lib/time"
-import type { ActivityItem, HeatmapDay } from "../types"
+import type { ActivityItem, ActivityResponse, HeatmapDay, HeatmapResponse } from "../types"
 import { Heatmap } from "./Heatmap"
 
-export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) {
+export function StatsView({ lastScanAt, onOpenRepo }: { lastScanAt: string | null; onOpenRepo: (id: string) => void }) {
   const t = useT()
   const [days, setDays] = useState<HeatmapDay[] | null>(null)
   const [activity, setActivity] = useState<ActivityItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reload, setReload] = useState(0) // 失败后手动重试：自增触发重取
 
-  // biome-ignore-start lint/correctness/useExhaustiveDependencies: reload 是「重试」心跳，本体不读它，
-  // 自增只为在失败后再触发一次取数；t/语言不进依赖，避免切语言重复请求
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: reload 与 lastScanAt 分别触发重试和扫描后刷新。
+  // t/语言不进依赖，避免切语言重复请求
   useEffect(() => {
     let cancelled = false
     setError(null)
@@ -22,7 +22,7 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
       fetch("/api/stats/heatmap?days=365").then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
       fetch("/api/stats/activity").then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
     ])
-      .then(([heat, act]) => {
+      .then(([heat, act]: [HeatmapResponse, ActivityResponse]) => {
         if (cancelled) return
         setDays(heat.days)
         setActivity(act.repos)
@@ -31,26 +31,15 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
     return () => {
       cancelled = true
     }
-  }, [reload])
+  }, [reload, lastScanAt])
   // biome-ignore-end lint/correctness/useExhaustiveDependencies: 重试心跳豁免块结束
 
-  if (error)
-    return (
-      <div className="rr-empty err">
-        {error}
-        <button type="button" className="rr-retry" onClick={() => setReload((n) => n + 1)}>
-          {t("common.retry")}
-        </button>
-      </div>
-    )
-  if (days === null || activity === null) return <div className="rr-empty">{t("stats.loading")}</div>
-
-  const total = days.reduce((sum, d) => sum + d.count, 0)
-  const activeDays = days.filter((d) => d.count > 0).length
+  const total = (days ?? []).reduce((sum, d) => sum + d.count, 0)
+  const activeDays = (days ?? []).filter((d) => d.count > 0).length
   // 上面那排读数讲的是**提交**（热力图、活跃天数），所以「空仓库」按有没有提交过判：
   // git init 完写了两个文件的目录工作区是有 mtime 的，拿活跃口径判会把它算成活跃仓库
-  const nonEmpty = activity.filter((a) => a.lastCommitDate !== null)
-  const empty = activity.length - nonEmpty.length
+  const nonEmpty = (activity ?? []).filter((a) => a.lastCommitDate !== null)
+  const empty = (activity?.length ?? 0) - nonEmpty.length
   // 下面两个榜单按**活跃**筛，与看板卡片的排序同一口径——两处的标题在 18 种语言里是同一个词
   // （sort.activity 与 stats.recentActive；ja/ko 的排序项按该语言习惯带「…順/…순」后缀）。
   // 用提交口径筛的话，两块地方对同一个仓库给出不同
@@ -59,7 +48,7 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
   // 注意举例时别拿「git init 之后还没提交、改了一整天」当典型：那种仓库整棵树是一条
   // `? src/`，worktreeTouchedAt 只能取到目录 mtime——新建/删除文件算数，改文件内容不算
   // （见 git.ts worktreeTouchedAt 的少报清单）。它仍然属于这里要照顾的一类，只是不完整
-  const dated = activity.filter((a) => a.lastActivityDate !== null)
+  const dated = (activity ?? []).filter((a) => a.lastActivityDate !== null)
   const top = dated.slice(0, 15)
   const topIds = new Set(top.map((a) => a.id))
   const stale = dated
@@ -76,11 +65,11 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
   const row = (a: ActivityItem, i: number) => (
     <button key={a.id} type="button" className="r rr-r-clk" onClick={() => onOpenRepo(a.id)} title={t("common.openRepoTip")}>
       <span className="rank">{i + 1}</span>
-      <span className="nm">{a.displayName ?? a.name}</span>
+      <span className="nm" title={a.displayName ?? a.name}>{a.displayName ?? a.name}</span>
       {/* 目录名：看板卡片上的标题是**目录名**，这里的主标题是 displayName
           （package.json 名或远程名）——同一个仓库在两处两个名字。把目录名补在后面，
           用户不必猜「repo-radar」对应磁盘上哪个文件夹 */}
-      {a.displayName && a.displayName !== a.name && <span className="dir">{a.name}</span>}
+      {a.displayName && a.displayName !== a.name && <span className="dir" title={a.name}>{a.name}</span>}
       <span className="ago">{a.lastActivityDate ? relativeTime(a.lastActivityDate) : t("stats.emptyRepo")}</span>
     </button>
   )
@@ -94,35 +83,47 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
   )
 
   return (
-    <div className="rr-stats">
-      <div className="rr-readout rr-stat-gauges">
-        {gauge(total, t("stats.commits"), "sig")}
-        {gauge(activeDays, t("stats.activeDays"))}
-        {gauge(nonEmpty.length, t("stats.activeRepos"), "ok")}
-        {gauge(empty, t("stats.emptyRepos"), empty > 0 ? "dim" : "")}
-        {gauge(activity.length, t("stats.totalRepos"))}
-      </div>
+    <main className="rr-main rr-secondary rr-stats">
+      <div className="rr-board-head"><h1>{t("nav.stats")}</h1></div>
+      {error ? (
+        <div className="rr-empty err">
+          {error}
+          <button type="button" className="rr-retry" onClick={() => setReload((n) => n + 1)}>{t("common.retry")}</button>
+        </div>
+      ) : days === null || activity === null ? (
+        <div className="rr-empty">{t("stats.loading")}</div>
+      ) : (
+        <>
+          <div className="rr-readout rr-stat-gauges">
+            {gauge(total, t("stats.commits"), "sig")}
+            {gauge(activeDays, t("stats.activeDays"))}
+            {gauge(nonEmpty.length, t("stats.activeRepos"), "ok")}
+            {gauge(empty, t("stats.emptyRepos"), empty > 0 ? "dim" : "")}
+            {gauge(activity.length, t("stats.totalRepos"))}
+          </div>
 
-      <section style={{ marginBottom: 28 }}>
-        <h2>{t("stats.heatmapTitle")}</h2>
-        {/* legend 不能只给详情面板那张小图：这张才是主图（371 格、五档绿），
-            没有色阶说明的话深浅只是装饰，读者无从判断"深一点"到底多多少 */}
-        <Heatmap days={days} legend />
-      </section>
-      <div style={{ display: "grid", gap: 28, gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))" }}>
-        <section>
-          <h2>{t("stats.recentActive")}</h2>
-          <div className="rr-actlist">{listHead}{top.map(row)}</div>
-        </section>
-        <section>
-          {stale.length > 0 && <h2>{t("stats.staleTop", { n: stale.length })}</h2>}
-          {stale.length > 0 ? (
-            <div className="rr-actlist">{listHead}{stale.map(row)}</div>
-          ) : (
-            <div className="rr-actlist-empty">{t("stats.noStale")}</div>
-          )}
-        </section>
-      </div>
-    </div>
+          <section className="rr-stat-heatmap">
+            <h2>{t("stats.heatmapTitle")}</h2>
+            {/* legend 不能只给详情面板那张小图：这张才是主图（371 格、五档绿），
+                没有色阶说明的话深浅只是装饰，读者无从判断"深一点"到底多多少 */}
+            <Heatmap days={days} legend />
+          </section>
+          <div className="rr-stat-lists">
+            <section>
+              <h2>{t("stats.recentActive")}</h2>
+              <div className="rr-actlist">{listHead}{top.map(row)}</div>
+            </section>
+            <section>
+              {stale.length > 0 && <h2>{t("stats.staleTop", { n: stale.length })}</h2>}
+              {stale.length > 0 ? (
+                <div className="rr-actlist">{listHead}{stale.map(row)}</div>
+              ) : (
+                <div className="rr-actlist-empty">{t("stats.noStale")}</div>
+              )}
+            </section>
+          </div>
+        </>
+      )}
+    </main>
   )
 }

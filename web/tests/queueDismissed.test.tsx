@@ -46,7 +46,7 @@ class FakeWebSocket {
 }
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })
-const CONFIG = { roots: ["D:\\repos"], manualRepos: [], autoWatch: true, autoScanMinutes: 30, watchLimit: 200, autoFetchMinutes: 0, notifications: true }
+const CONFIG = { roots: ["D:\\repos"], manualRepos: [], autoWatch: true, autoScanMinutes: 30, watchLimit: 200, autoPull: false, notifications: true }
 
 function stubFetch(repos: RepoStatus[]): void {
   vi.stubGlobal(
