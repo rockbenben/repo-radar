@@ -59,10 +59,21 @@ Release targets consistency is checked with `node scripts/check-release-config.m
 
 ## Releases
 
-Use `npm version X.Y.Z --no-git-tag-version` to update the package version and lockfile together.
-Commit the version bump and push the matching stable `vX.Y.Z` tag. GitHub Actions validates that
-commit, tests and packages each platform, verifies the installers and updater manifests, generates
-release notes and `SHA256SUMS`, publishes the release, and checks GitHub's published asset digests.
+From a clean release checkout, run the following with the desired version:
+
+```bash
+npm version X.Y.Z --git-tag-version --tag-version-prefix=v -m "chore(release): prepare %s"
+```
+
+npm updates `package.json` and `package-lock.json`, commits both, and creates `vX.Y.Z` on that commit.
+Push the version commit to `main` through the usual branch workflow and wait for CI to pass on the
+commit you intend to tag. If merging rewrote the version commit, recreate the unpublished local tag
+on the verified commit. Push just the release tag with `git push origin tag vX.Y.Z`.
+
+Branch CI checks that the package and lockfile versions agree. The release workflow also checks that
+the tag matches those versions before building. It tests and packages each platform, verifies the
+installers and updater manifests, generates release notes and `SHA256SUMS`, publishes the release,
+and checks GitHub's published asset digests.
 To rebuild an existing tag, run the release workflow on that tag ref.
 
 Windows x64 and both Linux AppImage architectures have updater manifests. The two macOS DMGs use
