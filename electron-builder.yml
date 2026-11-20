@@ -1,6 +1,5 @@
 # 应用根 = 仓库根（不是 desktop/）。原因：desktop/src/main.ts 用 join(__dirname, "..", "..")
-# 从 desktop/dist/main.cjs 回推仓库根，来定位 web/dist 与 scripts/ 下的图标。
-# 打包保持同样的层级，该表达式在 asar 内依然成立，主进程代码不必为打包做任何特判。
+# 从 desktop/dist/main.cjs 回推仓库根，来定位 web/dist 和 ASAR 内的托盘 PNG。
 appId: com.rockbenben.repo-radar          # 必须与 main.ts 里的 setAppUserModelId 逐字相同
 productName: repo-radar
 # 统一发布资产命名。nsis 默认会产出 `repo-radar Setup <version>.exe`——带空格，作为 GitHub
@@ -25,14 +24,11 @@ directories:
 # 装出来的应用会在启动时报找不到模块。electron-builder 按 package.json 的
 # dependencies 计算该带哪些包，根 package.json 里只有 electron-updater 一个生产依赖，
 # 带进去的就是它那一棵树（不涉及 server/web 这两个 workspace 的依赖）。
-# 注意：scripts/icon.ico 不在这里——它只在构建期被下面 win.icon 引用（生成 exe 图标资源），
-# 主进程运行时使用 PNG 图标，asar 只需打包 PNG。
 files:
   - desktop/dist/main.cjs
   - desktop/dist/preload.cjs
   - web/dist/**
-  - scripts/icon-256.png
-  # 托盘使用 16px + 32px 两个尺寸，createFromPath("tray-icon.png") 会自动载入 @2x 变体
+  # macOS/Linux 托盘使用 16px + 32px，Electron 自动载入 @2x 变体。
   - scripts/tray-icon.png
   - scripts/tray-icon@2x.png
   - package.json
@@ -42,6 +38,9 @@ asar: true
 win:
   target: nsis
   icon: scripts/icon.ico
+  extraResources:
+    - from: scripts/icon.ico
+      to: icon.ico
 nsis:
   installerLanguages: [en_US]
   displayLanguageSelector: false

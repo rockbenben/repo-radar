@@ -81,9 +81,7 @@ export function summarizeInboxChanges(changes: InboxChange[]): NotificationConte
 
 /**
  * 弹通知；点击时调 onClick（把面板叫回来）。系统不支持通知时静默跳过。
- * iconPath 由调用方传入（main.ts 传 appIconPath —— 256px 大图，与窗口/任务栏图标共用一份
- * 资源；托盘图标在 macOS 上是另一份 16px 模板图，不用于通知）——
- * notify.ts 保持纯粹，不在这里硬编码任何文件路径。
+ * 调用方传入与应用界面共用的 256px 图标。
  */
 export function showNotification(content: NotificationContent, iconPath: string, onClick: () => void): void {
   if (!Notification.isSupported()) return

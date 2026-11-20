@@ -123,11 +123,7 @@ export function createWindow(options: WindowOptions): BrowserWindow {
     minWidth: MIN_WIDTH,
     minHeight: MIN_HEIGHT,
     show: false, // 等 ready-to-show 再显示，避免白屏闪一下
-    // 只有 Linux 真正需要这个：Windows 从 exe 的图标资源取（NSIS 打包时嵌进去的），
-    // macOS 从 .app 包的 Info.plist/icns 取，两者都不认 BrowserWindow 的 icon 选项；
-    // Linux 桌面环境没有等价的"可执行文件自带图标"机制，Electron 不会自动反查，
-    // 不传的话任务栏/Alt-Tab 切换器上会显示通用的 Electron 图标。iconPath 由调用方
-    // （main.ts）传入，这里不硬编码路径——window.ts 不该关心图标文件实际在哪。
+    // 为 Windows 任务栏和 Linux 窗口切换器显式提供窗口图标。
     icon: iconPath,
     ...(integratedTitleBar && { titleBarStyle: "hidden", titleBarOverlay: titleBarOverlay("dark") }),
     webPreferences: {

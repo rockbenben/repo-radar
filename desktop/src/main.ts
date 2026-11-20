@@ -113,17 +113,15 @@ if (!isDefaultConfig) {
 // electron，但它不会顺带起 vite——那样会一直去连 5173、连不上白屏（ERR_CONNECTION_REFUSED）。
 // 因此额外要求显式环境变量 REPO_RADAR_DEV=1（由 "dev" 脚本设置），"start" 没设它就老实走后端端口。
 const isDev = !app.isPackaged && process.env.REPO_RADAR_DEV === "1"
-// 不能用 app.getAppPath()：它返回的是 desktop/package.json 所在目录（desktop/），
-// 拼出来的 desktop/web/dist（以及 desktop/scripts/icon-256.png）根本不存在。
-// 真正的前端产物在仓库根的 web/dist，图标在仓库根的 scripts/icon-256.png，
-// 因此都改用 __dirname 推导：esbuild 打包产物是 desktop/dist/main.cjs（CJS 下 __dirname 可用），
-// 从它出发向上两级即回到仓库根，打包后只要保持这个相对目录结构，该表达式依然成立。
+// 从 desktop/dist/main.cjs 向上两级可定位资源根目录，开发态与 ASAR 内的目录结构一致。
 const repoRoot = join(__dirname, "..", "..")
 const staticRoot = join(repoRoot, "web", "dist")
-// 窗口任务栏图标与通知弹窗共用这份 256px 大图（任务栏约 48px、通知图标更大，256 缩下去没问题）
-const appIconPath = join(repoRoot, "scripts", "icon-256.png")
-// 托盘使用 16px 的简化雷达，createFromPath 同时载入同目录的 32px @2x 变体。
-const trayIconPath = join(repoRoot, "scripts", "tray-icon.png")
+const appIconPath = join(app.isPackaged ? staticRoot : join(repoRoot, "web", "public"), "logo.png")
+// Windows 原生图标加载需要实体 ICO 文件。打包时将 EXE 使用的同一份 ICO 放到 ASAR 外。
+const windowsIconPath = process.platform === "win32"
+  ? join(app.isPackaged ? process.resourcesPath : join(repoRoot, "scripts"), "icon.ico")
+  : null
+const trayIconPath = windowsIconPath ?? join(repoRoot, "scripts", "tray-icon.png")
 
 // Linux 上不做「关窗收托盘」：GNOME 40+ 移除了传统托盘图标，要装 AppIndicator 扩展才有，
 // 而 new Tray(...) 在那种环境下通常不报错、只是图标不出现——一旦关窗，窗口已隐藏、
@@ -187,7 +185,7 @@ function bootstrap(): void {
     mainWindow = createWindow({
       url: isDev ? "http://127.0.0.1:5173" : `http://127.0.0.1:${backend.port}`,
       stateFile: windowStateFile,
-      iconPath: appIconPath, // 只有 Linux 会用到（见 window.ts 里的注释）：任务栏用 256px 大图
+      iconPath: windowsIconPath ?? appIconPath,
       isQuitting: () => quitting,
       hideOnClose,
     })
