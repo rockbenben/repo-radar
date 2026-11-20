@@ -29,8 +29,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-gh release download v1.4.0 --repo rockbenben/repo-radar --pattern "$asset" --dir "$base"
+gh run download 44666887006 --repo rockbenben/repo-radar --name "dist-$RELEASE_BUILD" --dir "$base/matrix"
 unset GH_TOKEN
+cp "$base/matrix/$asset" "$old"
 chmod +x "$old"
 (cd "$base" && "$old" --appimage-extract >/dev/null)
 appdir="$base/squashfs-root"
@@ -96,7 +97,7 @@ done
 test ! -e "$old"
 test -x "$base/$incoming"
 cmp "$dist/$incoming" "$base/$incoming"
-printf 'Published %s AppImage was downloaded and replaced byte-for-byte on %s\n' "$asset" "$(uname -m)"
+printf 'Matrix %s AppImage was downloaded and replaced byte-for-byte on %s\n' "$asset" "$(uname -m)"
 
 if wait_version 1.4.1 40; then
   mode='automatic relaunch'
