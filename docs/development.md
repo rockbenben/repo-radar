@@ -59,21 +59,16 @@ Release targets consistency is checked with `node scripts/check-release-config.m
 
 ## Releases
 
-From a clean release checkout, run the following with the desired version:
+From a clean checkout of `main`, replace `X.Y.Z` with the release version:
 
 ```bash
-npm version X.Y.Z --git-tag-version --tag-version-prefix=v -m "chore(release): prepare %s"
+npm version X.Y.Z -m "chore(release): prepare %s"
+git push --atomic origin main tag vX.Y.Z
 ```
 
 npm updates `package.json` and `package-lock.json`, commits both, and creates `vX.Y.Z` on that commit.
-Push the version commit to `main` through the usual branch workflow and wait for CI to pass on the
-commit you intend to tag. If merging rewrote the version commit, recreate the unpublished local tag
-on the verified commit. Push just the release tag with `git push origin tag vX.Y.Z`.
-
-Branch CI checks that the package and lockfile versions agree. The release workflow also checks that
-the tag matches those versions before building. It tests and packages each platform, verifies the
-installers and updater manifests, generates release notes and `SHA256SUMS`, publishes the release,
-and checks GitHub's published asset digests.
+Pushing the tag starts the release workflow, which checks the tag against the package version,
+builds and verifies the installers and updater manifests, and publishes the release.
 To rebuild an existing tag, run the release workflow on that tag ref.
 
 Windows x64 and both Linux AppImage architectures have updater manifests. The two macOS DMGs use

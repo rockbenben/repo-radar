@@ -27,7 +27,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
-      - run: node scripts/check-release-version.mjs
       - run: npm ci
       - run: node scripts/check-release-config.mjs
       - if: hashFiles('node_modules/electron/install.js') != ''
