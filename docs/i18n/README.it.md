@@ -29,6 +29,8 @@ Ciò che richiede un intervento sale in cima come coda: una voce per repo, per u
 | Chiusura della finestra | va nella tray | va nella tray | esce — usa **Avvia all'accesso** per tenerlo attivo |
 | Monitoraggio delle modifiche | tutti i repo sotto una directory di scansione | idem | i primi 200 repo (il limite si alza o si toglie nelle impostazioni) |
 
+È richiesto **macOS 13 (Ventura) o successivo**: Electron 44 ha abbandonato macOS 12 e questa build include Electron 45.
+
 Tutto gira sulla tua macchina e usa il `git` che hai già — nessun account, nessuna telemetria, niente viene caricato. La colonna GitHub (PR, issue, CI) è opzionale e legge tramite la [CLI `gh`](https://cli.github.com/) con cui sei già autenticato; senza, il resto funziona lo stesso.
 
 ## Installazione
@@ -67,7 +69,9 @@ La scansione automatica tramite monitoraggio dei file è **disattivata di defaul
 
 Rinomina o sposta un repo e mantiene tag, preferito, stato di archivio e note. repo-radar riconosce un repo da ciò che contiene, non da dove si trova: una cartella spostata resta lo stesso progetto, non uno nuovo.
 
-Il fetch pianificato in background è opzionale ed è l'unica funzione che parla ai tuoi remote di iniziativa propria. La colonna GitHub è l'unica cosa che esce in rete a tempo senza che glielo chieda: finché la CLI `gh` è installata, PR, issue e CI si aggiornano via quella ogni 12 minuti e dopo ogni riscansione. Senza `gh`, o senza remote GitHub, l'app è totalmente locale.
+Le scansioni complete leggono lo stato Git locale. Imposta un **Intervallo di aggiornamento remoto (minuti)** separato per mantenere aggiornate le informazioni a monte durante il lavoro. L'**Auto-pull** può anche avanzare rapidamente (fast-forward) i rami puliti dopo un aggiornamento pianificato. I dettagli del repository consentono di sovrascrivere l'auto-pull per quel repository.
+
+Per i repository GitHub, la colonna GitHub usa la CLI `gh` per aggiornare PR, issue e CI ogni 12 minuti e dopo ogni riscansione.
 
 ## Gira in silenzio in background
 

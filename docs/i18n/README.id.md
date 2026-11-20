@@ -29,6 +29,8 @@ Yang butuh tindakan naik ke atas sebagai antrean: satu entri per repo, diurutkan
 | Menutup jendela | masuk ke tray | masuk ke tray | keluar — pakai **Jalankan saat login** agar tetap aktif |
 | Memantau perubahan | semua repo di bawah direktori pemindaian | sama | 200 repo pertama (batasnya bisa dinaikkan atau dilepas di setelan) |
 
+Diperlukan **macOS 13 (Ventura) atau lebih baru**: Electron 44 menghentikan dukungan macOS 12, dan build ini menyertakan Electron 45.
+
 Semuanya berjalan di komputer Anda dan memakai `git` yang sudah ada — tanpa akun, tanpa telemetri, tidak ada yang diunggah. Kolom GitHub (PR, issue, CI) opsional dan membaca lewat [`gh` CLI](https://cli.github.com/) tempat Anda sudah login; tanpa itu pun sisanya tetap jalan.
 
 ## Pemasangan
@@ -67,7 +69,9 @@ Pemindaian otomatis lewat pemantauan berkas **mati secara bawaan** dan diaktifka
 
 Ganti nama atau pindahkan repo, tag, bintang, status arsip, dan catatannya ikut. repo-radar mengenali repo dari isinya, bukan dari letaknya — folder yang dipindah tetap proyek yang sama, bukan proyek baru.
 
-Fetch latar terjadwal bersifat opsional dan satu-satunya fitur yang bicara dengan remote Anda atas inisiatif sendiri. Kolom GitHub adalah satu-satunya yang keluar jaringan mengikuti jam tanpa diminta: selama CLI `gh` terpasang, PR, issue, dan CI disegarkan melaluinya tiap 12 menit dan setelah setiap pemindaian ulang. Tanpa `gh`, atau tanpa remote GitHub, aplikasi sepenuhnya lokal.
+Pemindaian penuh membaca status Git lokal. Atur **Interval penyegaran remote (menit)** tersendiri untuk menjaga informasi upstream tetap terkini saat Anda bekerja. **Auto-pull** juga dapat mempercepat (fast-forward) cabang yang bersih setelah penyegaran terjadwal. Rincian repositori memungkinkan Anda mengganti kebijakan auto-pull untuk repositori tersebut.
+
+Untuk repositori GitHub, kolom GitHub menggunakan CLI `gh` untuk menyegarkan PR, issue, dan CI setiap 12 menit serta setelah setiap pemindaian ulang.
 
 ## Berjalan tenang di latar
 

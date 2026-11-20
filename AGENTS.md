@@ -10,9 +10,18 @@ monorepo（npm workspaces）：`server`（Hono 后端 + git 扫描）/ `web`（R
 - test: `npm test`（含上面三项 typecheck + 三个 workspace 的 vitest）
   机器负载高时，server 的 `perf-smoke` / `suspect-move` 会假超时（30s 上限、git 子进程多）：
   **单独跑这两个文件判定**——绿=抖动，红=真回归，别把它当回归去追。
-- deadcode: `npx knip`（未装为项目依赖；`knip.json` 只把 Windows 系统二进制 `reg` 记为已声明）
+- workflows: `npm run check:workflows`（提前校验 release/ci 工作流中 shell 代码块的 bash 语法）
+- release-config: `node scripts/check-release-config.mjs`（校验 `.github/desktop-version-targets.json` 与 `electron-builder.yml` NSIS 英文设置）
+- deadcode: `npx knip`（未装为项目依赖；`knip.json` 声明 Windows 二进制 `reg` 并将 `desktop/src/preload.ts` 声明为 entry）
 - bench: `npm run bench`（扫描并发基准）。**测扫描/并发性能只能走它**——起 Electron 做进程级 A/B
   会被单实例锁、端口漂移和启动扫描与手动重扫交错污染计时。
+
+> **Windows 终端提示**：PowerShell 5.1 不支持 `&&` 串联；执行多命令时使用 `;` 或 `if ($?) { ... }` 分隔。
+
+## Desktop 依赖与配置约定
+
+- `desktop/package.json`（electron）、根 `package.json`（electron-builder、electron-updater）与 `.github/desktop-version-targets.json` 的主版本号保持严格对齐；发布工作流会在第一步断言。
+- 平台策略偏离在 `.desktop-policy.json` 中统一记录（如 Windows 暂未配置 ARM64 runner、开源项目暂无商业代码签名证书、macOS 走手动更新等）。
 
 ## Lint 约定
 

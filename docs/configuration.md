@@ -12,13 +12,31 @@ fields are covered in the README; this page is the rest.
 | `roots` / `excludes` | where to scan (finds `.git` up to 6 deep, skipping dot-folders and not following symlinks) and which folder names to skip |
 | `manualRepos` | repos added outside the roots. Unlike scanned repos these are **not** tracked by identity: rename or move one and its card errors until you fix the path here |
 | `health` | `{ staleDays, disabledRules }` — tune the "stale" threshold or switch off individual checks |
-| `open` | command templates for the editor / terminal / folder buttons (`{path}` = the repo path) |
-| `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | background behaviour. Only `autoScanMinutes` (30) is on by default |
+| `open` | editor, terminal, and folder commands. The built-in values select platform defaults. Custom values take an executable and arguments, with quotes around arguments containing spaces. `{path}` is inserted as literal text in an argument. For shell pipelines or command sequences, use a separate executable script |
+| `autoWatch` / `autoScanMinutes` / `watchLimit` / `notifications` | background behaviour. Only `autoScanMinutes` (30) is on by default |
+| `autoFetchMinutes` | remote refresh interval in minutes. Set `60` for hourly refresh. Defaults to `0` (off) |
+| `autoPull` / `autoPullOverrides` | allow a scheduled remote refresh to fast-forward clean branches. Off globally by default. Each repository can override the global policy |
 | `checkUpdates` | desktop builds only: ask GitHub once at startup whether a newer release exists. Off by default; the check never downloads or installs anything — both need your confirmation |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | per-repo organization |
 | `lastOpened` | when each repo's editor / terminal / folder button was last used — maintained automatically, nothing to edit by hand |
 
-## The cache files next to it
+## Remote refresh and auto-pull
+
+Full scans read local Git state. Set **Remote refresh interval (minutes)** to fetch the checked-out
+branch's upstream in the background, including in repositories with local changes. This timer runs
+independently of periodic scans. Manual **Fetch** refreshes the selected repository on demand.
+
+Enable **Auto-pull** to apply fetched commits during a scheduled remote refresh when the worktree
+is clean and the branch is strictly behind. A repository can override that policy in its detail
+panel. Archived repositories and branches without a remote upstream are skipped. Worktrees with
+Git operations in progress and worktrees with ignored files that would be overwritten are
+protected from auto-pull.
+
+On upgrade, an existing remote refresh interval takes precedence. A configuration that previously
+enabled remote updates globally on scans uses its former scan interval as the initial remote
+refresh interval.
+
+## The cache and state files next to it
 
 Four rebuildable caches sit beside the config (`repo-cache.json`, `repo-identity.json`,
 `github-desc.json`, `github-inbox.json`), plus `port-state.json` covered under *Why port 17420*.
@@ -37,6 +55,14 @@ from that point on are protected again once the ledger rebuilds.
 `github-desc.json` and `github-inbox.json` cache the optional GitHub column (description, PR /
 issue / CI) read through `gh`. Deleting them only costs a re-fetch on the next look — no user data,
 no id dependency.
+
+The desktop shell also maintains lightweight state files in this folder:
+
+- `window-state.json` — remembers window position, size, and maximized state across runs.
+- `autostart-state.json` — desktop-only one-time migration ledger for autostart settings.
+- `version-state.json` — tracks the previously run app version; when the version increments, repo-radar clears Electron's HTTP cache before loading the interface to prevent stale bundled assets.
+- `repo-radar.log` — application console tee log for diagnosing startup and background issues.
+- `electron-userData/` — created only when running with a custom `REPO_RADAR_CONFIG` to give secondary instances their own single-instance lock domain and isolated web storage.
 
 ## Environment variables
 

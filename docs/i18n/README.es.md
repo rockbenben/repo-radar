@@ -29,6 +29,8 @@ Lo que requiere acción sube arriba como una cola: una entrada por repo, por urg
 | Cerrar la ventana | va a la bandeja | va a la bandeja | se cierra — usa **Iniciar al iniciar sesión** para mantenerlo |
 | Vigilancia de cambios | todos los repos bajo un directorio de escaneo | igual | los primeros 200 repos (el tope se sube o se quita en ajustes) |
 
+**Se requiere macOS 13 (Ventura) o posterior**: Electron 44 dejó de admitir macOS 12, y esta compilación incluye Electron 45.
+
 Todo corre en tu máquina y usa el `git` que ya tienes — sin cuenta, sin telemetría, no se sube nada. La columna de GitHub (PR, issues, CI) es opcional y lee con la [CLI `gh`](https://cli.github.com/) donde ya estás autenticado; sin ella, el resto sigue funcionando.
 
 ## Instalación
@@ -67,7 +69,9 @@ El escaneo automático por vigilancia de archivos está **desactivado por defect
 
 Renombra o mueve un repo y conserva etiquetas, favorito, estado de archivo y notas. repo-radar reconoce un repo por lo que hay dentro, no por dónde está, así que una carpeta movida sigue siendo el mismo proyecto y no uno nuevo.
 
-El fetch programado en segundo plano es opcional y es lo único que habla con tus remotos por su cuenta. La columna de GitHub es lo único que sale a la red por calendario sin que se lo pidas: mientras la CLI `gh` esté instalada, PR, issues y CI se refrescan por ella cada 12 minutos y tras cada reescaneo. Sin `gh`, o sin remotos de GitHub, la app es totalmente local.
+Los escaneos completos leen el estado local de Git. Configura un **Intervalo de actualización remota (minutos)** independiente para mantener al día la información upstream mientras trabajas. El **Auto-pull** también puede avanzar rápidamente (fast-forward) las ramas limpias tras una actualización programada. Los detalles del repositorio te permiten anular la política de auto-pull para ese repositorio.
+
+Para los repositorios de GitHub, la columna de GitHub utiliza la CLI `gh` para actualizar PR, issues y CI cada 12 minutos y tras cada reescaneo.
 
 ## Corre en segundo plano sin molestar
 

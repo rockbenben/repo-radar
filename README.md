@@ -65,13 +65,15 @@ A dark instrument-cockpit theme, localized into 18 languages, with text contrast
 
 ## Staying current
 
-The default is a 30-minute fallback rescan plus the toolbar's manual rescan. A rescan only reads local git state — it never contacts a remote to find out what changed.
+The default is a 30-minute rescan plus the toolbar's manual rescan. The board shows the local Git state as soon as the scan completes.
 
 File-watch auto-scan is **off by default** and opt-in from settings. It's local-only too, but with several projects building at once the kernel notification buffer overflows constantly, and an overflow means events we can no longer trust — the only safe answer is another rescan, rate-limited with exponential backoff to at most one per 30 minutes. Still too high a standing price for a glance-at-what-changed tool. Turn it on and new, deleted or renamed repos show up within seconds.
 
 Rename or move a repo and it keeps its tags, star, archive state and notes. repo-radar recognises a repo by what's inside it, not by where it sits, so a moved folder is still the same project rather than a new one.
 
-Scheduled background fetch is opt-in, and it's the only feature that talks to your remotes by itself. The GitHub column is the one thing that reaches the network on a timer without being asked: while the `gh` CLI is installed, PRs, issues and CI refresh through it every 12 minutes and after each rescan. No `gh`, or no GitHub remotes, and the app is fully local.
+Full scans read local Git state. Set a separate **Remote refresh interval (minutes)** to keep upstream information current while you work. **Auto-pull** can also fast-forward clean branches after a scheduled refresh. Repository details let you override auto-pull for that repository.
+
+The GitHub column uses the local `gh` CLI to query PRs, issues and CI. A background check runs every 30 minutes and after a rescan. It queries repositories with missing results or results last refreshed more than 28 minutes ago. Local copies of the same GitHub repository share a query each round. Failed queries keep the previous result and back off. The panel's manual refresh can retry immediately.
 
 ## Runs quietly in the background
 

@@ -1,12 +1,14 @@
 # Development
 
 ```bash
-npm install     # needs Node 22.12+ (the floor the current vite / concurrently / electron require; CI runs 24)
-npm run dev     # vite + the app window with hot reload
+npm install     # Node 22.13+ on the 22.x line, or Node 24+ (CI runs Node 26 Active LTS)
+npm run dev     # starts the app after Vite binds 127.0.0.1:5173
 npm test        # server + web + desktop test suites and typechecks
 npm run lint    # biome check (lint + import order; no code formatting)
+npm run check:workflows # check workflow shell blocks syntax with bash -n
 npm run bench   # scan-concurrency benchmark on synthetic repos (a few minutes)
-npm run dist    # build installers into dist-electron/
+npm run pack    # package unpacked desktop app into dist-electron/
+npm run dist    # build installers and packages into dist-electron/
 ```
 
 ## Stack
@@ -45,7 +47,23 @@ outside the process unreliable.
 
 ## Tests
 
-`npm test` runs three suites plus typechecks. CI runs `npm run lint`, `npm test` and the build on
-Windows, macOS and Linux. The server suite drives real `git` and the real file watching APIs, so it
-is run on all three — they behave differently enough (paths and CRLF, FSEvents delivering events
-after a handle closes, inotify limits) that passing on one says little about the others.
+`npm test` runs three suites plus typechecks and release asset fixture tests. CI runs `npm run lint`,
+`npm run check:workflows`, `npm test` and the build on Windows, macOS and Linux. The server suite drives
+real `git` and the real file watching APIs, so it is run on all three — they behave differently enough
+(paths and CRLF, FSEvents delivering events after a handle closes, inotify limits) that passing on one says
+little about the others.
+
+The web suite also runs on Node 26 in CI. Development startup requires port 5173 to be free.
+Dead code checks run with `npx knip` (`knip.json` configures binary exceptions and desktop entry points).
+Release targets consistency is checked with `node scripts/check-release-config.mjs`.
+
+## Releases
+
+Use `npm version X.Y.Z --no-git-tag-version` to update the package version and lockfile together.
+Commit the version bump and push the matching stable `vX.Y.Z` tag. GitHub Actions validates that
+commit, tests and packages each platform, verifies the installers and updater manifests, generates
+release notes and `SHA256SUMS`, publishes the release, and checks GitHub's published asset digests.
+To rebuild an existing tag, run the release workflow on that tag ref.
+
+Windows x64 and both Linux AppImage architectures have updater manifests. The two macOS DMGs use
+manual updates. Release notes include download and signing information for the shipped packages.

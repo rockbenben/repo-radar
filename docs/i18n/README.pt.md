@@ -29,6 +29,8 @@ O que precisa de ação sobe como uma fila: um item por repo, por urgência. Dis
 | Fechar a janela | vai para a bandeja | vai para a bandeja | encerra — use **Iniciar ao fazer login** para mantê-lo |
 | Monitorar mudanças | todos os repos sob um diretório de varredura | idem | os primeiros 200 repos (o limite sobe ou sai nas configurações) |
 
+**macOS 13 (Ventura) ou mais recente** é necessário: o Electron 44 removeu o suporte ao macOS 12, e esta versão traz o Electron 45.
+
 Tudo roda na sua máquina e usa o `git` que você já tem — sem conta, sem telemetria, nada é enviado. A coluna do GitHub (PRs, issues, CI) é opcional e lê pela [CLI `gh`](https://cli.github.com/) onde você já está autenticado; sem ela, o resto continua funcionando.
 
 ## Instalação
@@ -67,7 +69,9 @@ A varredura automática por monitoramento de arquivos vem **desligada por padrã
 
 Renomeie ou mova um repo e ele mantém tags, favorito, estado de arquivo e notas. O repo-radar reconhece um repo pelo que há dentro dele, não por onde ele está — uma pasta movida continua sendo o mesmo projeto, não um novo.
 
-O fetch agendado em segundo plano é opcional e é o único recurso que fala com seus remotos sozinho. A coluna do GitHub é a única coisa que sai para a rede por cronômetro sem você pedir: enquanto a CLI `gh` estiver instalada, PRs, issues e CI são atualizados por ela a cada 12 minutos e depois de cada revarredura. Sem `gh`, ou sem remotos do GitHub, o app é totalmente local.
+As varreduras completas leem o estado local do Git. Defina um **Intervalo de atualização remota (minutos)** separado para manter as informações do upstream atualizadas enquanto trabalha. O **Auto-pull** também pode avançar (fast-forward) branches limpas após uma atualização agendada. Os detalhes do repositório permitem substituir a política de auto-pull para aquele repositório.
+
+Para repositórios do GitHub, a coluna do GitHub usa a CLI `gh` para atualizar PRs, issues e CI a cada 12 minutos e após cada nova varredura.
 
 ## Roda quieto em segundo plano
 

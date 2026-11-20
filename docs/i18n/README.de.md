@@ -31,6 +31,8 @@ Was Handlung braucht, steigt als Warteschlange nach oben: ein Eintrag pro Repo, 
 | Fenster schließen | geht in die Tray | geht in die Tray | beendet sich — nutze **Beim Anmelden starten**, damit es bleibt |
 | Änderungen beobachten | alle Repos unter einem Scan-Verzeichnis | dito | die ersten 200 Repos (Grenze in den Einstellungen anheben oder aufheben) |
 
+**macOS 13 (Ventura) oder neuer** ist erforderlich: Electron 44 hat die Unterstützung für macOS 12 eingestellt, und dieser Build liefert Electron 45 mit.
+
 Alles läuft auf deinem Rechner und nutzt das `git`, das du schon hast — kein Konto, keine Telemetrie, nichts wird hochgeladen. Die GitHub-Spalte (PRs, Issues, CI) ist optional und liest über die [`gh` CLI](https://cli.github.com/), bei der du bereits angemeldet bist; ohne sie funktioniert der Rest weiterhin.
 
 ## Installation
@@ -69,7 +71,9 @@ Der Auto-Scan per Dateiüberwachung ist **standardmäßig aus** und wird in den 
 
 Benenne ein Repo um oder verschiebe es, und Tags, Stern, Archivstatus und Notizen bleiben. repo-radar erkennt ein Repo an dem, was drinsteckt, nicht daran, wo es liegt — ein verschobener Ordner ist also weiterhin dasselbe Projekt und kein neues.
 
-Der geplante Hintergrund-Fetch ist optional und die einzige Funktion, die von sich aus deine Remotes anspricht. Die GitHub-Spalte ist das Einzige, was ungefragt zeitgesteuert ins Netz geht: Solange die `gh`-CLI installiert ist, holen PRs, Issues und CI darüber alle 12 Minuten und nach jedem Rescan Daten. Kein `gh` oder keine GitHub-Remotes, und die App bleibt vollständig lokal.
+Vollständige Scans lesen den lokalen Git-Zustand. Richte ein separates **Remote-Aktualisierungsintervall (Minuten)** ein, um Upstream-Informationen während der Arbeit aktuell zu halten. **Automatisches Pullen** kann saubere Branches nach einer geplanten Aktualisierung auch per Fast-Forward voranbringen. In den Repository-Details kannst du das automatische Pullen für das jeweilige Repository überschreiben.
+
+Bei GitHub-Repositories aktualisiert die GitHub-Spalte PRs, Issues und CI über die `gh`-CLI alle 12 Minuten sowie nach jedem Rescan.
 
 ## Läuft leise im Hintergrund
 

@@ -29,6 +29,8 @@ Ce qui demande une action remonte en file d'attente : une entrée par dépôt, p
 | Fermer la fenêtre | passe en zone de notification | idem | quitte — utilisez **Lancer à l'ouverture de session** pour le garder |
 | Surveillance des changements | tous les dépôts sous un répertoire scanné | idem | les 200 premiers dépôts (plafond ajustable ou levable dans les réglages) |
 
+**macOS 13 (Ventura) ou plus récent** est requis : Electron 44 a abandonné macOS 12, et cette version intègre Electron 45.
+
 Tout tourne sur votre machine et utilise le `git` que vous avez déjà — pas de compte, pas de télémétrie, rien n'est envoyé. La colonne GitHub (PR, issues, CI) est facultative et passe par la [CLI `gh`](https://cli.github.com/) où vous êtes déjà connecté ; sans elle, le reste fonctionne.
 
 ## Installation
@@ -67,7 +69,7 @@ L'analyse automatique par surveillance de fichiers est **désactivée par défau
 
 Renommez ou déplacez un dépôt : ses tags, favori, état d'archive et notes suivent. repo-radar reconnaît un dépôt à ce qu'il contient, pas à l'endroit où il se trouve — un dossier déplacé reste donc le même projet, pas un nouveau.
 
-Le fetch d'arrière-plan planifié est facultatif et c'est la seule fonction qui parle à vos remotes d'elle-même. La colonne GitHub est la seule chose qui sorte sur le réseau à la minuterie sans qu'on le demande : tant que la CLI `gh` est installée, PR, issues et CI s'actualisent via elle toutes les 12 minutes et après chaque réanalyse. Sans `gh`, ou sans remote GitHub, l'application reste entièrement locale.
+La récupération planifiée des branches distantes est facultative. La colonne GitHub utilise la CLI `gh` pour consulter les PR, les tickets et la CI. Elle vérifie le cache toutes les 30 minutes et après chaque analyse, puis interroge les dépôts dont les résultats sont absents ou datent de plus de 28 minutes. Les copies locales d’un même dépôt GitHub partagent une requête par cycle.
 
 ## Tourne discrètement en arrière-plan
 

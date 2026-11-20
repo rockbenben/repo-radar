@@ -31,6 +31,8 @@ Yoksa kontrol etmeyi unutacağınız şeyleri yüzeye çıkarır:
 | Pencereyi kapatmak | tepsiye iner | tepsiye iner | çıkar — kalıcı olması için **Oturum açılışında başlat** |
 | Değişiklik izleme | tarama dizini altındaki tüm depolar | aynısı | ilk 200 depo (sınır ayarlardan yükseltilebilir ya da kaldırılabilir) |
 
+**macOS 13 (Ventura) veya daha yenisi** gereklidir: Electron 44, macOS 12 desteğini sonlandırdı ve bu sürüm Electron 45 ile birlikte gelir.
+
 Her şey sizin makinenizde çalışır ve zaten kurulu olan `git`'i kullanır — hesap yok, telemetri yok, hiçbir şey yüklenmez. GitHub sütunu (PR, issue, CI) isteğe bağlıdır ve zaten oturum açtığınız [`gh` CLI](https://cli.github.com/) üzerinden okur; kullanmasanız da gerisi çalışır.
 
 ## Kurulum
@@ -69,7 +71,9 @@ Dosya izlemeli otomatik tarama **varsayılan olarak kapalıdır**, ayarlardan a�
 
 Bir deponun adını değiştirin ya da taşıyın; etiketleri, yıldızı, arşiv durumu ve notları kalır. repo-radar bir depoyu içindekinden tanır, durduğu yerden değil — taşınan bir klasör hâlâ aynı projedir, yenisi değil.
 
-Zamanlanmış arka plan fetch isteğe bağlıdır ve kendiliğinden sizin remote'larınızla konuşan tek özelliktir. GitHub sütunu, istenmeden saatli olarak ağa çıkan tek şeydir: `gh` CLI kurulu olduğu sürece PR'lar, issue'lar ve CI onun üzerinden her 12 dakikada bir ve her yeniden taramadan sonra tazelenir. `gh` yoksa veya GitHub remote yoksa uygulama tamamen yereldir.
+Tam taramalar yerel Git durumunu okur. Çalışırken upstream bilgilerini güncel tutmak için ayrı bir **Uzak yenileme aralığı (dakika)** belirleyin. **Otomatik pull**, planlanmış bir yenilemeden sonra temiz dalları fast-forward ile ileri alabilir. Depo ayrıntılarından ilgili depo için otomatik pull ayarını geçersiz kılabilirsiniz.
+
+GitHub depoları için GitHub sütunu, `gh` CLI aracılığıyla PR'ları, issue'ları ve CI'ı her 12 dakikada bir ve her yeniden taramadan sonra yeniler.
 
 ## Arka planda sessizce çalışır
 

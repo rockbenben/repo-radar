@@ -29,6 +29,8 @@ Thứ gì cần xử lý sẽ nổi lên đầu thành một hàng đợi: mỗi
 | Đóng cửa sổ | thu vào khay hệ thống | thu vào khay hệ thống | thoát hẳn — dùng **Khởi động khi đăng nhập** để nó ở lại |
 | Theo dõi thay đổi | toàn bộ kho dưới thư mục quét | như trên | 200 kho đầu tiên (nâng hoặc bỏ giới hạn trong cài đặt) |
 
+Yêu cầu **macOS 13 (Ventura) trở lên**: Electron 44 đã ngừng hỗ trợ macOS 12 và bản dựng này đi kèm Electron 45.
+
 Mọi thứ chạy trên máy bạn và dùng chính `git` bạn đang có — không tài khoản, không đo đạc từ xa, không gửi gì lên mạng. Cột GitHub (PR, issue, CI) là tùy chọn và đọc qua [`gh` CLI](https://cli.github.com/) nơi bạn đã đăng nhập; bỏ qua nó thì phần còn lại vẫn chạy.
 
 ## Cài đặt
@@ -67,7 +69,9 @@ Quét tự động bằng theo dõi tệp **mặc định tắt**, bật trong c
 
 Đổi tên hoặc di chuyển một kho, thẻ nhãn, dấu sao, trạng thái lưu trữ và ghi chú vẫn theo. repo-radar nhận ra một kho bằng thứ nằm bên trong nó, không phải bằng vị trí — nên thư mục bị dời vẫn là đúng dự án đó, không phải một cái mới.
 
-Fetch nền theo lịch là tùy chọn và là tính năng duy nhất tự nói chuyện với remote của bạn. Cột GitHub là thứ duy nhất tự ra mạng theo đồng hồ mà bạn không yêu cầu: khi CLI `gh` đã được cài, PR, issue và CI làm mới qua nó mỗi 12 phút và sau mỗi lượt quét. Không có `gh`, hoặc không có remote GitHub, ứng dụng hoàn toàn cục bộ.
+Quét toàn bộ đọc trạng thái Git cục bộ. Thiết lập **Khoảng thời gian làm mới từ xa (phút)** riêng biệt để giữ thông tin thượng nguồn luôn mới trong khi làm việc. **Tự động pull** cũng có thể tua nhanh (fast-forward) các nhánh sạch sau một lần làm mới theo lịch. Chi tiết kho lưu trữ cho phép bạn ghi đè thiết lập tự động pull cho từng kho riêng lẻ.
+
+Đối với các kho lưu trữ GitHub, cột GitHub sử dụng CLI `gh` để làm mới PR, issue và CI mỗi 12 phút và sau mỗi lượt quét lại.
 
 ## Chạy lặng lẽ ở nền
 
