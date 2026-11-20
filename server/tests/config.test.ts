@@ -173,8 +173,18 @@ describe("autoWatch 字段", () => {
     expect(loadConfig(file).roots).toEqual(["X:\\a"])
   })
 
-  it("定时拉取仍默认关闭——它会发网络请求，必须由用户主动打开", () => {
-    expect(DEFAULT_CONFIG.autoFetchMinutes).toBe(0)
+  it("远程刷新间隔独立于本地扫描，旧的随扫描刷新设置只在缺少间隔时迁移", () => {
+    const file = join(dir, "legacy-auto-fetch.json")
+    writeFileSync(file, JSON.stringify({ autoFetchMinutes: 5, autoScanMinutes: 60 }))
+    const cfg = loadConfig(file)
+    expect(cfg.autoFetchMinutes).toBe(5)
+    expect(cfg.autoPull).toBe(false)
+    expect(cfg.autoScanMinutes).toBe(60)
+    writeFileSync(file, JSON.stringify({ fetchOnScan: true, autoScanMinutes: 30 }))
+    expect(loadConfig(file)).toMatchObject({ autoFetchMinutes: 30, autoPull: false })
+    expect(loadConfig(file)).not.toHaveProperty("fetchOnScan")
+    writeFileSync(file, JSON.stringify({ autoFetchMinutes: 0, fetchOnScan: true }))
+    expect(loadConfig(file).autoFetchMinutes).toBe(0)
   })
 })
 
@@ -204,9 +214,6 @@ describe("autoScanMinutes 字段（兜底全量重扫）", () => {
     expect(validateConfigPatch({ autoScanMinutes: Number.POSITIVE_INFINITY })).toBe(
       "autoScanMinutes must be a non-negative number",
     )
-    expect(validateConfigPatch({ autoFetchMinutes: Number.POSITIVE_INFINITY })).toBe(
-      "autoFetchMinutes must be a non-negative number",
-    )
     expect(JSON.stringify({ n: Number.POSITIVE_INFINITY })).toBe('{"n":null}') // 上面那句话的依据
   })
 
@@ -217,17 +224,16 @@ describe("autoScanMinutes 字段（兜底全量重扫）", () => {
     expect(validateConfigPatch({ autoScanMinutes: MAX_INTERVAL_MINUTES + 1 })).toBe(
       `autoScanMinutes must be at most ${MAX_INTERVAL_MINUTES}`,
     )
-    expect(validateConfigPatch({ autoFetchMinutes: 43200 })).toBe(`autoFetchMinutes must be at most ${MAX_INTERVAL_MINUTES}`)
     expect(MAX_INTERVAL_MINUTES * 60_000).toBeLessThanOrEqual(2 ** 31 - 1) // 上限本身必须在溢出线内
     // 上限必须顶到溢出线，不能收得更紧：旧版本接受任何有限非负值，收紧到比如 7 天会把
-    // 以前完全合法的「两周 fetch 一次」（20160）变成 400，破坏既有客户端和配置
-    expect(validateConfigPatch({ autoFetchMinutes: 20160 })).toBeNull()
+    // 以前合法的「两周重扫一次」（20160）变成 400，破坏既有客户端和配置
+    expect(validateConfigPatch({ autoScanMinutes: 20160 })).toBeNull()
   })
 
   // 0.001 过得了「非负有限数」，装表却是 60ms 的全量扫描死循环——必须整数
   it("校验：小数必须被拒，防止亚分钟间隔", () => {
     expect(validateConfigPatch({ autoScanMinutes: 0.001 })).toBe("autoScanMinutes must be an integer")
-    expect(validateConfigPatch({ autoFetchMinutes: 15.5 })).toBe("autoFetchMinutes must be an integer")
+    expect(validateConfigPatch({ autoFetchMinutes: 0.001 })).toBe("autoFetchMinutes must be an integer")
   })
 
   // 旧版校验松（接受小数、无上限），或手改/损坏写入了 null、越界值——这些已经在用户
@@ -237,14 +243,13 @@ describe("autoScanMinutes 字段（兜底全量重扫）", () => {
     const file = join(dir, "legacy-values.json")
     writeFileSync(
       file,
-      JSON.stringify({ autoFetchMinutes: 2.5, autoScanMinutes: 100000, watchLimit: null }),
+      JSON.stringify({ autoScanMinutes: 100000, watchLimit: null }),
     )
     const cfg = loadConfig(file)
-    expect(cfg.autoFetchMinutes).toBe(2) // 小数 → 取整
     expect(cfg.autoScanMinutes).toBe(MAX_INTERVAL_MINUTES) // 超上限 → 钳到上限
     expect(cfg.watchLimit).toBe(DEFAULT_CONFIG.watchLimit) // null（损坏）→ 回默认值
     // 归一化后的值必须能原样通过 PUT 校验——这正是归一化存在的目的
-    expect(validateConfigPatch({ autoFetchMinutes: cfg.autoFetchMinutes, autoScanMinutes: cfg.autoScanMinutes, watchLimit: cfg.watchLimit })).toBeNull()
+    expect(validateConfigPatch({ autoScanMinutes: cfg.autoScanMinutes, watchLimit: cfg.watchLimit })).toBeNull()
   })
 })
 

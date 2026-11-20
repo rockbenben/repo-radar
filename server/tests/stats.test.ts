@@ -1,14 +1,15 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { aggregateHeatmap, buildActivity, clearStatsCache, evictRepoStats, repoCommitDays } from "../src/stats"
 import type { RepoStatus } from "../src/types"
+import { getWorklog } from "../src/worklog"
 import { cleanupFixtures, makeBehindRepo, makeRepoWithDates } from "./fixtures"
 
 afterAll(cleanupFixtures)
 beforeEach(clearStatsCache)
 
-const D1 = "2026-07-01T10:00:00+08:00"
-const D2 = "2026-07-01T18:00:00+08:00"
-const D3 = "2026-07-03T09:00:00+08:00"
+const D1 = "2026-07-01T10:00:00"
+const D2 = "2026-07-01T18:00:00"
+const D3 = "2026-07-03T09:00:00"
 
 describe("repoCommitDays", () => {
   it("buckets commits by local date", async () => {
@@ -105,4 +106,20 @@ describe("buildActivity", () => {
     expect(out.map((r) => r.id)).toEqual(["working", "committed"])
     expect(out[0].lastCommitDate).toBe("2026-01-01T00:00:00Z") // 空仓库计数仍走提交口径
   })
+})
+
+it("uses the same machine-local day as the worklog for a commit across midnight", async () => {
+  const instant = new Date(Date.now() - 24 * 3600_000)
+  instant.setUTCHours(6, 15, 0, 0)
+  const ymd = (d: Date) => [d.getFullYear(), d.getMonth() + 1, d.getDate()]
+    .map((part) => String(part).padStart(2, "0")).join("-")
+  const day = ymd(instant)
+  const utcTimestamp = instant.toISOString()
+  const westTimestamp = new Date(instant.getTime() - 7 * 3600_000).toISOString().replace("Z", "-07:00")
+  const timestamp = utcTimestamp.startsWith(day) ? westTimestamp : utcTimestamp
+  const path = makeRepoWithDates([timestamp])
+  const targets = [{ id: "midnight", path, name: "midnight", displayName: null }]
+  const log = await getWorklog(targets, day, day)
+  expect(log.commits.map((commit) => commit.day)).toEqual([day])
+  expect(await aggregateHeatmap(targets, 365)).toEqual([{ date: day, count: 1 }])
 })

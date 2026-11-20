@@ -17,8 +17,7 @@ export interface AutomationDeps {
   listRepos: () => RepoStatus[]
   /** 兜底定时重扫要跑的动作；用调用方的重扫链，定时触发撞上手动重扫时不会叠成两轮 */
   rescan: () => Promise<unknown>
-  /** 定时后台 fetch 要跑的动作 */
-  fetchAll: () => Promise<void>
+  refreshRemotes?: () => Promise<void>
   /** 「这条仓库路径已经确定不在磁盘上了」。默认按 ENOENT 判定（见 pathGone）。
    *  做成可注入的只有一个理由：测试里的仓库路径大多是假的（`/r/a`），用真实判定会把
    *  覆盖率分母整个抹平，那样测到的就不是这些用例想测的东西了 */
@@ -45,11 +44,7 @@ export function pathGone(path: string): boolean {
 }
 
 /**
- * 后台自动化的装表台：文件监听 + 兜底重扫定时器 + 定时 fetch 定时器。
- *
- * 抽出来是因为这三件事共用一组容易写错的约束（间隔夹逼、只重装真变了的、上限截断要
- * 如实说出来），散在 createBackend 那个几百行的闭包里时，每加一处就得把这些约束重新
- * 想一遍——而这几条约束的边界恰恰最容易写错。
+ * 管理文件监听、定时本地扫描和定时远程刷新。
  */
 export interface Automation {
   /** 建立/重建监听句柄：开关切换、启动、以及「结构变化/溢出」这类必须重建才能救回的场景走这里。
@@ -63,13 +58,12 @@ export interface Automation {
   applyRepos(repos: RepoStatus[]): void
   setWatch(enabled: boolean): Promise<void>
   setAutoScan(minutes: number): Promise<void>
-  setAutoFetch(minutes: number): Promise<void>
   setWatchLimit(limit: number): Promise<void>
   /** PUT /api/config 落盘后调用：逐字段与旧值比对，只重装真变了的 */
   applyConfig(next: Config, prev: Config): Promise<void>
-  /** 启动时按配置装上两个定时器（监听由首轮扫描的 applyWatch 负责） */
+  /** 启动时装上定时器（监听由首轮扫描的 applyWatch 负责） */
   start(cfg: Config): void
-  /** 退出时拆掉两个定时器（监听的关闭走 shutdown 的 closeWatcher） */
+  /** 退出时拆掉定时器（监听的关闭走 shutdown 的 closeWatcher） */
   stop(): void
   /** 最近一次 applyWatch 的覆盖情况，供界面如实显示「250 个中监听 200 个」 */
   coverage(): WatchCoverage
@@ -149,7 +143,7 @@ const mountKey = (roots: readonly string[], excludes: readonly string[], targets
  */
 const HEAL_RETRY_MS = 60_000
 
-/** 周期定时器：装、拆、按新间隔重装都走这里。两个定时器逐行相同，只有要跑的动作不一样 */
+/** 周期定时器：装、拆、按新间隔重装都走这里。 */
 function createTimer(run: () => void): { apply: (minutes: number) => void } {
   let handle: ReturnType<typeof setInterval> | null = null
   return {
@@ -164,7 +158,7 @@ function createTimer(run: () => void): { apply: (minutes: number) => void } {
 }
 
 export function createAutomation(deps: AutomationDeps): Automation {
-  const { configFile, watcher, listRepos, rescan, fetchAll } = deps
+  const { configFile, watcher, listRepos, rescan } = deps
   const gone = deps.pathGone ?? pathGone
   const log = deps.log ?? ((m: string) => console.log(m))
   // 本该监听的仓库数（非归档），与 watcher 是否真的挂上无关——即便监听整个关着，
@@ -219,7 +213,11 @@ export function createAutomation(deps: AutomationDeps): Automation {
       log(`[repo-radar] 兜底重扫失败：${err instanceof Error ? err.message : String(err)}`)
     })
   })
-  const fetchTimer = createTimer(() => void fetchAll())
+  const remoteTimer = createTimer(() => {
+    void deps.refreshRemotes?.().catch((err) => {
+      log(`[repo-radar] 定时刷新远程状态失败：${err instanceof Error ? err.message : String(err)}`)
+    })
+  })
 
   async function applyWatch(enabled: boolean, repos?: RepoStatus[]): Promise<void> {
     const list = repos ?? listRepos()
@@ -330,10 +328,6 @@ export function createAutomation(deps: AutomationDeps): Automation {
       persist("autoScanMinutes", minutes)
       scanTimer.apply(minutes)
     },
-    async setAutoFetch(minutes) {
-      persist("autoFetchMinutes", minutes)
-      fetchTimer.apply(minutes)
-    },
     async setWatchLimit(limit) {
       persist("watchLimit", limit)
       // 上限变了要立刻重挂监听：不重挂的话面板显示的覆盖数和真正挂着的监听对不上，
@@ -355,7 +349,7 @@ export function createAutomation(deps: AutomationDeps): Automation {
     // 代价只是一次少见路径上的重装，比「界面声称覆盖全部、实际没有」小得多
     async applyConfig(next, prev) {
       if (next.autoScanMinutes !== prev.autoScanMinutes) scanTimer.apply(next.autoScanMinutes)
-      if (next.autoFetchMinutes !== prev.autoFetchMinutes) fetchTimer.apply(next.autoFetchMinutes)
+      if (next.autoFetchMinutes !== prev.autoFetchMinutes) remoteTimer.apply(next.autoFetchMinutes)
       const rootsChanged = JSON.stringify(next.roots) !== JSON.stringify(prev.roots)
       const manualReposChanged = JSON.stringify(next.manualRepos) !== JSON.stringify(prev.manualRepos)
       // excludes 只在这条路上能进 watcher（setRoots 是它唯一的入口，见 watcher.setRoots 的
@@ -369,11 +363,11 @@ export function createAutomation(deps: AutomationDeps): Automation {
 
     start(cfg) {
       scanTimer.apply(cfg.autoScanMinutes)
-      fetchTimer.apply(cfg.autoFetchMinutes)
+      remoteTimer.apply(cfg.autoFetchMinutes)
     },
     stop() {
       scanTimer.apply(0)
-      fetchTimer.apply(0)
+      remoteTimer.apply(0)
     },
   }
 }

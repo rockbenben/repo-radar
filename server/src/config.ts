@@ -26,7 +26,9 @@ export interface Config {
   // 网络盘之间差一个数量级——没有哪个硬编码值对所有人都对，所以交给用户。
   // 名额不够时收藏优先、其次按最近提交，超出的仓库靠兜底重扫刷新
   watchLimit: number
-  autoFetchMinutes: number // 定时后台 fetch 间隔（分钟）；0 = 关闭（默认）
+  autoFetchMinutes: number // 0 = 关闭定时远程刷新
+  autoPull: boolean
+  autoPullOverrides: Record<string, boolean> // 仓库 id → 显式开启/关闭；缺省时跟随全局
   notifications: boolean // GitHub「等我的」新增时弹系统通知：默认关闭（打扰性功能一律 opt-in）
   // 启动时检查一次有没有新版本：**默认关闭**。会联网的开关一律 opt-in，
   // 而且它只发一次请求、只回一句「有没有新版」，不下载也不安装——下载和安装都要用户点头
@@ -49,6 +51,8 @@ export const DEFAULT_CONFIG: Config = {
   autoScanMinutes: 30,
   watchLimit: 200,
   autoFetchMinutes: 0,
+  autoPull: false,
+  autoPullOverrides: {},
   notifications: false,
   checkUpdates: false,
   health: { staleDays: 90, disabledRules: [] },
@@ -64,12 +68,12 @@ export const DEFAULT_CONFIG: Config = {
  *  legacyAutostartMigrated：SEA 时代自启迁移标记曾被错误地放进这份用户可见/
  *  可通过 PUT /api/config 修改的配置——已挪到 desktop/src/autostart-state.ts 管理的桌面端
  *  专属状态文件，这里只负责把老配置文件里残留的这个字段清掉，不再声明、不再校验 */
-const DROPPED_FIELDS = ["openMode", "legacyAutostartMigrated"] as const
+const DROPPED_FIELDS = ["openMode", "legacyAutostartMigrated", "fetchOnScan"] as const
 
 /** 定时器间隔上限（分钟）。setInterval 的延迟是 32 位有符号毫秒：超过 2^31-1 会被 Node
  *  钳成 1ms，「很少扫一次」当场变成「一刻不停地扫」。上限就取溢出线本身
  *  （floor(2^31-1 / 60000) = 35791 分钟 ≈ 24.8 天）——收得更紧（如 7 天）会把旧版本里
- *  完全合法的取值（比如两周一次的 fetch）变成 400，或把老配置静默钳到更高频率。
+ *  完全合法的取值（比如两周一次的重扫）变成 400，或把老配置静默钳到更高频率。
  *  API 校验和装表的地方共用这一个数 */
 export const MAX_INTERVAL_MINUTES = Math.floor((2 ** 31 - 1) / 60_000)
 
@@ -94,14 +98,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
  *  - Number.isInteger：0.001 同样过得了「非负有限数」，装表却是 60ms 的全量扫描死循环
  *  - 上限：见 MAX_INTERVAL_MINUTES（setInterval 32 位溢出）
  *  undefined = patch 里没带这个字段，不算错——POST 端点要求必填时自行先查。
- *  label 是报错里出现的字段名：POST /api/auto-* 收的请求字段叫 minutes，报错却写配置字段名
- *  的话，照着报错重试的集成方会带着 {"autoFetchMinutes": 5} 死循环撞 400 */
-export function checkMinutes(
-  body: Record<string, unknown>,
-  key: "autoScanMinutes" | "autoFetchMinutes",
-  label: string = key,
-): string | null {
-  const v = body[key]
+ *  label 对应请求字段名：配置写 autoScanMinutes，专用端点收 minutes。 */
+export function checkMinutes(v: unknown, label = "autoScanMinutes"): string | null {
   if (v === undefined) return null
   if (typeof v !== "number" || !Number.isFinite(v) || v < 0)
     return `${label} must be a non-negative number`
@@ -133,10 +131,16 @@ export function validateConfigPatch(body: unknown): string | null {
   )
     return "lastOpened must be a record of strings"
   if (body.autoWatch !== undefined && typeof body.autoWatch !== "boolean") return "autoWatch must be a boolean"
-  const minutes = checkMinutes(body, "autoScanMinutes")
+  const minutes = checkMinutes(body.autoScanMinutes)
   if (minutes !== null) return minutes
-  const fetchMinutes = checkMinutes(body, "autoFetchMinutes")
+  const fetchMinutes = checkMinutes(body.autoFetchMinutes, "autoFetchMinutes")
   if (fetchMinutes !== null) return fetchMinutes
+  if (body.autoPull !== undefined && typeof body.autoPull !== "boolean") return "autoPull must be a boolean"
+  if (
+    body.autoPullOverrides !== undefined &&
+    (!isRecord(body.autoPullOverrides) || !Object.values(body.autoPullOverrides).every((v) => typeof v === "boolean"))
+  )
+    return "autoPullOverrides must be a record of booleans"
   if (body.watchLimit !== undefined) {
     const v = body.watchLimit
     // 上限没有溢出风险（只是个切片长度），但仍要挡住小数/非有限值：
@@ -221,9 +225,9 @@ export function loadConfig(file: string): Config {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return structuredClone(DEFAULT_CONFIG)
     throw err
   }
-  let raw: Partial<Config>
+  let raw: Partial<Config> & { fetchOnScan?: unknown }
   try {
-    raw = JSON.parse(text) as Partial<Config>
+    raw = JSON.parse(text) as typeof raw
   } catch (err) {
     // 不加 try/catch 的话，一次断电留下的截断文件会让这里每轮都抛：RepoStore.getConfig 无人接，
     // 看板永久 500，用户连「数据还在不在」都看不到
@@ -232,7 +236,14 @@ export function loadConfig(file: string): Config {
   }
   const cfg = mergeConfig(structuredClone(DEFAULT_CONFIG), raw)
   cfg.autoScanMinutes = sanitizeNumber(cfg.autoScanMinutes, DEFAULT_CONFIG.autoScanMinutes, MAX_INTERVAL_MINUTES)
-  cfg.autoFetchMinutes = sanitizeNumber(cfg.autoFetchMinutes, DEFAULT_CONFIG.autoFetchMinutes, MAX_INTERVAL_MINUTES)
+  cfg.autoPull = cfg.autoPull === true
+  if (!isRecord(cfg.autoPullOverrides)) cfg.autoPullOverrides = {}
+  // 曾随扫描执行的远程刷新，沿用当时的间隔；用户明确设过远程刷新间隔时优先采用。
+  const previouslyCheckedRemotes = raw.fetchOnScan === true || cfg.autoPull
+  cfg.autoFetchMinutes = sanitizeNumber(
+    cfg.autoFetchMinutes, DEFAULT_CONFIG.autoFetchMinutes, MAX_INTERVAL_MINUTES,
+  )
+  if (raw.autoFetchMinutes === undefined && previouslyCheckedRemotes) cfg.autoFetchMinutes = cfg.autoScanMinutes
   cfg.watchLimit = sanitizeNumber(cfg.watchLimit, DEFAULT_CONFIG.watchLimit)
   return cfg
 }

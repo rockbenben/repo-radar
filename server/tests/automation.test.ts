@@ -146,7 +146,7 @@ function coverageWatcher(mode: "recursive" | "per-repo", opts: { failFirst?: boo
   return { watcher: w as unknown as RepoWatcher, rootCalls, calls: () => attempts }
 }
 
-function make(file: string, repos: RepoStatus[], extra: { rescan?: () => Promise<unknown>; fetchAll?: () => Promise<void> } = {}) {
+function make(file: string, repos: RepoStatus[], extra: { rescan?: () => Promise<unknown>; refreshRemotes?: () => Promise<void> } = {}) {
   const fw = fakeWatcher()
   const logs: string[] = []
   const automation = createAutomation({
@@ -154,7 +154,7 @@ function make(file: string, repos: RepoStatus[], extra: { rescan?: () => Promise
     watcher: fw.watcher,
     listRepos: () => repos,
     rescan: extra.rescan ?? (async () => {}),
-    fetchAll: extra.fetchAll ?? (async () => {}),
+    refreshRemotes: extra.refreshRemotes,
     pathGone: allPathsAlive,
     log: (m) => void logs.push(m),
   })
@@ -325,7 +325,6 @@ describe("setX 落盘并立即生效", () => {
       watcher: failing,
       listRepos: () => [repo("a")],
       rescan: async () => {},
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: (m) => void logs.push(m),
     })
@@ -336,16 +335,14 @@ describe("setX 落盘并立即生效", () => {
     expect(logs.join()).toContain("EMFILE")
   })
 
-  it("setWatch / setAutoScan / setAutoFetch 各自只改自己那个字段", async () => {
+  it("setWatch / setAutoScan 各自只改自己那个字段", async () => {
     const file = configFile()
     const { automation } = make(file, [])
     await automation.setWatch(false)
     await automation.setAutoScan(10)
-    await automation.setAutoFetch(15)
     const cfg = loadConfig(file)
     expect(cfg.autoWatch).toBe(false)
     expect(cfg.autoScanMinutes).toBe(10)
-    expect(cfg.autoFetchMinutes).toBe(15)
     expect(cfg.watchLimit).toBe(DEFAULT_CONFIG.watchLimit) // 没碰的字段保持原样
   })
 })
@@ -434,18 +431,25 @@ describe("applyConfig 只重装真变了的", () => {
 })
 
 describe("start / stop", () => {
-  it("stop 之后定时器不再触发", async () => {
+  it("重设远程刷新间隔不改变本地扫描时间，stop 后两个定时器都停止", async () => {
     vi.useFakeTimers()
-    const file = configFile({ autoScanMinutes: 1, autoFetchMinutes: 1 })
+    const file = configFile({ autoScanMinutes: 1, autoFetchMinutes: 2 })
     let scans = 0
-    let fetches = 0
-    const { automation } = make(file, [], { rescan: async () => void scans++, fetchAll: async () => void fetches++ })
-    automation.start(loadConfig(file))
+    let refreshes = 0
+    const { automation } = make(file, [], { rescan: async () => void scans++, refreshRemotes: async () => void refreshes++ })
+    const cfg = loadConfig(file)
+    automation.start(cfg)
     vi.advanceTimersByTime(60_000)
-    expect([scans, fetches]).toEqual([1, 1])
+    expect([scans, refreshes]).toEqual([1, 0])
+    vi.advanceTimersByTime(30_000)
+    await automation.applyConfig({ ...cfg, autoFetchMinutes: 3 }, cfg)
+    vi.advanceTimersByTime(30_000)
+    expect([scans, refreshes]).toEqual([2, 0])
+    vi.advanceTimersByTime(150_000)
+    expect([scans, refreshes]).toEqual([4, 1])
     automation.stop()
     vi.advanceTimersByTime(5 * 60_000)
-    expect([scans, fetches]).toEqual([1, 1])
+    expect([scans, refreshes]).toEqual([4, 1])
   })
 
   it("兜底重扫抛错只记日志，不让未处理的 rejection 打崩进程", async () => {
@@ -483,7 +487,6 @@ describe("重扫不重建监听", () => {
       watcher,
       listRepos: () => [],
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: () => {},
     })
@@ -514,7 +517,6 @@ describe("重扫不重建监听", () => {
       watcher,
       listRepos: () => [],
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: () => {},
     })
@@ -541,7 +543,6 @@ describe("重扫不重建监听", () => {
       watcher,
       listRepos: () => Array.from({ length: 73 }, (_, i) => ({ id: String(i), archived: false }) as RepoStatus),
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: () => {},
     })
@@ -568,7 +569,6 @@ describe("新出现的仓库必须拿到监听句柄（G1）", () => {
       watcher: cw.watcher,
       listRepos: () => repos,
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: () => {},
     })
@@ -661,7 +661,6 @@ describe("名额占满时打 ⭐ 必须真的换进监听名单", () => {
       watcher: cw.watcher,
       listRepos: () => repos,
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: () => {},
     })
@@ -713,7 +712,6 @@ describe("降级被闩住时不得跟着用户点击反复拆建监听", () => {
       watcher: cw.watcher,
       listRepos: () => repos,
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive, // /r/b 的路径**还在**，只是挂不上——这才是永久降级的形状
       log: () => {},
     })
@@ -773,7 +771,6 @@ describe("底层问题修好之后，重扫必须能把监听救回来（G2）",
       watcher: cw.watcher,
       listRepos: () => repos,
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive, // /r/b 的路径**还在**，只是挂不上——这才是永久降级的形状
       log: () => {},
     })
@@ -830,7 +827,6 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂", () => {
       watcher,
       listRepos: () => [repo("a"), repo("b")],
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: () => {},
     })
@@ -862,7 +858,6 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂", () => {
       watcher,
       listRepos: () => [repo("a"), repo("b")],
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: () => {},
     })
@@ -896,7 +891,6 @@ describe("watchDegraded 自愈：periodic 路径的便宜重挂", () => {
       watcher,
       listRepos: () => [repo("a"), repo("b")],
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: allPathsAlive,
       log: () => {},
     })
@@ -983,7 +977,6 @@ describe("已知路径失效的仓库不进覆盖率分母（A2）", () => {
       watcher: cw.watcher,
       listRepos: () => repos,
       rescan: async () => [],
-      fetchAll: async () => {},
       pathGone: gone,
       log: () => {},
     })
@@ -1029,7 +1022,6 @@ describe("已知路径失效的仓库不进覆盖率分母（A2）", () => {
       watcher: cw.watcher,
       listRepos: () => [alive, dead],
       rescan: async () => [],
-      fetchAll: async () => {},
       log: () => {},
     })
     await a.applyWatch(true)

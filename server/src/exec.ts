@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { gitEnvironment } from "./git-env"
 
 const EXEC_TIMEOUT_MS = 120_000
 const OUTPUT_CAP = 4000 // 每仓库保留的输出上限（字符），只留尾部，避免刷屏
@@ -20,7 +21,7 @@ export interface ExecResult {
  */
 export function runCommand(cwd: string, command: string, timeoutMs = EXEC_TIMEOUT_MS): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, windowsHide: true })
+    const child = spawn(command, { cwd, shell: true, windowsHide: true, env: gitEnvironment() })
     let out = ""
     let killed = false
     let exitCode: number | null = null // 'exit' 先于 'close'；宽限期到点收工时用它当退出码

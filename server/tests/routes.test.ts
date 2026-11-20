@@ -52,7 +52,7 @@ function setup() {
 
   const opened: { template: string; path: string }[] = []
   const appWithOpen = createApi(store, configFile, {
-    openFn: (template, path) => opened.push({ template, path }),
+    openFn: (template, path) => { opened.push({ template, path }) },
   })
 
   return { app, appWithOpen, opened, store, configFile, repo, cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) }
@@ -215,28 +215,6 @@ describe("api", () => {
     t.cleanup()
   })
 
-  it("POST /api/auto-fetch sets the interval and validates the body", async () => {
-    const t = setup()
-    const calls: number[] = []
-    const app = createApi(t.store, t.configFile, { setAutoFetch: async (m) => void calls.push(m) })
-    const post = (body: unknown) =>
-      app.request("/api/auto-fetch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
-
-    const ok = await post({ minutes: 15 })
-    expect(ok.status).toBe(200)
-    expect(await ok.json()).toEqual({ ok: true, autoFetchMinutes: 15 })
-    expect(calls).toEqual([15])
-
-    expect((await post({ minutes: -1 })).status).toBe(400)
-    expect((await post({ minutes: "5" })).status).toBe(400)
-    expect((await post({})).status).toBe(400) // 缺 minutes：旧版内联校验就是 400，不能回退
-    expect(calls).toEqual([15]) // 校验失败不应调用 setAutoFetch
-    // 旧版接受任何有限非负值，「两周 fetch 一次」一直是合法的——上限只挡溢出，不挡它
-    expect((await post({ minutes: 20160 })).status).toBe(200)
-    expect(calls).toEqual([15, 20160])
-    t.cleanup()
-  })
-
   it("POST /api/auto-scan sets the fallback rescan interval and validates the body", async () => {
     const t = setup()
     const calls: number[] = []
@@ -344,7 +322,7 @@ describe("api", () => {
     t.cleanup()
   })
 
-  // autoWatch / autoScanMinutes / autoFetchMinutes 有运行期副作用（监听器 + 两个定时器）。
+  // autoWatch / autoScanMinutes 有运行期副作用（监听器和重扫定时器）。
   // 通用写入口只落盘的话，读回来的值和真正在跑的东西能一直不一致到进程退出——面板显示
   // 「每 10 分钟」，实际还是启动时那个间隔，且毫无迹象。applyConfig 拿到 next+prev，
   // 由它逐字段 diff、只重装真变了的——这里验证两份配置传得对
@@ -421,7 +399,6 @@ describe("api", () => {
 
     expect((await put('{"autoScanMinutes": 1e999}')).status).toBe(400) // JSON.parse → Infinity
     expect((await put('{"autoScanMinutes": 43200}')).status).toBe(400) // 30 天，超 32 位毫秒
-    expect((await put('{"autoFetchMinutes": 1e999}')).status).toBe(400)
     expect(loadConfig(t.configFile).autoScanMinutes).toBe(30) // 一个都没落盘
     t.cleanup()
   })

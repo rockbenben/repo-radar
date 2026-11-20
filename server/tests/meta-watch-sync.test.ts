@@ -55,7 +55,6 @@ describe("PATCH /api/repos/:id/meta 与监听器的同步", () => {
       watcher,
       listRepos: () => store.list(),
       rescan: async () => {},
-      fetchAll: async () => {},
     })
     const app = createApi(store, configFile, { syncRepos: () => automation.applyRepos(store.list()) })
     const patch = (id: string, body: unknown) =>

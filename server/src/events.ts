@@ -1,3 +1,5 @@
+import type { ServerEventPayloads } from "./types"
+
 export interface WsClient {
   send(data: string): void
 }
@@ -13,7 +15,7 @@ export class WsHub {
     this.clients.delete(client)
   }
 
-  broadcast(type: string, payload: unknown): void {
+  broadcast<Type extends keyof ServerEventPayloads>(type: Type, payload: ServerEventPayloads[Type]): void {
     const message = JSON.stringify({ type, payload })
     for (const client of this.clients) {
       try {

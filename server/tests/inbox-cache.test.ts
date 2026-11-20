@@ -156,17 +156,11 @@ describe("InboxCache 的累计新到达数（面板关着时也照记）", () =>
   })
 })
 
-// TTL 与 backend.ts 的 INBOX_REFRESH_MS 耦合：定时器在 T、T+12m… 触发，而一轮里每个仓库的
-// fetchedAt 都落在 tick **之后** d 秒。两者相等时下一个 tick 的已过时间是 12m − d，
-// `Date.now() - at > TTL_MS` 恒假 —— 整轮没有一个仓库被判过期、直接空转，真实刷新间隔变成 24 分钟。
-//
-// 必须用 setSystemTime 而不是 spyOn(Date, "now")：set() 里落的是 `new Date().toISOString()`，
-// 构造器**不走** Date.now，spy 对它毫无作用——那样三个参数化用例其实都是 roundMs=0 的同一份拷贝，
-// 把 TTL 改成 11m59s（余量只剩 1 秒、用例名字在现实中为假）也照样全绿。
-// POLL_MS 直接 import 真常量，不在这里重抄：抄一份的话改轮询周期不会让任何测试变红。
+// fetchedAt 晚于定时器触发时间，缓存有效期必须给一轮查询留出余量。
+// setSystemTime 同时控制 set() 的 new Date() 和 isStale() 的 Date.now()。
 describe("InboxCache.isStale — 必须赶在下一个轮询 tick 之前过期", () => {
   afterEach(() => vi.useRealTimers())
-  for (const roundMs of [2_000, 10_000, 40_000]) {
+  for (const roundMs of [2_000, 40_000, 90_000]) {
     it(`一轮耗时 ${roundMs / 1000}s 时，下一个 tick 判为过期`, () => {
       const { file, cleanup } = tmpFile()
       const c = new InboxCache(file)

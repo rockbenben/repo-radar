@@ -1,12 +1,16 @@
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
-import { createBackend, createRescanScheduler, createStructureRescan, type Backend } from "../src/backend"
+import { createBackend, createRescanScheduler, createStructureRescan, INBOX_REFRESH_MS, type Backend } from "../src/backend"
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config"
+import * as github from "../src/github"
+import { pendingRepoOps } from "../src/queue"
+import type { RepoStatus } from "../src/types"
 import { RepoWatcher } from "../src/watcher"
+import { cleanupFixtures, git, makeBehindRepo, makeRepo } from "./fixtures"
 
 /** 手动可控的 promise，精确摆出「上一轮还没结束/还没开跑」的时序——与 serial.test.ts 同一手法 */
 function deferred<T>() {
@@ -40,8 +44,10 @@ function opts() {
 
 afterEach(async () => {
   for (const b of running.splice(0)) await b.stop()
+  vi.useRealTimers()
   for (const s of squatters.splice(0)) await new Promise((r) => s.close(r))
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 3 })
+  cleanupFixtures()
 })
 
 function track(b: Backend): Backend {
@@ -62,6 +68,162 @@ async function waitForFirstScan(b: Backend): Promise<void> {
 }
 
 describe("createBackend", () => {
+  it("coalesces GitHub copies, backs off after failure and keeps manual refresh immediate", async () => {
+    const o = { ...opts(), port: 0 }
+    const first = makeRepo()
+    const second = makeRepo()
+    git(first, "remote", "add", "origin", "https://github.com/example/project.git")
+    git(second, "remote", "add", "origin", "git@github.com:Example/Project.git")
+    saveConfig(o.configFile, { ...DEFAULT_CONFIG, manualRepos: [first, second], autoScanMinutes: 0 })
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+    const snapshot = { prs: 3, issues: 1, ciFailed: false, byViewer: true }
+    const getInbox = vi.spyOn(github, "getGithubInbox").mockResolvedValueOnce(null).mockResolvedValue(snapshot)
+    vi.spyOn(github, "getGithubDescription").mockResolvedValue({ description: "" })
+    vi.spyOn(github, "ghAvailable").mockResolvedValue(true)
+    try {
+      const b = track(createBackend(o))
+      await b.start()
+      const base = `http://127.0.0.1:${b.port}`
+      await vi.waitFor(() => expect(getInbox).toHaveBeenCalledTimes(1), { timeout: 10_000 })
+      expect((await fetch(`${base}/api/scan`, { method: "POST" })).status).toBe(200)
+      expect(getInbox).toHaveBeenCalledTimes(1)
+
+      expect((await fetch(`${base}/api/github/refresh`, { method: "POST" })).status).toBe(200)
+      expect(getInbox).toHaveBeenCalledTimes(2)
+      const copies = await (await fetch(`${base}/api/repos`)).json() as RepoStatus[]
+      expect(copies.map((repo) => repo.githubInbox)).toEqual([
+        expect.objectContaining(snapshot), expect.objectContaining(snapshot),
+      ])
+      vi.advanceTimersByTime(INBOX_REFRESH_MS)
+      await vi.waitFor(() => expect(getInbox).toHaveBeenCalledTimes(3), { timeout: 10_000 })
+      await b.stop()
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  it("applies global and repository auto-pull settings only to clean, behind branches", async () => {
+    const o = { ...opts(), port: 0 }
+    const first = makeBehindRepo()
+    const second = makeBehindRepo()
+    const firstUpstream = git(first, "rev-parse", "@{upstream}").trim()
+    git(first, "update-ref", "refs/remotes/origin/main", "HEAD")
+    saveConfig(o.configFile, { ...DEFAULT_CONFIG, manualRepos: [first, second], autoScanMinutes: 0, autoFetchMinutes: 1 })
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+    const b = track(createBackend(o))
+    await b.start()
+    const base = `http://127.0.0.1:${b.port}`
+    async function scan(): Promise<RepoStatus[]> {
+      const res = await fetch(`${base}/api/scan`, { method: "POST" })
+      expect(res.status).toBe(200)
+      return (await res.json()) as RepoStatus[]
+    }
+    async function repos(): Promise<RepoStatus[]> {
+      const res = await fetch(`${base}/api/repos`)
+      expect(res.status).toBe(200)
+      return (await res.json()) as RepoStatus[]
+    }
+    async function refreshRemotes() {
+      vi.advanceTimersByTime(60_000)
+      await vi.waitFor(() => expect(pendingRepoOps()).toBe(0), { timeout: 10_000 })
+    }
+    const send = (path: string, method: "PUT" | "PATCH", autoPull: boolean | null) =>
+      fetch(`${base}${path}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoPull }),
+      })
+
+    const initial = await scan()
+    expect(initial.find((r) => r.path === first)?.behind).toBe(0) // The new commit is visible only on the remote.
+    expect(initial.find((r) => r.path === second)?.behind).toBe(1)
+    const firstMeta = `/api/repos/${initial.find((r) => r.path === first)?.id}/meta`
+    const secondMeta = `/api/repos/${initial.find((r) => r.path === second)?.id}/meta`
+
+    expect((await send(firstMeta, "PATCH", true)).status).toBe(200)
+    writeFileSync(join(first, "draft.txt"), "local work")
+    await refreshRemotes()
+    expect((await repos()).find((r) => r.path === first)).toMatchObject({ behind: 1, autoPull: true })
+    expect(readFileSync(join(first, "draft.txt"), "utf8")).toBe("local work")
+    expect(readFileSync(join(first, "a.txt"), "utf8")).toBe("1")
+    rmSync(join(first, "draft.txt"))
+    await refreshRemotes()
+    const enabled = await repos()
+    expect(enabled.find((r) => r.path === first)).toMatchObject({ behind: 0, autoPull: true, lastCommit: { hash: firstUpstream } })
+    expect(enabled.find((r) => r.path === second)).toMatchObject({ behind: 1, autoPull: null })
+    expect(readFileSync(join(first, "a.txt"), "utf8")).toBe("2")
+
+    expect((await send(secondMeta, "PATCH", false)).status).toBe(200)
+    expect((await send("/api/config", "PUT", true)).status).toBe(200)
+    git(second, "update-ref", "refs/remotes/origin/main", "HEAD")
+    expect((await scan()).find((r) => r.path === second)).toMatchObject({ behind: 0, autoPull: false })
+    await refreshRemotes()
+    expect((await repos()).find((r) => r.path === second)).toMatchObject({ behind: 1, autoPull: false })
+
+    expect((await send(secondMeta, "PATCH", null)).status).toBe(200)
+    await refreshRemotes()
+    expect((await repos()).find((r) => r.path === second)).toMatchObject({ behind: 0, autoPull: null })
+    expect(readFileSync(join(second, "a.txt"), "utf8")).toBe("2")
+
+    writeFileSync(join(first, "local.env"), "remote version")
+    git(first, "add", "-f", "local.env")
+    git(first, "commit", "-m", "track local.env upstream")
+    git(first, "push")
+    git(first, "reset", "--hard", "HEAD~1")
+    git(first, "update-ref", "refs/remotes/origin/main", "HEAD")
+    writeFileSync(join(first, ".git", "info", "exclude"), "local.env\n")
+    writeFileSync(join(first, "local.env"), "ignored local version")
+    await refreshRemotes()
+    expect((await repos()).find((r) => r.path === first)).toMatchObject({ behind: 1, autoPull: true })
+    expect(readFileSync(join(first, "local.env"), "utf8")).toBe("ignored local version")
+  })
+
+  it("automatically skips a cached update when the remote branch has disappeared", async () => {
+    const o = { ...opts(), port: 0 }
+    const repo = makeBehindRepo()
+    const remote = git(repo, "remote", "get-url", "origin").trim()
+    git(remote, "update-ref", "-d", "refs/heads/main")
+    saveConfig(o.configFile, { ...DEFAULT_CONFIG, manualRepos: [repo], autoPull: true, autoFetchMinutes: 1 })
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const b = track(createBackend(o))
+      await b.start()
+      await waitForFirstScan(b)
+      vi.advanceTimersByTime(60_000)
+      await vi.waitFor(() => {
+        expect(warn).toHaveBeenCalledWith("[repo-radar] Remote refresh failed for", repo, expect.stringContaining("git fetch"))
+      }, { timeout: 10_000 })
+      expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("1")
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it("runs local scans and the remote refresh timer independently, leaving the branch unchanged in fetch-only mode", async () => {
+    const o = { ...opts(), port: 0 }
+    const repo = makeBehindRepo()
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    saveConfig(o.configFile, { ...DEFAULT_CONFIG, manualRepos: [repo], autoScanMinutes: 0 })
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] })
+    const b = track(createBackend(o))
+    await b.start()
+    const base = `http://127.0.0.1:${b.port}`
+    expect((await fetch(`${base}/api/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ autoFetchMinutes: 60 }),
+    })).status).toBe(200)
+    const scan = await fetch(`${base}/api/scan`, { method: "POST" })
+    expect(await scan.json()).toEqual([expect.objectContaining({ behind: 0 })])
+    vi.advanceTimersByTime(60 * 60_000)
+    await vi.waitFor(async () => {
+      const response = await fetch(`${base}/api/repos`)
+      expect((await response.json()) as RepoStatus[]).toEqual([expect.objectContaining({ behind: 1 })])
+    }, { timeout: 10_000 })
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("1")
+  })
+
   it("start 后端口可访问，/api/version 自报注入的版本", async () => {
     const b = track(createBackend(opts()))
     await b.start()
@@ -115,8 +277,9 @@ describe("createBackend", () => {
         if (e.type === "scan:done") resolve(e.payload)
       })
     })
-    await fetch(`http://127.0.0.1:${PORT}/api/scan`, { method: "POST" })
+    const rescan = await fetch(`http://127.0.0.1:${PORT}/api/scan`, { method: "POST" })
     const payload = await done
+    expect(rescan.headers.get("X-Repo-Radar-Scan-At")).toBe(payload.at)
     expect(Number.isNaN(Date.parse(payload.at))).toBe(false)
     expect(Array.isArray(payload.repos)).toBe(true)
     ws.close()
@@ -784,4 +947,26 @@ describe("stop() 与在飞重扫的时序", () => {
       closeSpy.mockRestore()
     }
   })
+})
+
+it("published scans invalidate heatmap results even when file watching is off", async () => {
+  const path = makeRepo()
+  const o = opts()
+  saveConfig(o.configFile, { ...DEFAULT_CONFIG, manualRepos: [path], autoWatch: false })
+  const b = track(createBackend(o))
+  await b.start()
+  await waitForFirstScan(b)
+  const base = `http://127.0.0.1:${b.port}`
+  const total = async () => {
+    const response = await fetch(`${base}/api/stats/heatmap?days=365`)
+    const { days } = await response.json() as { days: { count: number }[] }
+    return days.reduce((sum, day) => sum + day.count, 0)
+  }
+  expect(await total()).toBe(1)
+  writeFileSync(join(path, "new.txt"), "new commit")
+  git(path, "add", "-A")
+  git(path, "commit", "-m", "new commit")
+  const rescan = await fetch(`${base}/api/scan`, { method: "POST" })
+  expect(rescan.ok).toBe(true)
+  expect(await total()).toBe(2)
 })

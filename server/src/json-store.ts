@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { renameWithRetry } from "./atomic-write"
 
@@ -9,8 +10,10 @@ export interface JsonStoreOptions<T> {
   /** 落盘防抖毫秒数；0（默认）= 每次 set/delete 立即写。
    *  轮询类使用者（一轮连着 set 几十次）给个 1000，避免频繁写盘 */
   debounceMs?: number
+  /** User data retries unreadable files and preserves malformed bytes before rebuilding. */
+  protectOnLoad?: boolean
   /**
-   * 文件存在但整份读不出/解析不了时调用（内容已按空处理）。
+   * 文件存在但整份读不出或无法解析时调用。
    *
    * 不给默认实现、也不在这里直接 console：底座不知道自己是哪个文件，日志里一句
    * 「JSON 坏了」对排查毫无用处。但**必须有人接**——对身份账本而言，这是
@@ -39,11 +42,10 @@ export interface JsonStoreOptions<T> {
  * 落盘 Map 的共用底座。github-desc / github-inbox / repo-cache / repo-identity 四个文件
  * 形状完全相同（load 时逐条校验、坏文件当空、写盘失败不中断），各写一遍必然逐渐走样。
  *
- * 失败一律不抛：这四个文件都是「丢了最多是慢一轮或退化成旧行为」的性质，让磁盘满/只读
- * 把整个应用带崩是不划算的。**但不抛 ≠ 不说**——读坏了走 onCorrupt，写失败走 onWriteError，
- * 两条路径都必须留下痕迹。
+ * 缓存读取失败时可重建。身份账本延迟到使用时读取，失败则保留原文件并在下次读取时重试。
  */
 export class JsonStore<T> {
+  private loaded = false
   private map = new Map<string, T>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private dirty = false
@@ -53,23 +55,35 @@ export class JsonStore<T> {
   private readonly debounceMs: number
   private readonly onWriteError?: (err: unknown) => void
 
-  constructor(opts: JsonStoreOptions<T>) {
+  constructor(private readonly opts: JsonStoreOptions<T>) {
     this.file = opts.file
     this.debounceMs = opts.debounceMs ?? 0
     this.onWriteError = opts.onWriteError
-    this.load(opts.isValid, opts.onCorrupt)
+    if (!opts.protectOnLoad) this.ensureLoaded()
   }
 
-  private load(isValid: (v: unknown) => v is T, onCorrupt?: (err: unknown) => void): void {
+  private ensureLoaded(): void {
+    if (this.loaded) return
+    let text: string
     try {
-      if (!existsSync(this.file)) return
-      const obj = JSON.parse(readFileSync(this.file, "utf8")) as Record<string, unknown>
-      for (const [k, v] of Object.entries(obj)) if (isValid(v)) this.map.set(k, v)
+      text = readFileSync(this.file, "utf8")
     } catch (err) {
-      // 坏文件当作空继续跑（缓存只是加速，账本坏了也只是退化成改造前行为），但必须留痕：
-      // 静默吞掉的话，用户看到的是「所有改过名的仓库标签消失了」而日志里一个字都没有
-      onCorrupt?.(err)
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        this.opts.onCorrupt?.(err)
+        if (this.opts.protectOnLoad) throw err
+      }
+      this.loaded = true
+      return
     }
+    try {
+      const obj: unknown = JSON.parse(text)
+      if (typeof obj !== "object" || obj === null || Array.isArray(obj)) throw new Error("expected a JSON object")
+      for (const [key, value] of Object.entries(obj)) if (this.opts.isValid(value)) this.map.set(key, value)
+    } catch (err) {
+      this.opts.onCorrupt?.(err)
+      if (this.opts.protectOnLoad) renameWithRetry(this.file, `${this.file}.corrupt-${randomUUID()}`)
+    }
+    this.loaded = true
   }
 
   private write(): void {
@@ -113,21 +127,25 @@ export class JsonStore<T> {
   }
 
   get(key: string): T | undefined {
+    this.ensureLoaded()
     return this.map.get(key)
   }
 
   set(key: string, value: T): void {
+    this.ensureLoaded()
     this.map.set(key, value)
     this.schedule()
   }
 
   delete(key: string): boolean {
+    this.ensureLoaded()
     if (!this.map.delete(key)) return false
     this.schedule()
     return true
   }
 
   entries(): [string, T][] {
+    this.ensureLoaded()
     return [...this.map]
   }
 

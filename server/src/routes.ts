@@ -1,29 +1,30 @@
 import { type Context, Hono } from "hono"
 import { type Config, checkMinutes, loadConfig, mergeConfig, saveConfig, validateConfigPatch } from "./config"
 import { WsHub } from "./events"
-import { ACTION_ARGS, commitRepo, createBranch, createStash, currentGitIdentity, deleteBranches, discardChanges, dropStashes, getRepoDetail, getRepoDiff, listStashes, type RepoAction, repoId, stashAction, stashDiff, switchBranch } from "./git"
+import { ACTION_ARGS, commitRepo, createBranch, createStash, currentGitIdentity, deleteBranches, discardChanges, dropStashes, getMergedMainBranches, getRepoDetail, getRepoDiff, listStashes, type RepoAction, repoId, stashAction, stashDiff, switchBranch } from "./git"
 import { getGithubStatus } from "./github"
 import { buildManifest, importManifest, isManifest } from "./manifest"
 import { mapLimit } from "./map-limit"
-import { openTarget } from "./open"
+import { type OpenTarget, openTarget } from "./open"
 import { PORT } from "./port"
 import { trackPending, withRepoLock } from "./queue"
 import { normalizePath } from "./repo-identity"
+import { RepoTargetError, withRepoTarget } from "./repo-target"
 import { cloneRepo, createProject } from "./scaffold"
 import { aggregateHeatmap, buildActivity } from "./stats"
 import { deriveGroup, type RepoStore } from "./store"
 import { type BatchDeps, startBatch, startExec } from "./tasks"
-import type { RepoStatus } from "./types"
+import type { ActivityResponse, DiffPreview, HeatmapResponse, RepoMutation, RepoStatus, ScanStatus, StashesResponse, TaskStarted, WorklogResponse } from "./types"
 import { collectUserEmails, getWorklog } from "./worklog"
 
 export interface ApiExtras {
   hub?: WsHub
-  openFn?: (template: string, path: string) => void
+  openFn?: (template: string, path: string, target: OpenTarget) => void | Promise<void>
+  openDirectory?: (path: string) => Promise<string>
   rescan?: () => Promise<RepoStatus[]>
   rescanFresh?: () => Promise<RepoStatus[]> // 服务端自己改了磁盘（clone/新建）后的重扫：保证扫描在改动之后开始，不共乘进行中的一轮
   setWatch?: (enabled: boolean) => Promise<void> // 开/关文件监听实时刷新（持久化到 config.autoWatch）
   setAutoScan?: (minutes: number) => Promise<void> // 设置兜底全量重扫间隔（分钟，0=关）
-  setAutoFetch?: (minutes: number) => Promise<void> // 设置定时后台 fetch 间隔（分钟，0=关）
   setWatchLimit?: (limit: number) => Promise<void> // 设置同时监听的仓库数上限（0=无上限）
   applyConfig?: (next: Config, prev: Config) => Promise<void> // PUT /api/config 落盘后让监听器/定时器跟上（内部按 prev 逐字段 diff，只重装变了的）
   /**
@@ -49,6 +50,7 @@ export interface ApiExtras {
    * 这里只当字符串透传，不在 server 里另抄一份判据。
    */
   checkUpdate?: (lang?: string) => Promise<string>
+  manualUpdates?: boolean
   /**
    * 桌面的原生目录选择器。服务器部署没有原生窗口，不注入这个钩子；
    * web 据 /api/version 的能力位决定显不显示「选择文件夹」按钮。
@@ -91,8 +93,13 @@ export function originAllowed(origin: string | undefined, port: number = PORT, a
 
 export function createApi(store: RepoStore, configFile: string, extras: ApiExtras = {}): Hono {
   const app = new Hono()
+  app.onError((err, c) => {
+    if (err instanceof RepoTargetError) return c.json({ error: err.message }, 409)
+    console.error(err)
+    return c.text("Internal Server Error", 500)
+  })
   const hub = extras.hub ?? new WsHub()
-  const openFn = extras.openFn ?? openTarget
+  const openFn = extras.openFn ?? ((template: string, path: string, target: OpenTarget) => openTarget(template, path, target, extras.openDirectory))
   const rescan = extras.rescan ?? (() => store.refreshAll())
   const rescanFresh = extras.rescanFresh ?? rescan
   /**
@@ -122,8 +129,8 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   }
 
   // 变更类端点的统一骨架：先查 repo（否则 404）→ 执行 run（run 内做 body 校验，失败可直接返回 Response，
-  // git 操作自行用 withRepoLock 包）→ 刷新 + 广播 repo:updated + 返回 { result, repo }。
-  async function mutateRepo(c: Context, run: (repo: RepoStatus) => Promise<Response | { result: unknown }>): Promise<Response> {
+  // git 操作自行用 withRepoTarget 包）→ 刷新 + 广播 repo:updated + 返回 { result, repo }。
+  async function mutateRepo<Result>(c: Context, run: (repo: RepoStatus) => Promise<Response | { result: Result }>): Promise<Response> {
     const repo = store.get(c.req.param("id") ?? "")
     if (!repo) return c.json({ error: "repo not found" }, 404)
     const out = await run(repo)
@@ -132,7 +139,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     // 指纹探针集合不可能证明完备，这里读缓存就是在把用户刚触发的变更从响应里抹掉
     const updated = await store.refreshOne(repo.id, { skipCache: true })
     if (updated) hub.broadcast("repo:updated", { repo: updated })
-    return c.json({ result: out.result, repo: updated ?? repo })
+    return c.json<RepoMutation<Result>>({ result: out.result, repo: updated ?? repo })
   }
   const jsonBody = async (c: Context): Promise<Record<string, unknown>> => {
     try {
@@ -164,6 +171,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       version: extras.version ?? "0.0.0",
       canQuit: extras.shutdown !== undefined,
       canPickDirectory: extras.pickDirectory !== undefined,
+      manualUpdates: extras.manualUpdates === true,
       port: boundPort(),
     }),
   )
@@ -242,7 +250,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     if (typeof body.message !== "string" || body.message.trim() === "")
       return c.json({ error: "message must be a non-empty string" }, 400)
     const push = body.push === true
-    const r = await withRepoLock(repo.id, () => commitRepo(repo.path, body.message as string, push))
+    const r = await withRepoTarget(repo, (path) => commitRepo(path, body.message as string, push))
     const updated = await store.refreshOne(repo.id, { skipCache: true }) // 刚 commit/push 过，见 RefreshOptions
     if (updated) hub.broadcast("repo:updated", { repo: updated })
     return c.json(r)
@@ -252,20 +260,29 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   app.post("/api/repos/:id/prune-branches", async (c) => {
     const repo = store.get(c.req.param("id"))
     if (!repo) return c.json({ error: "repo not found" }, 404)
-    let body: { names?: unknown }
-    try {
-      body = await c.req.json()
-    } catch {
-      body = {}
+    const raw = await c.req.text()
+    let body: { names?: unknown } = {}
+    if (raw !== "") {
+      try {
+        const parsed: unknown = JSON.parse(raw)
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          return c.json({ error: "body must be a JSON object" }, 400)
+        }
+        body = parsed
+      } catch {
+        return c.json({ error: "invalid JSON body" }, 400)
+      }
     }
-    const requested =
-      Array.isArray(body.names) && body.names.every((x) => typeof x === "string")
-        ? (body.names as string[])
-        : repo.mergedBranches
-    // 只允许删除探测到的已合并分支，避免误删未合并/主干
-    const names = requested.filter((n) => repo.mergedBranches.includes(n))
+    const requested = body.names
+    if (requested !== undefined && (!Array.isArray(requested) || !requested.every((name) => typeof name === "string"))) {
+      return c.json({ error: "names must be an array of branch names" }, 400)
+    }
+    const names = [...new Set((requested ?? repo.mergedBranches).filter((name) => repo.mergedBranches.includes(name)))]
     if (names.length === 0) return c.json({ results: [], repo })
-    const results = await withRepoLock(repo.id, () => deleteBranches(repo.path, names))
+    const results = await withRepoTarget(repo, async (path) => {
+      const current = new Set(await getMergedMainBranches(path))
+      return deleteBranches(path, names.filter((name) => current.has(name)))
+    })
     // skipCache 在这条路径上是硬性的：`git branch -d` 曾经完全不改指纹（松散引用只动
     // refs/heads 目录的 mtime，而那个目录当初不在探针里），于是删完分支返回和广播的
     // 仍是那几个已经不存在的分支——用户点了按钮、git 成功了、界面说什么都没发生
@@ -285,7 +302,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       path: r.path,
       stashes: await listStashes(r.path).catch(() => []),
     }))
-    return c.json({ repos: groups.filter((g) => g.stashes.length > 0) })
+    return c.json<StashesResponse>({ repos: groups.filter((g) => g.stashes.length > 0) })
   })
 
   // 要求完整 sha（sha-1 40 位 / sha-256 64 位）：stash 操作全部按完整 %H 定位（前端始终传完整 sha）。
@@ -301,7 +318,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     try {
       const diff = await stashDiff(repo.path, sha)
       if (diff === null) return c.json({ error: "stash not found" }, 404) // 确实没有 → 404
-      return c.json({ diff })
+      return c.json<DiffPreview>({ diff })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500) // 读取失败 → 500，前端显示错误
     }
@@ -315,7 +332,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       const sha = typeof body.sha === "string" ? body.sha.toLowerCase() : "" // 统一小写，匹配 git %H
       if (op !== "apply" && op !== "pop" && op !== "drop") return c.json({ error: "bad action" }, 400)
       if (!isSha(sha)) return c.json({ error: "bad sha" }, 400)
-      return { result: await withRepoLock(repo.id, () => stashAction(repo.path, sha, op)) }
+      return { result: await withRepoTarget(repo, (path) => stashAction(path, sha, op)) }
     }),
   )
 
@@ -339,16 +356,19 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       byRepo.set(repoId, arr)
     }
     const results: { repoId: string; name: string; sha: string; ok: boolean; message: string }[] = []
+    const targets = [...byRepo].map(([repoId, shas]) => ({ repoId, shas, repo: store.get(repoId) }))
     // 整段循环算一笔待办（见 trackPending）：仓库之间那段 refreshOne 是放了锁的，
     // 只靠逐次 withRepoLock，退出排空会在这里答「已排空」，而循环随即又去 drop 下一个仓库的 stash
     await trackPending(async () => {
-      for (const [repoId, shas] of byRepo) {
-        const repo = store.get(repoId)
+      for (const { repoId, shas, repo } of targets) {
         if (!repo) {
           for (const sha of shas) results.push({ repoId, name: repoId, sha, ok: false, message: "repo not found" })
           continue
         }
-        const res = await withRepoLock(repo.id, () => dropStashes(repo.path, shas))
+        const res = await withRepoTarget(repo, (path) => dropStashes(path, shas)).catch((err) => {
+          if (!(err instanceof RepoTargetError)) throw err
+          return shas.map((sha) => ({ sha, ok: false, message: err.message }))
+        })
         const label = repo.displayName ?? repo.name
         for (const r of res) results.push({ repoId, name: label, ...r })
         const updated = await store.refreshOne(repo.id, { skipCache: true }) // 刚 drop 过 stash，见 RefreshOptions
@@ -364,7 +384,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       const body = await jsonBody(c)
       const branch = typeof body.branch === "string" ? body.branch.trim() : ""
       if (branch === "") return c.json({ error: "bad branch" }, 400)
-      return { result: await withRepoLock(repo.id, () => switchBranch(repo.path, branch)) }
+      return { result: await withRepoTarget(repo, (path) => switchBranch(path, branch)) }
     }),
   )
 
@@ -373,7 +393,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     mutateRepo(c, async (repo) => {
       const body = await jsonBody(c)
       const message = typeof body.message === "string" ? body.message : ""
-      return { result: await withRepoLock(repo.id, () => createStash(repo.path, message)) }
+      return { result: await withRepoTarget(repo, (path) => createStash(path, message)) }
     }),
   )
 
@@ -383,12 +403,12 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       const body = await jsonBody(c)
       const name = typeof body.name === "string" ? body.name.trim() : ""
       if (name === "") return c.json({ error: "bad name" }, 400)
-      return { result: await withRepoLock(repo.id, () => createBranch(repo.path, name)) }
+      return { result: await withRepoTarget(repo, (path) => createBranch(path, name)) }
     }),
   )
 
   // 丢弃全部未提交改动（破坏性，前端二次确认）
-  app.post("/api/repos/:id/discard", (c) => mutateRepo(c, async (repo) => ({ result: await withRepoLock(repo.id, () => discardChanges(repo.path)) })))
+  app.post("/api/repos/:id/discard", (c) => mutateRepo(c, async (repo) => ({ result: await withRepoTarget(repo, (path) => discardChanges(path)) })))
 
   // 「疑似旧身份」手动迁移：用户确认「这张新卡就是那条老记录搬来的」。
   // 四道重验在 store.rebindSuspect 里（挂账是几轮前的观测，前提可能过期）；成功即整轮重扫——
@@ -413,12 +433,8 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   app.patch("/api/repos/:id/meta", async (c) => {
     const repo = store.get(c.req.param("id"))
     if (!repo) return c.json({ error: "repo not found" }, 404)
-    let body: { favorite?: unknown; tags?: unknown; group?: unknown; archived?: unknown; note?: unknown }
-    try {
-      body = await c.req.json()
-    } catch {
-      return c.json({ error: "invalid JSON body" }, 400)
-    }
+    const body = await readBodyObject(c)
+    if (!body) return c.json({ error: "body must be a JSON object" }, 400)
     if (body.favorite !== undefined && typeof body.favorite !== "boolean")
       return c.json({ error: "favorite must be a boolean" }, 400)
     if (body.tags !== undefined && (!Array.isArray(body.tags) || !body.tags.every((t) => typeof t === "string")))
@@ -429,6 +445,8 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       return c.json({ error: "archived must be a boolean" }, 400)
     if (body.note !== undefined && body.note !== null && typeof body.note !== "string")
       return c.json({ error: "note must be a string or null" }, 400)
+    if (body.autoPull !== undefined && body.autoPull !== null && typeof body.autoPull !== "boolean")
+      return c.json({ error: "autoPull must be a boolean or null" }, 400)
 
     const cfg = loadConfig(configFile)
     // 落盘前记下这两个字段的旧值：它们不只是显示用的标记，还决定 watcher 怎么对待这个仓库
@@ -464,6 +482,8 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       if (note === null || note.trim() === "") delete cfg.notes[repo.id]
       else cfg.notes[repo.id] = note.trim()
     }
+    if (body.autoPull === null) delete cfg.autoPullOverrides[repo.id]
+    else if (typeof body.autoPull === "boolean") cfg.autoPullOverrides[repo.id] = body.autoPull
     saveConfig(configFile, cfg)
 
     const updated = store.redecorate(repo.id)
@@ -483,7 +503,12 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     return repo ? c.json(repo) : c.json({ error: "repo not found" }, 404)
   })
 
-  app.post("/api/scan", async (c) => c.json(await rescan()))
+  app.post("/api/scan", async (c) => {
+    const repos = await rescan()
+    const at = extras.lastScanAt?.()
+    if (at) c.header("X-Repo-Radar-Scan-At", at)
+    return c.json(repos)
+  })
 
   // 立即重拉各仓库的 GitHub「等我的」（PR/issue/CI），跳过 TTL；结果经 repo:updated 广播回来。等整轮跑完再返回。
   app.post("/api/github/refresh", async (c) => {
@@ -520,7 +545,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     // 不先挡 undefined 的话 Math.floor(undefined)=NaN 会一路走到落盘，写成 null。
     // 报错一律写 minutes（本端点的请求字段），不写配置字段名
     if (body.minutes === undefined) return c.json({ error: "minutes must be a non-negative number" }, 400)
-    const problem = checkMinutes({ autoScanMinutes: body.minutes }, "autoScanMinutes", "minutes")
+    const problem = checkMinutes(body.minutes, "minutes")
     if (problem !== null) return c.json({ error: problem }, 400)
     const minutes = body.minutes as number // checkMinutes 已保证是整数，无须 floor
     if (extras.setAutoScan) await extras.setAutoScan(minutes)
@@ -532,7 +557,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   // watch 让面板能如实显示「250 个中监听 200 个」：截断只写日志的话，常驻托盘的应用
   // 等于什么都没说，用户没法回答「为什么这个仓库不自动刷新」
   app.get("/api/scan", (c) =>
-    c.json({
+    c.json<ScanStatus>({
       lastScanAt: extras.lastScanAt?.() ?? null,
       watch: extras.watchCoverage?.() ?? { watched: 0, total: 0 },
     }),
@@ -551,18 +576,6 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     const limit = body.limit as number
     if (extras.setWatchLimit) await extras.setWatchLimit(limit)
     return c.json({ ok: true, watchLimit: limit, watch: extras.watchCoverage?.() ?? { watched: 0, total: 0 } })
-  })
-
-  // 设置定时后台 fetch 间隔（分钟，0=关）；持久化到 config.autoFetchMinutes
-  app.post("/api/auto-fetch", async (c) => {
-    const body = await readBodyObject(c)
-    if (body === null) return c.json({ error: "body must be a JSON object" }, 400)
-    if (body.minutes === undefined) return c.json({ error: "minutes must be a non-negative number" }, 400)
-    const problem = checkMinutes({ autoFetchMinutes: body.minutes }, "autoFetchMinutes", "minutes")
-    if (problem !== null) return c.json({ error: problem }, 400)
-    const minutes = body.minutes as number // checkMinutes 已保证是整数，无须 floor
-    if (extras.setAutoFetch) await extras.setAutoFetch(minutes)
-    return c.json({ ok: true, autoFetchMinutes: minutes })
   })
 
   app.post("/api/new-project", async (c) => {
@@ -621,13 +634,18 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     }
     if (typeof body.target !== "string" || !OPEN_TARGETS.has(body.target))
       return c.json({ error: "target must be editor|terminal|explorer" }, 400)
-    const cfg = loadConfig(configFile)
-    const template = cfg.open[body.target as keyof Config["open"]]
+    const target = body.target as OpenTarget
+    const template = loadConfig(configFile).open[target]
     // 空模板 = 用户在「扫描与打开方式」里把这条命令清空了（或手改配置删掉了）。此时什么都别做，
     // 尤其不能往下走：spawn("") 静默无事发生，而 lastOpened 照写、接口照回 200，卡片会立刻显示
     // 「刚刚打开」并跳到「最近打开」排序的最前面——根本没有程序被启动，界面却在说反话
     if (template.trim() === "") return c.json({ error: `open.${body.target} is empty` }, 400)
-    openFn(template, repo.path)
+    try {
+      await openFn(template, repo.path, target)
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 502)
+    }
+    const cfg = loadConfig(configFile)
     // 记住"上次打开"时间，让常用项目能按此排序置顶
     cfg.lastOpened[repo.id] = new Date().toISOString()
     saveConfig(configFile, cfg)
@@ -644,7 +662,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     // scope="single"：这是详情面板里的单个仓库动作，不是看板上的批量——前端据此不弹
     // 顶栏那条「批量…完成」的横幅（结果就地显示在详情面板里）
     const taskId = startBatch(action as RepoAction, [repo.id], batchDeps, "single")
-    return c.json({ taskId })
+    return c.json<TaskStarted>({ taskId })
   })
 
   app.post("/api/batch", async (c) => {
@@ -659,7 +677,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     if (!Array.isArray(body.repoIds) || body.repoIds.length === 0 || !body.repoIds.every((x) => typeof x === "string"))
       return c.json({ error: "repoIds must be a non-empty string array" }, 400)
     const taskId = startBatch(body.action as RepoAction, body.repoIds, batchDeps)
-    return c.json({ taskId })
+    return c.json<TaskStarted>({ taskId })
   })
 
   // 在选中仓库批量执行一条 shell 命令；dryRun 只预演不执行
@@ -676,7 +694,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     if (!Array.isArray(body.repoIds) || body.repoIds.length === 0 || !body.repoIds.every((x) => typeof x === "string"))
       return c.json({ error: "repoIds must be a non-empty string array" }, 400)
     const taskId = startExec(command, body.repoIds, batchDeps, body.dryRun === true)
-    return c.json({ taskId })
+    return c.json<TaskStarted>({ taskId })
   })
 
   // 导出：当前仓库清单（路径 + 远程 + 分组 + 标签），供备份 / 换机 / 分享
@@ -750,7 +768,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     const prev = loadConfig(configFile)
     const next = mergeConfig(prev, body)
     saveConfig(configFile, next)
-    // 自动化字段有运行期副作用（监听器、两个定时器），光落盘不算改完；applyConfig 内部
+    // 自动化字段有运行期副作用（监听器、重扫定时器），光落盘不算改完；applyConfig 内部
     // 逐字段与 prev 比对，只重装真变了的——存标签/备注或原值 round-trip 都不会动监听器。
     // 抛错时仍返回 200，理由见 applyConfigSafely
     await applyConfigSafely(next, prev)
@@ -770,10 +788,10 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       // 汇总统计排除「已排除」的仓库（单仓库热力图仍可查看被排除的）
       targets = store.list().filter((r) => !r.archived).map((r) => ({ id: r.id, path: r.path }))
     }
-    return c.json({ days: await aggregateHeatmap(targets, days) })
+    return c.json<HeatmapResponse>({ days: await aggregateHeatmap(targets, days) })
   })
 
-  app.get("/api/stats/activity", (c) => c.json({ repos: buildActivity(store.list().filter((r) => !r.archived)) }))
+  app.get("/api/stats/activity", (c) => c.json<ActivityResponse>({ repos: buildActivity(store.list().filter((r) => !r.archived)) }))
 
   // 工作记录：汇总未排除仓库在 [since, until] 天范围内的提交（全部本地分支、排除 merge）
   app.get("/api/worklog", async (c) => {
@@ -796,7 +814,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       collectUserEmails(repos.map((r) => r.path)),
     ])
     const me = me0 ? { ...me0, emails: [...new Set([me0.email, ...repoEmails])] } : null
-    return c.json({ commits, since, until, failed, me })
+    return c.json<WorklogResponse>({ commits, since, until, failed, me })
   })
 
   return app

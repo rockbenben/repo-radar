@@ -1,12 +1,14 @@
 import { NO_SHOW_SIGNATURE, runGit, sortableTime } from "./git"
+import { localDay } from "./local-date"
 import { mapLimit } from "./map-limit"
 import type { ActivityItem, HeatmapDay, RepoStatus } from "./types"
 
 const TTL_MS = 5 * 60_000
-const cache = new Map<string, { days: Map<string, number>; fetchedAt: number }>()
+let cache = new Map<string, { days: Map<string, number>; fetchedAt: number }>()
 
 export function clearStatsCache(): void {
-  cache.clear()
+  // 让扫描前已发出的查询只回填旧 Map，避免在扫描后复用它的结果。
+  cache = new Map()
 }
 
 /** 丢弃单个仓库的所有窗口缓存——提交后调用，避免热力图落后于活跃列表最多一个 TTL */
@@ -17,24 +19,25 @@ export function evictRepoStats(repoId: string): void {
 }
 
 export async function repoCommitDays(path: string, repoId: string, sinceDays: number): Promise<Map<string, number>> {
+  const scanCache = cache
   const key = `${repoId}:${sinceDays}`
-  const hit = cache.get(key)
+  const hit = scanCache.get(key)
   if (hit && Date.now() - hit.fetchedAt < TTL_MS) return hit.days
   const days = new Map<string, number>()
   try {
     // --branches：只数本地分支的提交，排除 fetch 下来的远程跟踪提交（那些不是你写的）。
-    // 按 committer 本地日期（%cI）分桶，与 --since（按 committer date 过滤）保持一致——
-    // 否则 rebase 过的提交会通过时间窗口却落在窗口外的格子里，计入总数却不显示。
-    // 前端 Heatmap 用浏览器本地日期渲染，同机单用户场景与此一致。
+    // %cI 包含提交所在时区的偏移。先转为本机时间，再按天分桶，与工作记录一致。
     const r = await runGit(path, [...NO_SHOW_SIGNATURE, "log", `--since=${sinceDays} days ago`, "--format=%cI", "--branches"])
     for (const line of r.stdout.split("\n")) {
-      const date = line.trim().slice(0, 10)
-      if (date !== "") days.set(date, (days.get(date) ?? 0) + 1)
+      const instant = new Date(line.trim())
+      if (Number.isNaN(instant.getTime())) continue
+      const day = localDay(instant)
+      days.set(day, (days.get(day) ?? 0) + 1)
     }
   } catch {
     // 空仓库 / 非 git 目录：空热力图
   }
-  cache.set(key, { days, fetchedAt: Date.now() })
+  scanCache.set(key, { days, fetchedAt: Date.now() })
   return days
 }
 

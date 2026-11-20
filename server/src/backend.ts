@@ -3,26 +3,28 @@ import { dirname, join } from "node:path"
 import { serve } from "@hono/node-server"
 import { createNodeWebSocket } from "@hono/node-ws"
 import { createAutomation } from "./automation"
-import { DEFAULT_CONFIG, loadConfig, saveConfig } from "./config"
+import { type Config, DEFAULT_CONFIG, loadConfig, saveConfig } from "./config"
 import { DescCache } from "./desc-cache"
 import { WsHub } from "./events"
-import { runRepoAction } from "./git"
+import { fastForwardUpstream, fetchRemoteUpstream } from "./git"
 import { getGithubDescription, getGithubInbox, ghAvailable, githubRemoteUrl, githubSlug } from "./github"
 import { InboxCache } from "./inbox-cache"
 import { mapLimit } from "./map-limit"
 import { isPortUnavailable, PORT, portCandidates } from "./port"
 import { forgetRememberedPort, loadRememberedPort, saveRememberedPort } from "./port-state"
-import { drainRepoLocks, pendingRepoOps, trackPending, withRepoLock } from "./queue"
+import { drainRepoLocks, pendingRepoOps, trackPending } from "./queue"
 import { RepoCache } from "./repo-cache"
 import { IdentityLedger } from "./repo-identity"
+import { withRepoTarget } from "./repo-target"
 import { type ApiExtras, createApi, originAllowed } from "./routes"
 import { createSerialQueue } from "./serial"
 import { createShutdown } from "./shutdown"
 import { diskStatic } from "./static"
-import { evictRepoStats } from "./stats"
+import { clearStatsCache, evictRepoStats } from "./stats"
 import { RepoStore } from "./store"
 import type { GithubInbox, RepoStatus } from "./types"
 import { RepoWatcher } from "./watcher"
+import { readWorktreeMarker, worktreeMarkers } from "./worktree-marker"
 
 export interface BackendOptions {
   configFile: string
@@ -31,7 +33,7 @@ export interface BackendOptions {
   port?: number // 仅测试用；正常走 REPO_RADAR_PORT / DEFAULT_PORT
   allowPortFallback?: boolean // 端口绑不上时可否改用别的（默认 true）。显式端口/开发模式下必须关掉，见 portCandidateList
   devOrigins?: boolean // 是否放行 vite dev server（5173）作为同源。**只能在开发模式下为真**，见 routes.ts 的 DEV_ORIGINS
-  extras?: Pick<ApiExtras, "autostart" | "shutdown" | "checkUpdate" | "pickDirectory">
+  extras?: Pick<ApiExtras, "autostart" | "shutdown" | "checkUpdate" | "pickDirectory" | "openDirectory" | "manualUpdates">
 }
 
 /** 一轮 inbox 补全里，某个仓库的「等我的」发生了变化。before 为 null 表示此前没有缓存（首次拿到） */
@@ -307,7 +309,9 @@ export function createRescanScheduler<T>(deps: {
 }
 
 // 导出给测试：inbox-cache 的 TTL 必须严格小于它并留出一轮执行时间，重抄一遍常数的话改这里不会有任何测试变红
-export const INBOX_REFRESH_MS = 12 * 60 * 1000
+export const INBOX_REFRESH_MS = 30 * 60 * 1000
+const INBOX_RETRY_BASE_MS = 5 * 60 * 1000
+const INBOX_RETRY_MAX_MS = 60 * 60 * 1000
 const DRAIN_TIMEOUT_MS = 10_000
 export function createBackend(options: BackendOptions): Backend {
   const { configFile, staticRoot, version } = options
@@ -355,7 +359,7 @@ export function createBackend(options: BackendOptions): Backend {
   // 身份账本：仓库改名/移动后继续用老 id，config.json 里按 id 存的标签/收藏/归档/便签不受影响
   const identity = new IdentityLedger(
     join(dirname(configFile), "repo-identity.json"),
-    onCorrupt("repo-identity.json"),
+    (err) => console.error(`[repo-radar] repo-identity.json 读取失败 / identity ledger load failed: ${errText(err)}`),
     onWriteError("repo-identity.json", "本次运行期间改名/移动过的仓库，重启后会丢失标签/收藏/归档/便签"),
   )
   const store = new RepoStore(
@@ -392,34 +396,54 @@ export function createBackend(options: BackendOptions): Backend {
   // 否则在链尾排新一轮——↻ 手动刷新即便赶上上一轮正在收尾也一定跑到强制轮、等到它真结束
   // （单飞 + pending 标记有收尾关窗期会假成功；不共乘的话 gh 未登录时每个触发都排完整一轮，积压无上界）。
   const inboxQueue = createSerialQueue<void>()
+  const inboxRetries = new Map<string, { delay: number; retryAt: number }>()
   let inboxForce = false // 手动刷新：下一轮忽略 TTL，强制重拉全部 GitHub 仓库
   function enrichGithubInbox(): Promise<void> {
     return inboxQueue.share(async () => {
       const force = inboxForce
       inboxForce = false
-      const targets = githubTargets((id, url) => force || inboxCache.isStale(id, url))
+      const repos = githubTargets(() => true)
+      const groups = new Map<string, typeof repos>()
+      for (const target of repos) {
+        const slug = target.slug.toLowerCase()
+        const existing = groups.get(slug)
+        if (existing) existing.push(target)
+        else groups.set(slug, [target])
+      }
+      for (const slug of inboxRetries.keys()) {
+        if (!groups.has(slug)) inboxRetries.delete(slug)
+      }
+      const now = Date.now()
+      const targets = [...groups].filter(([slug, copies]) =>
+        force || ((inboxRetries.get(slug)?.retryAt ?? 0) <= now &&
+          copies.some((t) => inboxCache.isStale(t.id, t.url))),
+      )
       if (targets.length === 0) return
       if (!(await ghAvailable())) return
       const changes: InboxChange[] = []
-      // 6 并发：每次 gh graphql 约 1.8s（spawn+联网），并发拉满可把整轮压到约串行的 1/6；只读 API，不会触发写限流
-      await mapLimit(targets, 6, async (t) => {
-        try {
-          // 传上次缓存的 PR 数与 issue 数：prOthers（PR 的 search 字段）与 mine（自己开的 issue 数）
-          // 都可能被二级限流单独置空，各自沿用对应的上次计数——避免 PR 数在「不含自己/含总数」间震荡，
-          // 也避免 issue 数因 mine 缺失被静默按 0 算而虚高（见 github.ts parseInboxResponse 的注释）
-          const before = inboxCache.get(t.id, t.url)
-          const inbox = await getGithubInbox(t.slug, before?.prs, before?.issues)
-          if (inbox === null) return // 拉不到（未登录/网络）：保留旧缓存，别把状态抹空
-          inboxCache.set(t.id, t.url, inbox)
-          const updated = store.redecorate(t.id)
-          if (updated) hub.broadcast("repo:updated", { repo: updated })
-          // 只收「真变了」的：InboxChange 的名字承诺的是变化，不是「本轮所有拉取成功的仓库」——
-          // 拉到手但与上次完全一致（before/after 全等）的不算变化，不该进这个数组
-          if (!inboxEqual(before, inbox)) {
-            changes.push({ repoId: t.id, name: updated?.displayName ?? updated?.name ?? t.id, before, after: inbox })
+      // 同一 GitHub 仓库只请求一次，各本地副本保留自己的到达计数。
+      await mapLimit(targets, 4, async ([slug, copies]) => {
+        const cached = copies.map((t) => inboxCache.get(t.id, t.url)).find((inbox) => inbox !== null)
+        const inbox = await getGithubInbox(copies[0].slug, cached ?? undefined).catch(() => null)
+        if (inbox === null) {
+          const priorDelay = inboxRetries.get(slug)?.delay
+          const delay = priorDelay === undefined ? INBOX_RETRY_BASE_MS : Math.min(priorDelay * 2, INBOX_RETRY_MAX_MS)
+          inboxRetries.set(slug, { delay, retryAt: Date.now() + delay })
+          return
+        }
+        inboxRetries.delete(slug)
+        for (const t of copies) {
+          try {
+            const before = inboxCache.get(t.id, t.url)
+            inboxCache.set(t.id, t.url, inbox)
+            const updated = store.redecorate(t.id)
+            if (updated) hub.broadcast("repo:updated", { repo: updated })
+            if (!inboxEqual(before, inbox)) {
+              changes.push({ repoId: t.id, name: updated?.displayName ?? updated?.name ?? t.id, before, after: inbox })
+            }
+          } catch {
+            /* 单个本地副本失败不影响其它 */
           }
-        } catch {
-          /* 单仓库失败不影响其它 */
         }
       })
       inboxEmitter.emit(changes)
@@ -469,15 +493,58 @@ export function createBackend(options: BackendOptions): Backend {
       })
   }, structure.onStructureChanged)
 
-  // 后台自动化（监听 + 两个定时器）统一由 automation 装表；rescan/fetchAll 以回调传入，
-  // 让它不必知道扫描链和 hub 的存在
+  // 本地扫描与远程刷新分别计时。
   const automation = createAutomation({
     configFile,
     watcher,
     listRepos: () => store.list(),
     rescan: () => rescanAndWatch(),
-    fetchAll: () => autoFetchAll(),
+    refreshRemotes: () => refreshRemotes(),
   })
+
+  function remoteRefreshAction(cfg: Config, id: string): "pull" | "fetch" | null {
+    if (cfg.autoFetchMinutes === 0 || cfg.archived.includes(id)) return null
+    return (cfg.autoPullOverrides[id] ?? cfg.autoPull) === true ? "pull" : "fetch"
+  }
+
+  let refreshingRemotes = false
+  async function refreshRemotes(): Promise<void> {
+    if (stopped !== null || refreshingRemotes) return
+    refreshingRemotes = true
+    try {
+      const cfg = loadConfig(configFile)
+      if (cfg.autoFetchMinutes === 0) return
+      const targets = store.list().filter((r) => r.error === null && r.upstream !== null && !cfg.archived.includes(r.id))
+      await trackPending(() => mapLimit(targets, 4, async (repo) => {
+        const { branch } = repo
+        if (stopped !== null || branch === null) return
+        try {
+          await withRepoTarget(repo, async (path, gitDir) => {
+            const action = () => stopped === null && store.get(repo.id)?.path === repo.path &&
+                readWorktreeMarker(path) === worktreeMarkers.get(repo)
+              ? remoteRefreshAction(loadConfig(configFile), repo.id)
+              : null
+            const planned = action()
+            if (planned === null) return
+            const upstream = await fetchRemoteUpstream(path, branch)
+            if (upstream === null) return
+            try {
+              if (planned === "pull" && await fastForwardUpstream(path, gitDir, repo, upstream, () => action() === "pull")) {
+                evictRepoStats(repo.id)
+              }
+            } finally {
+              const updated = await store.refreshOne(repo.id, { skipCache: true })
+              if (updated) hub.broadcast("repo:updated", { repo: updated })
+            }
+          })
+        } catch (err) {
+          console.warn("[repo-radar] Remote refresh failed for", repo.path, err instanceof Error ? err.message : String(err))
+        }
+      }))
+    } finally {
+      refreshingRemotes = false
+    }
+  }
 
   // rebuildWatch：true 时收尾走 applyWatch（拆了重建句柄），false 时只走 applyRepos（纯 JS 改映射表）。
   // 由下面的 rescanScheduler 按 force 算出（经 pendingRebuild 迟读合并，见 createRescanScheduler
@@ -508,6 +575,7 @@ export function createBackend(options: BackendOptions): Backend {
     // refreshOne 不算「扫描」，把它算进来会让这个时间永远显示「刚刚」，等于没有信息量。
     // 放在 applyWatch/applyRepos 之后：前者抛错时整轮扫描算失败（POST /api/scan 返回 500，
     // 界面弹红条），此时绝不能已经广播过「扫描完成」，让顶栏同时显示「上次扫描 刚刚」
+    clearStatsCache()
     lastScanAt = new Date().toISOString()
     // 带上完整仓库列表：定时兜底重扫没有任何人在等 HTTP 响应，只发时刻的话服务端 store
     // 更新了、界面却还停在旧数据——新增/删除的仓库根本不会出现或消失，而顶栏偏偏在说
@@ -545,30 +613,6 @@ export function createBackend(options: BackendOptions): Backend {
   const rescanScheduler = createRescanScheduler<RepoStatus[]>({ run: doRescanAndWatch, scanTargets })
   const rescanAndWatch = (force = false): Promise<RepoStatus[]> => rescanScheduler.trigger(force)
 
-  // 定时后台 fetch：安静地为有远程的仓库 fetch，只广播 repo:updated（不占用批量进度条）
-  let autoFetchRunning = false
-  async function autoFetchAll(): Promise<void> {
-    if (autoFetchRunning) return // 上一轮未结束则跳过，避免叠加
-    autoFetchRunning = true
-    try {
-      const repos = store.list().filter((r) => r.remotes.length > 0 && r.error === null && !r.archived)
-      // 整轮算一笔待办（见 trackPending）：逐个包 withRepoLock 不足以让退出排空等到这一轮结束
-      await trackPending(() => mapLimit(repos, 4, async (r) => {
-        try {
-          // 走仓库锁：一是别和用户正在做的 commit/push 在同一个 .git 上撞车，
-          // 二是退出时的排空只认锁里的操作——不包进来，定时 fetch 就会被硬切在写 refs 的中途
-          await withRepoLock(r.id, () => runRepoAction(r.path, "fetch"))
-          const updated = await store.refreshOne(r.id, { skipCache: true }) // 刚 fetch 过，见 RefreshOptions
-          if (updated) hub.broadcast("repo:updated", { repo: updated })
-        } catch {
-          /* 单仓库 fetch 失败不影响其它 */
-        }
-      }))
-    } finally {
-      autoFetchRunning = false
-    }
-  }
-
   // 手动刷新 GitHub「等我的」：强制标记后跑一轮（跳过 TTL），跑完再返回
   const refreshInbox = async (): Promise<void> => {
     inboxForce = true
@@ -581,7 +625,6 @@ export function createBackend(options: BackendOptions): Backend {
     rescanFresh: () => rescanAndWatch(true),
     setWatch: automation.setWatch,
     setAutoScan: automation.setAutoScan,
-    setAutoFetch: automation.setAutoFetch,
     setWatchLimit: automation.setWatchLimit,
     applyConfig: automation.applyConfig,
     syncRepos: () => automation.applyRepos(store.list()),
@@ -712,8 +755,7 @@ export function createBackend(options: BackendOptions): Backend {
 
       intervalTimer = setInterval(() => void enrichGithubInbox(), INBOX_REFRESH_MS)
 
-      // 定时 fetch 按当前配置装上，不挂在扫描结果后面：扫描会失败（配置损坏时 loadConfig 直接抛），
-      // 挂上去就意味着「扫描一失败，用户开着的定时拉取整局静默不生效」
+      // 启动扫描失败时，定时重扫仍可重试。
       let cfg = DEFAULT_CONFIG
       try {
         cfg = loadConfig(configFile)
