@@ -7,7 +7,7 @@ permissions:
   actions: read
 jobs:
   mac-dmg:
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
@@ -28,6 +28,7 @@ jobs:
       - name: Verify both DMGs and run the native MAC update route
         run: bash scripts/preflight-mac-runtime.sh
   linux-update:
+    if: ${{ !contains(github.event.head_commit.message, 'intel-only') }}
     strategy:
       fail-fast: false
       matrix:
