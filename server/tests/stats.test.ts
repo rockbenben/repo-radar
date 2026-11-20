@@ -94,7 +94,7 @@ describe("buildActivity", () => {
   it("orders by absolute time across differing timezone offsets", () => {
     // b 的挂钟更晚但带 +08:00，实际是 UTC 02:00，早于 a 的 UTC 05:00
     const a = stub("a", "2026-07-01T05:00:00+00:00")
-    const b = stub("b", "2026-07-01T10:00:00")
+    const b = stub("b", "2026-07-01T10:00:00+08:00")
     expect(buildActivity([b, a]).map((r) => r.id)).toEqual(["a", "b"]) // a 更晚，排前
   })
   // 这一条钉住服务端这一半：上面两条里 lastActivity 与 lastCommit 恰好相等，排序改回按
