@@ -1,4 +1,11 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreBinaries": ["reg"]
+  "ignoreBinaries": ["reg"],
+  "workspaces": {
+    "desktop": {
+      "entry": ["src/preload.ts"]
+    }
+  }
 }
+
+
