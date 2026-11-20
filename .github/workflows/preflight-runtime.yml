@@ -1,0 +1,71 @@
+name: preflight packaged runtime
+on:
+  push:
+    branches: ["codex/release-runtime-6f28f4991c"]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  mac-dmg:
+    runs-on: macos-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Download matrix DMGs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..35}; do
+            status=$(gh run view 44666887006 --json status --jq .status)
+            if [ "$status" = completed ]; then break; fi
+            sleep 10
+          done
+          gh run download 44666887006 --name dist-mac --dir "$RUNNER_TEMP/dmgs"
+      - name: Verify both DMGs and run the native MAC update route
+        run: bash scripts/preflight-mac-runtime.sh
+  linux-update:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, lane: linux-x64, assetArch: x86_64, manifest: latest-linux.yml }
+          - { os: ubuntu-24.04-arm, lane: linux-arm64, assetArch: arm64, manifest: latest-linux-arm64.yml }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      ASSET_ARCH: ${{ matrix.assetArch }}
+      MANIFEST: ${{ matrix.manifest }}
+      RELEASE_BUILD: ${{ matrix.lane }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: node node_modules/electron/install.js
+      - name: Build test-only successor
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e 'const fs=require("node:fs"); const p=require("./package.json"); p.version="1.4.1"; fs.writeFileSync("package.json", JSON.stringify(p, null, 2)+"\n")'
+          npm run build
+          npx electron-builder --linux --publish never
+          node scripts/check-release-assets.mjs dist-electron "$RELEASE_BUILD"
+      - name: Upgrade published AppImage against isolated HTTP feed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! command -v xdotool >/dev/null || ! command -v xvfb-run >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq xdotool xvfb xauth
+          fi
+          xvfb-run -a bash scripts/preflight-linux-runtime.sh
