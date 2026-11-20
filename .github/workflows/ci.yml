@@ -10,6 +10,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -19,10 +22,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
       - run: npm ci
+      - run: node scripts/check-release-config.mjs
+      - if: hashFiles('node_modules/electron/install.js') != ''
+        run: node node_modules/electron/install.js
       - run: npm run check:workflows # workflow 的 run: 块只在 tag 时执行，这里提前做 bash -n
         shell: bash
       - run: npm run lint # biome check：lint + import 顺序，格式化不在它职责内

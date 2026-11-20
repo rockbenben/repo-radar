@@ -1,17 +1,3 @@
-# 打 v* tag 时打包四个平台，最后由 publish job 建出这条 GitHub Release 并把产物挂上去。
-# 四个 build job：Windows、macOS 各一个 runner，Linux 拆成 x64/arm64 两个 runner（原因见下面矩阵里的注释）。
-#
-# **release 只能有一个人创建**：早先每个 build job 各自跑 electron-builder --publish always，
-# 而 electron-builder 的 releaseType: draft 让它按 tag 查不到已有草稿（GitHub 的
-# /releases/tags/{tag} 不返回 draft），于是四个 runner 并发各建一条——同一个 tag 出现两条
-# release，产物被随机拆成两半。v1.3.0 的 dmg 和 v1.4.0 的 setup.exe 就是这样漏在没人看到的
-# 草稿里的，而四条腿全绿、publish 也成功，从 CI 状态上完全看不出来。
-# 现在 build 一律 --publish never，产物走 workflow artifact；publish 汇总后一次性建 release。
-#
-# 产物：repo-radar-<version>-x64-setup.exe（Windows NSIS，双击安装；命名见 electron-builder.yml）
-#      repo-radar-<version>-arm64.dmg / -x64.dmg（macOS，同一个 runner 上交叉出两个架构）
-#      repo-radar-<version>-x86_64.AppImage / -arm64.AppImage（Linux，两个 runner 各出各的）
-#      以及 latest*.yml 与 *.blockmap。
 name: release
 
 on:
@@ -22,14 +8,47 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - name: Validate the release tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" != tag || ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Run this workflow on an existing stable vX.Y.Z tag"
+            exit 1
+          fi
+          version="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - run: npm ci --ignore-scripts
+      - run: node scripts/check-release-config.mjs
+      - run: npm run check:workflows
+        shell: bash
+
   build:
+    needs: validate
     strategy:
       fail-fast: false
-      # Linux 拆两个 runner、macOS 只用一个：electron-builder 在 x64 机器上交叉构建 arm64
-      # AppImage 不可靠，所以 Linux 的两个架构各自在原生 runner 上构建；macOS 反过来——
-      # electron-builder 在 arm64 runner（macos-latest）上可以直接为 x64 下载对应的
-      # Electron 二进制来构建 dmg，不需要 Rosetta，一个 runner 就能出两个架构。
       matrix:
         include:
           - { os: windows-latest, label: win }
@@ -40,32 +59,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ needs.validate.outputs.commit }}
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
       - run: npm ci
-      - run: npm run lint # 与 ci 同一道 biome 门禁：发布产物不该绕过它
-      - run: npm run check:workflows
-        shell: bash
-      # tag 必须与 package.json 版本一致：这个版本号显示在设置面板、进产物文件名、写进 latest.yml。
-      # 忘 bump 就发出「版本号与 tag 对不上」的产物——应用内更新（opt-in，默认关）会拿这个版本号
-      # 去比 latest.yml，对不上的话用户永远看不到「已是最新」以外的结果；
-      # 用户对着 Releases 页挑安装包时也一样会被它误导
-      - name: Verify tag matches package.json version
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF#refs/tags/v}"
-          PKG=$(node -p "require('./package.json').version")
-          test "$TAG" = "$PKG" || { echo "tag v$TAG 与 package.json 的 $PKG 不一致"; exit 1; }
+      - run: node node_modules/electron/install.js
+      - run: npm run lint
       - run: npm test
       - run: npm run build
       - name: Package
-        run: npx electron-builder --publish never
-      # if-no-files-found: error 是这道防呆：某个 runner 什么都没产出时（v1.4.0 就是 Windows 那半
-      # 丢进了另一条 release），error 让这一步当场红，而不是把空产物交下去拼一条缺安装包的发布
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --config electron-builder.yml --publish never
+      - name: Verify installers and update metadata
+        env:
+          RELEASE_BUILD: ${{ matrix.label }}
+        shell: bash
+        run: node scripts/check-release-assets.mjs dist-electron "$RELEASE_BUILD"
       - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.label }}
@@ -73,79 +86,89 @@ jobs:
             dist-electron/*.exe
             dist-electron/*.exe.blockmap
             dist-electron/*.dmg
-            dist-electron/*.dmg.blockmap
             dist-electron/*.AppImage
             dist-electron/latest*.yml
           if-no-files-found: error
 
-  # needs: build 在矩阵上是「四条腿全成功才跑」，正好是「产物到齐」的判据。
-  # --latest 显式指定：不写的话 GitHub 有可能不把它算成最新版。
-  # 重跑同一个 tag 时 release 已存在——改为 --clobber 覆盖上传，不再新建，免得又长出第二条
   publish:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [validate, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci --ignore-scripts
       - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
-          merge-multiple: true
-          path: out
-      - name: Check every platform arrived
-        run: |
-          echo "out/ 里的产物："
-          ls -l out
-          for pat in '-x64-setup.exe' '.dmg' '.AppImage'; do
-            find out -name "*$pat" | grep -q . || { echo "缺 *$pat —— 不发布"; exit 1; }
-          done
-      # 手动下载的校验和：更新器自己用 latest*.yml 里的 sha512，这里给人一条可独立核对的退路
-      - name: Write SHA256SUMS
-        run: |
-          cd out
-          rm -f SHA256SUMS
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
-      - env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "release $GITHUB_REF_NAME 已存在，覆盖上传产物"
-            gh release upload "$GITHUB_REF_NAME" out/* --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create "$GITHUB_REF_NAME" out/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --latest
-          fi
-      # 把 release 发布出去，并显式把 `releases/latest` 指到它，然后自己确认一遍。
-      #
-      # ⚠️ **显式给 make_latest 不是多此一举**：GitHub 在「草稿转成已发布」时**不会**重算
-      # `releases/latest` 指向谁。2026-10-20 在 rclone-deck 上撞到过一次：release 已经是
-      # `draft=false`、`prerelease=false`、`published_at` 也填上了，`releases/latest` 却仍
-      # 返回旧版本，端点 `releases/latest/download/latest.yml` 于是 404（旧 release 里没有
-      # 那个文件）——已装的应用从此收不到更新。
-      #
-      # 判据是**看 API 指到谁**，不是看 release 的字段：字段全对而指针没挪，端点照样 404。
-      # CDN 那层重定向会再滞后几分钟，属正常——这里判 API，不判 CDN。
-      - name: 发布这个 release，并把 latest 指到它
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          path: staging
+      - name: Collect the four builds and verify the release
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          # ⚠️ **不能用 `releases/tags/<tag>` 找这条 release**：那个端点**不返回草稿**。
-          # 草稿只能从 release 列表里捞——列表按创建时间倒序，新建的草稿总在第一页。
-          id="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-                 --jq "first(.[] | select(.tag_name == \"${tag}\") | .id)")"
-          if [ -z "$id" ]; then
-            echo "::error::没找到 tag ${tag} 对应的 release"
+          shopt -s nullglob
+          mkdir out
+          for build in win mac linux-x64 linux-arm64; do
+            files=(staging/dist-"$build"/*)
+            (( ${#files[@]} > 0 )) || { echo "::error::Missing artifacts for $build"; exit 1; }
+            for file in "${files[@]}"; do
+              name="${file##*/}"
+              [[ -f "$file" && ! -e "out/$name" ]] || { echo "::error::Unexpected or duplicate asset: $name"; exit 1; }
+              mv -- "$file" "out/$name"
+            done
+          done
+          node scripts/check-release-assets.mjs out
+      - name: Write SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd out
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ needs.validate.outputs.commit }}
+          draft: false
+          prerelease: false
+          make_latest: legacy
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: out/*
+          body: |
+            ## Downloads
+
+            - **Windows x64:** NSIS setup executable. The installer is unsigned and may prompt SmartScreen.
+            - **macOS Apple Silicon / Intel:** choose the matching DMG. The app is not notarized. Install newer releases manually.
+            - **Linux x64 / ARM64:** choose the matching AppImage and mark it executable.
+
+            Git must be installed and available on PATH. GitHub features also use the GitHub CLI.
+            Verify downloads against `SHA256SUMS`. The Windows and Linux in-app updaters use the `latest*.yml` manifests.
+      - name: Verify published assets and digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release="$RUNNER_TEMP/release.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" > "$release"
+          jq -e --arg tag "$GITHUB_REF_NAME" '.tag_name == $tag and .draft == false and .prerelease == false' "$release" >/dev/null
+          cd out
+          { cat SHA256SUMS; sha256sum SHA256SUMS; } | while read -r digest path; do
+            file="${path#./}"
+            jq -e --arg file "$file" --arg digest "sha256:$digest" \
+              'any(.assets[]; .name == $file and .state == "uploaded" and .digest == $digest)' "$release" >/dev/null \
+              || { echo "::error::Missing or mismatched published asset: $file"; exit 1; }
+          done
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          newest="$(printf '%s\n' "$latest" "$GITHUB_REF_NAME" | sort -V | tail -n 1)"
+          if [[ ! "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$latest" != "$newest" ]]; then
+            echo "::error::The updater's latest release ($latest) is older than $GITHUB_REF_NAME or is not stable"
             exit 1
           fi
-          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${id}" \
-            -F draft=false -f make_latest=true > /dev/null
-          latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
-          if [ "$latest" != "$tag" ]; then
-            echo "::error::releases/latest 指着 ${latest}，不是 ${tag}"
-            exit 1
-          fi
-          echo "release ${tag} 已发布，releases/latest 指向它"

@@ -17,8 +17,24 @@ let failures = 0
 // （实测本机每个块都被误报，workflow 本身却是好的）。
 // 因此先把「bash 能不能用」验出来：不能就整轮跳过，并以独立的退出码说明「没查成」。
 let bashBroken = null
+let bashCmd = "bash"
 
-const probe = spawnSync("bash", ["--version"], { encoding: "utf8" })
+let probe = spawnSync(bashCmd, ["--version"], { encoding: "utf8" })
+if ((probe.error || probe.status !== 0) && process.platform === "win32") {
+  const gitBashCandidates = [
+    "C:\\Program Files\\Git\\bin\\bash.exe",
+    "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+    "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
+  ]
+  for (const cand of gitBashCandidates) {
+    const gitProbe = spawnSync(cand, ["--version"], { encoding: "utf8" })
+    if (!gitProbe.error && gitProbe.status === 0) {
+      bashCmd = cand
+      probe = gitProbe
+      break
+    }
+  }
+}
 if (probe.error || probe.status !== 0) {
   // 只留第一行：WSL 启动器的报错是多行的（还有 <3> 前缀），整段塞进提示里没法读
   bashBroken = probe.error?.message ?? (probe.stderr ?? "").trim().split("\n")[0] ?? "未知原因"
@@ -48,7 +64,7 @@ for (const file of files) {
     const script = `${body.join("\n")}\n`
     const tmp = join(tmpdir(), `rr-workflow-${process.pid}-${i}.sh`)
     writeFileSync(tmp, script, "utf8")
-    const result = spawnSync("bash", ["-n", tmp], { encoding: "utf8" })
+    const result = spawnSync(bashCmd, ["-n", tmp], { encoding: "utf8" })
     rmSync(tmp, { force: true })
     if (result.error || result.status === null) {
       // bash 在探测时能用、这里却起不来（WSL 启动器这类会时好时坏）：当「跑不了」处理
