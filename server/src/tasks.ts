@@ -1,13 +1,15 @@
+import type { WsHub } from "./events"
 import { runCommand } from "./exec"
 import { type RepoAction, runRepoAction } from "./git"
 import { mapLimit } from "./map-limit"
-import { trackPending, withRepoLock } from "./queue"
+import { trackPending } from "./queue"
+import { withRepoTarget } from "./repo-target"
 import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
 
 export interface BatchDeps {
   getRepo(id: string): RepoStatus | undefined
   refreshOne(id: string): Promise<RepoStatus | undefined>
-  broadcast(type: string, payload: unknown): void
+  broadcast: WsHub["broadcast"]
 }
 
 const BATCH_CONCURRENCY = 4
@@ -27,6 +29,7 @@ export function startBatch(action: RepoAction, repoIds: string[], deps: BatchDep
   const taskId = `batch-${RUN_ID}-${++counter}`
   const results: BatchResultItem[] = []
   const total = repoIds.length
+  const targets = repoIds.map((id) => ({ id, repo: deps.getRepo(id) }))
 
   const progress = (current: string | null, finished: boolean): void => {
     const payload: BatchProgress = { taskId, action, done: results.length, total, current, results: [...results], finished, scope }
@@ -35,11 +38,9 @@ export function startBatch(action: RepoAction, repoIds: string[], deps: BatchDep
 
   progress(null, false)
   // 整批算一笔待办（见 trackPending）：finished 广播也包在里面，退出排空要等到前端收到收摊信号
-  void trackPending(() => mapLimit(repoIds, BATCH_CONCURRENCY, async (id) => {
-    let repo: RepoStatus | undefined
+  void trackPending(() => mapLimit(targets, BATCH_CONCURRENCY, async ({ id, repo }) => {
     let pushed = false
     try {
-      repo = deps.getRepo(id)
       if (!repo) {
         results.push({ repoId: id, name: id, ok: false, message: "repo not found" })
         pushed = true
@@ -47,7 +48,7 @@ export function startBatch(action: RepoAction, repoIds: string[], deps: BatchDep
         return
       }
       progress(repo.name, false)
-      const result = await withRepoLock(id, () => runRepoAction(repo!.path, action))
+      const result = await withRepoTarget(repo, (path) => runRepoAction(path, action))
       results.push({ repoId: id, name: repo.name, ...result })
       pushed = true
       const updated = await deps.refreshOne(id)
@@ -70,6 +71,7 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
   const taskId = `exec-${RUN_ID}-${++counter}`
   const results: BatchResultItem[] = []
   const total = repoIds.length
+  const targets = repoIds.map((id) => ({ id, repo: deps.getRepo(id) }))
   // action 就是命令原文：横幅与输出面板标题都用它。**不在这里拼「预演: 」**——
   // 服务端一拼中文，非中文界面里就会漏出中文（实测英文界面显示
   // “Batch 预演: echo hello … done: 1 ok”）。预演这件事用 payload 的 dryRun 标记传，
@@ -84,14 +86,13 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
   progress(null, false)
 
   if (dryRun) {
-    for (const id of repoIds) {
-      const repo = deps.getRepo(id)
+    for (const { id, repo } of targets) {
       results.push({
         repoId: id,
         name: repo?.name ?? id,
-        ok: Boolean(repo),
+        ok: Boolean(repo && !repo.error),
         // 错误码而不是中文句子：文案由前端按界面语言翻译（见 web/src/lib/errText.ts）
-        message: repo ? "willExecute" : "repo not found",
+        message: repo ? (repo.error ?? "willExecute") : "repo not found",
         output: repo ? repo.path : undefined,
       })
     }
@@ -99,8 +100,7 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
     return taskId
   }
 
-  void trackPending(() => mapLimit(repoIds, BATCH_CONCURRENCY, async (id) => {
-    const repo = deps.getRepo(id)
+  void trackPending(() => mapLimit(targets, BATCH_CONCURRENCY, async ({ id, repo }) => {
     if (!repo) {
       results.push({ repoId: id, name: id, ok: false, message: "repo not found" })
       progress(null, false)
@@ -108,7 +108,7 @@ export function startExec(command: string, repoIds: string[], deps: BatchDeps, d
     }
     progress(repo.name, false)
     try {
-      const res = await withRepoLock(id, () => runCommand(repo.path, command))
+      const res = await withRepoTarget(repo, (path) => runCommand(path, command))
       // message 只放**错误码**（成功时留空）：退出码由 code 字段带着，前端按界面语言渲染
       // （实测过去这里拼的是中文「退出码 N」，非中文界面里会漏中文）
       results.push({ repoId: id, name: repo.name, ok: res.ok, message: res.message, output: res.output, code: res.code })

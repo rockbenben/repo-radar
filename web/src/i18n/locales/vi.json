@@ -433,6 +433,7 @@
   "update.upToDateDetail": "Bạn đang dùng bản phát hành mới nhất.",
   "update.availableTitle": "Đã có phiên bản {version}",
   "update.availableDetail": "Tải xuống ngay? Bạn sẽ được hỏi lại trước khi cài đặt.",
+  "update.openReleases": "Mở trang phát hành",
   "update.download": "Tải xuống",
   "update.later": "Để sau",
   "update.downloadFailedTitle": "Tải bản cập nhật thất bại",

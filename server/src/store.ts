@@ -10,8 +10,13 @@ import type { RepoCache } from "./repo-cache"
 import { type IdentityLedger, normalizePath } from "./repo-identity"
 import { scan } from "./scanner"
 import type { GithubInbox, RepoStatus } from "./types"
+import { readWorktreeMarker, worktreeMarkers } from "./worktree-marker"
 
 const CONCURRENCY = 8
+
+function sameWorktree(a: RepoStatus, b: RepoStatus): boolean {
+  return a.path === b.path && worktreeMarkers.get(a) === worktreeMarkers.get(b)
+}
 
 /** refreshOne 的可选行为 */
 export interface RefreshOptions {
@@ -104,11 +109,16 @@ export class RepoStore {
    * 顺序很关键：先跑 core 拿到 oid，再算指纹。oid 是 status 顺带给的（不额外 spawn），
    * 而它能识别出「mtime 因触碰而变、内容其实没变」以及反过来的情况。
    */
-  private async refreshRepo(path: string, id: string, cfg: Config, skipCache = false): Promise<RepoStatus> {
+  private async refreshRepo(path: string, id: string, cfg: Config, skipCache = false, existing?: RepoStatus): Promise<RepoStatus> {
     // 路径整个不在了。existsSync 是同步 stat，比起接下来必然要 spawn 的 git 进程可忽略不计，
     // 不会在正常路径（存在）上引入额外开销。绝不能让卡片静默消失——用户会以为自己删过它。
     if (!existsSync(path)) throw new Error(pathGoneMessage(path, cfg))
-    const core = await getRepoCore(path)
+    const marker = readWorktreeMarker(path)
+    const previousMarker = existing && worktreeMarkers.get(existing)
+    if (previousMarker !== undefined && marker !== previousMarker) {
+      throw new Error("Git worktree changed. Rescan and review the repository before retrying.")
+    }
+    const core = await getRepoCore(path, cfg.manualRepos.includes(path))
     // 账本里根提交还是空的仓库，在它**有了提交**的这一刻补算一次判据②。触发条件必须便宜，
     // 而这里正好有现成的信号：core.oid 是上面那次 status 顺带给的（不额外 spawn），空仓库时
     // 它是 null——空仓库一分钱都不付，补算成功之后也永不再进。放在指纹缓存的命中判断**之前**：
@@ -118,14 +128,14 @@ export class RepoStore {
     const fp = gitFingerprint(path, core.oid)
     // skipCache 只跳过**读**，仍然照常写回：刚算出来的这份是最新的，下一轮重扫理应命中它
     const cached = skipCache ? null : (this.cache?.get(id, fp) ?? null)
-    if (cached) return composeStatus(path, id, core, cached)
+    if (cached) return composeStatus(path, id, core, cached, marker)
     const { heavy, degraded } = await getRepoHeavy(path, core)
     // 降级结果本轮照常用，但**绝不落盘**。写进去就等于把一次瞬时失败（spawn 失败、杀软锁、
     // 网络盘上 30 秒超时）永久固化：指纹是 `.git` 的 stat 快照，仓库不动它就不变，
     // 此后每一轮都命中这条坏条目，点重扫、重启都不管用（坏条目在磁盘上，还有 30 天年龄护栏）。
     // 详见 RepoHeavyResult 的注释
     if (fp !== null && !degraded) this.cache?.set(id, fp, heavy)
-    return composeStatus(path, id, core, heavy)
+    return composeStatus(path, id, core, heavy, marker)
   }
 
   private async doRefreshAll(onProgress?: (scanned: number, total: number) => void): Promise<RepoStatus[]> {
@@ -182,7 +192,10 @@ export class RepoStore {
     // 整份灌回去等于在这条路上把上面那道重装饰防护绕开——配置变化并不总伴随 redecorate
     // （PUT /api/config 只落盘 + applyConfig，不碰任何仓库状态），那些仓库的分组/标签
     // 会停在旧值直到下一轮兜底重扫
-    for (const [id, s] of this.freshened) if (next.has(id)) next.set(id, this.decorate(s, cfgNow))
+    for (const [id, s] of this.freshened) {
+      const scanned = next.get(id)
+      if (scanned && sameWorktree(scanned, s)) next.set(id, this.decorate(s, cfgNow))
+    }
     this.freshened.clear()
     this.repos = next
     // 剪掉本轮扫描已不存在的仓库，避免 baseDesc 随仓库增删/根目录变更无界增长
@@ -196,7 +209,7 @@ export class RepoStore {
     const cfg = this.getConfig()
     let next: RepoStatus
     try {
-      const fresh = await this.refreshRepo(existing.path, id, cfg, opts.skipCache ?? false)
+      const fresh = await this.refreshRepo(existing.path, id, cfg, opts.skipCache ?? false, existing)
       this.baseDesc.set(fresh.id, fresh.description) // 记住本地描述，供 GitHub 描述回退
       // 装饰必须用**现在**的配置，不能用第一个 await 之前读的那份 cfg。这次刷新可能跑的是
       // 完整 7 个 git 进程的全价路径（批量 pull/自定义命令的收尾、定时后台 fetch 每仓库还要先
@@ -214,8 +227,11 @@ export class RepoStore {
       // 配置同样取现在的：出错的仓库照样带着用户的 ⭐/标签/归档显示在看板上，
       // 这条路径把它们打回旧值和成功路径一样有害
       next = this.errorStatus(existing.path, this.getConfig(), err, id)
+      const marker = worktreeMarkers.get(existing)
+      if (marker !== undefined) worktreeMarkers.set(next, marker)
     }
-    if (!this.repos.has(id)) return undefined // 全量扫描已移除该仓库，勿复活
+    const current = this.repos.get(id)
+    if (!current || !sameWorktree(current, existing)) return undefined // 全量扫描已移除或重新绑定，勿覆盖
     this.repos.set(id, next)
     if (this.inFlight) this.freshened.set(id, next) // 全量扫描进行中：记下来，收尾合并时以这份为准
     return next

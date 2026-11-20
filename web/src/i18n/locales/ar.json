@@ -433,6 +433,7 @@
   "update.upToDateDetail": "أنت تستخدم أحدث إصدار بالفعل.",
   "update.availableTitle": "الإصدار {version} متاح",
   "update.availableDetail": "هل تريد تنزيله الآن؟ سيُطلب منك التأكيد مرة أخرى قبل التثبيت.",
+  "update.openReleases": "فتح صفحة الإصدارات",
   "update.download": "تنزيل",
   "update.later": "لاحقًا",
   "update.downloadFailedTitle": "فشل تنزيل التحديث",

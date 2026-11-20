@@ -24,7 +24,10 @@ export function withRepoLock<T>(repoId: string, fn: () => Promise<T>): Promise<T
     () => undefined,
   )
   chains.set(repoId, settled)
-  void settled.then(release)
+  void settled.then(() => {
+    if (chains.get(repoId) === settled) chains.delete(repoId)
+    release()
+  })
   return next
 }
 

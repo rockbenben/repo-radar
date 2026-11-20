@@ -4,7 +4,7 @@ import { gt, useT } from "../i18n"
 import { cleanStashMessage } from "../lib/meta"
 import { runStashApplyPop } from "../lib/stash"
 import { relativeTime } from "../lib/time"
-import type { RepoStashes, StashEntry } from "../types"
+import type { RepoStashes, StashEntry, StashesResponse } from "../types"
 import { StashActions } from "./StashActions"
 import { useStashDiff } from "./useStashDiff"
 
@@ -27,7 +27,7 @@ export function StashView({ onLog }: { onLog: (ok: boolean, text: string) => voi
     try {
       const r = await fetch("/api/stashes")
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const body = (await r.json()) as { repos: RepoStashes[] }
+      const body = (await r.json()) as StashesResponse
       setData(body.repos)
       setError(null)
       // 丢弃已消失的选择，避免残留幽灵选中

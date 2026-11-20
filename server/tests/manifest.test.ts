@@ -52,3 +52,8 @@ describe("manifest", () => {
     expect(second.summary.alreadyTracked).toBe(1)
   })
 })
+
+it("strips HTTP credentials in exported remotes while keeping the repository address", () => {
+  const source = repo({ remotes: [{ name: "origin", url: "https://user:fixture-only@example.invalid/org/repo.git" }] })
+  expect(buildManifest([source], "").repos[0].remote).toBe("https://example.invalid/org/repo.git")
+})

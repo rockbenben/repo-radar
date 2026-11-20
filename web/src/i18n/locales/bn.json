@@ -433,6 +433,7 @@
   "update.upToDateDetail": "আপনি ইতিমধ্যে সর্বশেষ রিলিজ চালাচ্ছেন।",
   "update.availableTitle": "সংস্করণ {version} উপলব্ধ",
   "update.availableDetail": "এখন ডাউনলোড করবেন? ইনস্টল করার আগে আবার জিজ্ঞাসা করা হবে।",
+  "update.openReleases": "রিলিজ পাতা খুলুন",
   "update.download": "ডাউনলোড",
   "update.later": "পরে",
   "update.downloadFailedTitle": "আপডেট ডাউনলোড ব্যর্থ",

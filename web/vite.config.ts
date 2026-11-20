@@ -9,13 +9,17 @@ const port = process.env.REPO_RADAR_PORT || "17420"
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: "127.0.0.1",
+    port: 5173,
+    strictPort: true,
     proxy: {
-      "/api": `http://localhost:${port}`,
-      "/ws": { target: `ws://localhost:${port}`, ws: true },
+      "/api": `http://127.0.0.1:${port}`,
+      "/ws": { target: `ws://127.0.0.1:${port}`, ws: true },
     },
   },
   // jsdom + React 用例在满载机器上会超过 5s；15s 只给慢机器留余量，不放宽断言
   test: {
     testTimeout: 15000,
+    setupFiles: ["./tests/setup.ts"],
   },
 })

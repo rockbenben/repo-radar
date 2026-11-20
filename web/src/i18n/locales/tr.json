@@ -433,6 +433,7 @@
   "update.upToDateDetail": "Zaten en son sürümü çalıştırıyorsunuz.",
   "update.availableTitle": "{version} sürümü mevcut",
   "update.availableDetail": "Şimdi indirilsin mi? Kurulumdan önce tekrar sorulacak.",
+  "update.openReleases": "Sürüm sayfasını aç",
   "update.download": "İndir",
   "update.later": "Daha sonra",
   "update.downloadFailedTitle": "Güncelleme indirilemedi",

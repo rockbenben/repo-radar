@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react"
 import { gt, useT } from "../i18n"
 import { relativeTime } from "../lib/time"
-import type { ActivityItem, HeatmapDay } from "../types"
+import type { ActivityItem, ActivityResponse, HeatmapDay, HeatmapResponse } from "../types"
 import { Heatmap } from "./Heatmap"
 
-export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) {
+export function StatsView({ lastScanAt, onOpenRepo }: { lastScanAt: string | null; onOpenRepo: (id: string) => void }) {
   const t = useT()
   const [days, setDays] = useState<HeatmapDay[] | null>(null)
   const [activity, setActivity] = useState<ActivityItem[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [reload, setReload] = useState(0) // 失败后手动重试：自增触发重取
 
-  // biome-ignore-start lint/correctness/useExhaustiveDependencies: reload 是「重试」心跳，本体不读它，
-  // 自增只为在失败后再触发一次取数；t/语言不进依赖，避免切语言重复请求
+  // biome-ignore-start lint/correctness/useExhaustiveDependencies: reload 与 lastScanAt 分别触发重试和扫描后刷新。
+  // t/语言不进依赖，避免切语言重复请求
   useEffect(() => {
     let cancelled = false
     setError(null)
@@ -22,7 +22,7 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
       fetch("/api/stats/heatmap?days=365").then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
       fetch("/api/stats/activity").then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))),
     ])
-      .then(([heat, act]) => {
+      .then(([heat, act]: [HeatmapResponse, ActivityResponse]) => {
         if (cancelled) return
         setDays(heat.days)
         setActivity(act.repos)
@@ -31,7 +31,7 @@ export function StatsView({ onOpenRepo }: { onOpenRepo: (id: string) => void }) 
     return () => {
       cancelled = true
     }
-  }, [reload])
+  }, [reload, lastScanAt])
   // biome-ignore-end lint/correctness/useExhaustiveDependencies: 重试心跳豁免块结束
 
   if (error)

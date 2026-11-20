@@ -433,6 +433,7 @@
   "update.upToDateDetail": "You're running the latest release.",
   "update.availableTitle": "Version {version} is available",
   "update.availableDetail": "Download it now? You'll be asked again before installing.",
+  "update.openReleases": "Open releases",
   "update.download": "Download",
   "update.later": "Later",
   "update.downloadFailedTitle": "Update download failed",

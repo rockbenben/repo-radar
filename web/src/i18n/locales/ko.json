@@ -433,6 +433,7 @@
   "update.upToDateDetail": "현재 실행 중인 버전이 최신 릴리스입니다.",
   "update.availableTitle": "버전 {version}을(를) 사용할 수 있습니다",
   "update.availableDetail": "지금 다운로드할까요? 설치 전에 다시 한 번 확인합니다.",
+  "update.openReleases": "릴리스 페이지 열기",
   "update.download": "다운로드",
   "update.later": "나중에",
   "update.downloadFailedTitle": "업데이트 다운로드 실패",

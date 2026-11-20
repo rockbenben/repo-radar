@@ -37,8 +37,8 @@ import { isGithubUrl } from "./lib/meta"
 import { type LogEntry, loadLog, loadViews, pref, type SavedView, savePref } from "./lib/prefs"
 import { mergeRepo, parentOf } from "./lib/repos"
 import { relativeTime } from "./lib/time"
-import { connectEvents, type ServerEvent } from "./lib/ws"
-import type { BatchProgress, BatchResultItem, RepoStatus } from "./types"
+import { connectEvents } from "./lib/ws"
+import type { BatchProgress, BatchResultItem, RepoStatus, ScanStatus, ServerEvent, TaskStarted } from "./types"
 
 const JSON_HEADERS = { "content-type": "application/json" }
 
@@ -167,10 +167,11 @@ export default function App({
   // port：后端实际绑定的端口。默认端口绑不上时会自动换一个，而端口是本页 origin 的一部分——
   // 显示出来用户才知道自己实际跑在哪（书签/脚本要用），也才解释得了换端口后 localStorage
   // 里的视图和活动日志为何像是"没了"
-  const [instance, setInstance] = useState<{ version: string; canQuit: boolean; canPickDirectory: boolean; port: number }>({
+  const [instance, setInstance] = useState<{ version: string; canQuit: boolean; canPickDirectory: boolean; manualUpdates: boolean; port: number }>({
     version: "",
     canQuit: false,
     canPickDirectory: false,
+    manualUpdates: false,
     port: 0,
   })
   // 自动化开关的占位值必须与服务端默认值一致：/api/config 拉到之前（以及拉失败时）显示的
@@ -285,7 +286,7 @@ export default function App({
   const syncScanStatus = useCallback(() => {
     return fetch("/api/scan")
       .then((res) => (res.ok ? res.json() : null))
-      .then((s: { lastScanAt: string | null; watch: { watched: number; total: number } } | null) => {
+      .then((s: ScanStatus | null) => {
         if (!s) return
         if (s.lastScanAt) setLastScanAt(s.lastScanAt)
         if (s.watch) setWatchCov(s.watch)
@@ -314,9 +315,8 @@ export default function App({
       setLoadError(null)
       const data = (await res.json()) as RepoStatus[]
       applyScanResult(data)
-      // WebSocket 正常时 scan:done 已经把这个值填好了；这里补一次是为了 WS 断着的情况——
-      // 服务端和界面在同一台机器上，客户端的 now 与服务端的完成时刻只差毫秒级
-      setLastScanAt(new Date().toISOString())
+      // HTTP 与 WebSocket 用同一个扫描时刻，两个视图对同一轮只刷新一次。
+      setLastScanAt(res.headers.get("X-Repo-Radar-Scan-At") ?? new Date().toISOString())
     } catch (err) {
       // tRef 而不是 t：稳定身份不能捕获当轮渲染的翻译闭包
       setLoadError(tRef.current("msg.loadError", { err: String(err) }))
@@ -448,7 +448,7 @@ export default function App({
       return { repoId: id, name: "", ok: false, message: String(err) }
     }
     if (!res.ok) return { repoId: id, name: "", ok: false, message: `HTTP ${res.status}` }
-    const { taskId } = (await res.json()) as { taskId: string }
+    const { taskId } = (await res.json()) as TaskStarted
     // 完成事件可能比 POST 响应先到（WS 与 HTTP 是两条通道）：先查已完成任务表，命中同 taskId 就直接返回。
     // 下面注册 resolver 与这次判断在同一同步执行段内，中间不会插入新的 WS 事件，故无遗漏窗口。
     const fb = finishedBatches.current.get(taskId)
@@ -486,14 +486,16 @@ export default function App({
     try {
       const res = await fetch(`/api/repos/${id}/open`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ target }) })
       // 端点回传更新后的仓库（含新的 lastOpened），合并以便「最近打开」排序即时生效
-      if (res.ok) {
-        const updated = (await res.json()) as RepoStatus | { ok: true }
-        if ("id" in updated) setRepos((rs) => mergeRepo(rs, updated))
+      if (!res.ok) {
+        const error = (await res.json().catch(() => null)) as { error?: string } | null
+        throw new Error(error?.error ?? `HTTP ${res.status}`)
       }
-    } catch {
-      // 打开是本机副作用，网络异常时静默
+      const updated = (await res.json()) as RepoStatus | { ok: true }
+      if ("id" in updated) setRepos((rs) => mergeRepo(rs, updated))
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : String(err))
     }
-  }, [])
+  }, [message])
 
   async function exportManifest() {
     try {
@@ -757,7 +759,7 @@ export default function App({
     fetch("/api/version")
       .then((r) => (r.ok ? r.json() : null))
       .then((v) => {
-        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true, canPickDirectory: v.canPickDirectory === true, port: Number(v.port) || 0 })
+        if (v) setInstance({ version: String(v.version ?? ""), canQuit: v.canQuit === true, canPickDirectory: v.canPickDirectory === true, manualUpdates: v.manualUpdates === true, port: Number(v.port) || 0 })
       })
       .catch(() => {})
     // loadConfigStatus 是 useCallback([]) 稳定引用，列进依赖数组不会多触发一次——只是照规则补齐
@@ -1268,8 +1270,8 @@ export default function App({
           /* 高亮只标「用户自己额外开的后台行为」。文件监听改成默认关闭之后它也算一个——
              而且是这一组里最贵的那个（常驻句柄 + 溢出补票的全量重扫）。此前它默认开着，
              算进来会让齿轮永远亮着、信号归零，所以那时刻意排除在外 */
-          type={autoWatch || autoFetchMin > 0 || notifications || checkUpdates ? "primary" : "default"}
-          ghost={autoWatch || autoFetchMin > 0 || notifications || checkUpdates}
+          type={autoWatch || autoFetchMin > 0 || notifications || (!instance.manualUpdates && checkUpdates) ? "primary" : "default"}
+          ghost={autoWatch || autoFetchMin > 0 || notifications || (!instance.manualUpdates && checkUpdates)}
           /* 图标按钮没有可读文字，tooltip 就是它的名字，说清「点了会发生什么」即可。
              原来那条是「设置：主题 · 自动扫描 · 定时拉取 · 提醒」——枚举了 4 项而设置里现在有十来项，
              还把「GitHub 提醒」称作「提醒」，界面上同一个东西两个叫法 */
@@ -1484,18 +1486,21 @@ export default function App({
               {/* 更新检查：开关管的是「每次启动顺手问一句」，按钮管的是「现在问」。
                   两件事分开是因为它们回答的不是同一个问题——用户可能不想让应用
                   每次启动都联网，但此刻想知道有没有新版 */}
+              {!instance.manualUpdates && (
+                <div className="row">
+                  <span className="lb">
+                    {t("settings.checkUpdates")}<span className="hint">{t("settings.checkUpdatesHint")}</span>
+                  </span>
+                  <Switch size="small" aria-label={t("settings.checkUpdates")} checked={checkUpdates} onChange={toggleCheckUpdates} disabled={!configLoaded} />
+                </div>
+              )}
               <div className="row">
                 <span className="lb">
-                  {t("settings.checkUpdates")}<span className="hint">{t("settings.checkUpdatesHint")}</span>
-                </span>
-                <Switch size="small" aria-label={t("settings.checkUpdates")} checked={checkUpdates} onChange={toggleCheckUpdates} disabled={!configLoaded} />
-              </div>
-              <div className="row">
-                <span className="lb">
-                  {t("settings.checkUpdatesNow")}<span className="hint">{t("settings.checkUpdatesNowHint")}</span>
+                  {instance.manualUpdates ? t("settings.checkUpdates") : t("settings.checkUpdatesNow")}
+                  {!instance.manualUpdates && <span className="hint">{t("settings.checkUpdatesNowHint")}</span>}
                 </span>
                 <Button size="small" loading={checkingUpdate} onClick={() => void checkUpdateNow()}>
-                  {t("settings.checkUpdatesNowBtn")}
+                  {instance.manualUpdates ? t("update.openReleases") : t("settings.checkUpdatesNowBtn")}
                 </Button>
               </div>
               {/* 系统：本机/本实例相关的两个动作。它们和上面的开关一样即时生效，
@@ -1717,9 +1722,9 @@ export default function App({
       </Modal>
 
       {view === "worklog" ? (
-        <WorklogView onOpenRepo={showRepoDetail} />
+        <WorklogView lastScanAt={lastScanAt} onOpenRepo={showRepoDetail} />
       ) : view === "stats" ? (
-        <StatsView onOpenRepo={showRepoDetail} />
+        <StatsView lastScanAt={lastScanAt} onOpenRepo={showRepoDetail} />
       ) : view === "log" ? (
         <div className="rr-stats">
           <div style={{ display: "flex", alignItems: "center", marginBottom: 10 }}>

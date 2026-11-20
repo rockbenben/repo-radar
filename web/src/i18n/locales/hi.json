@@ -433,6 +433,7 @@
   "update.upToDateDetail": "आप पहले से नवीनतम रिलीज़ चला रहे हैं।",
   "update.availableTitle": "संस्करण {version} उपलब्ध है",
   "update.availableDetail": "अभी डाउनलोड करें? इंस्टॉल करने से पहले आपसे फिर पूछा जाएगा।",
+  "update.openReleases": "रिलीज़ पेज खोलें",
   "update.download": "डाउनलोड करें",
   "update.later": "बाद में",
   "update.downloadFailedTitle": "अपडेट डाउनलोड विफल",

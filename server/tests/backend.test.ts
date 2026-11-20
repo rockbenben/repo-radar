@@ -1,12 +1,13 @@
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createBackend, createRescanScheduler, createStructureRescan, type Backend } from "../src/backend"
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config"
 import { RepoWatcher } from "../src/watcher"
+import { cleanupFixtures, git, makeRepo } from "./fixtures"
 
 /** 手动可控的 promise，精确摆出「上一轮还没结束/还没开跑」的时序——与 serial.test.ts 同一手法 */
 function deferred<T>() {
@@ -42,6 +43,7 @@ afterEach(async () => {
   for (const b of running.splice(0)) await b.stop()
   for (const s of squatters.splice(0)) await new Promise((r) => s.close(r))
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 3 })
+  cleanupFixtures()
 })
 
 function track(b: Backend): Backend {
@@ -115,8 +117,9 @@ describe("createBackend", () => {
         if (e.type === "scan:done") resolve(e.payload)
       })
     })
-    await fetch(`http://127.0.0.1:${PORT}/api/scan`, { method: "POST" })
+    const rescan = await fetch(`http://127.0.0.1:${PORT}/api/scan`, { method: "POST" })
     const payload = await done
+    expect(rescan.headers.get("X-Repo-Radar-Scan-At")).toBe(payload.at)
     expect(Number.isNaN(Date.parse(payload.at))).toBe(false)
     expect(Array.isArray(payload.repos)).toBe(true)
     ws.close()
@@ -784,4 +787,26 @@ describe("stop() 与在飞重扫的时序", () => {
       closeSpy.mockRestore()
     }
   })
+})
+
+it("published scans invalidate heatmap results even when file watching is off", async () => {
+  const path = makeRepo()
+  const o = opts()
+  saveConfig(o.configFile, { ...DEFAULT_CONFIG, manualRepos: [path], autoWatch: false })
+  const b = track(createBackend(o))
+  await b.start()
+  await waitForFirstScan(b)
+  const base = `http://127.0.0.1:${b.port}`
+  const total = async () => {
+    const response = await fetch(`${base}/api/stats/heatmap?days=365`)
+    const { days } = await response.json() as { days: { count: number }[] }
+    return days.reduce((sum, day) => sum + day.count, 0)
+  }
+  expect(await total()).toBe(1)
+  writeFileSync(join(path, "new.txt"), "new commit")
+  git(path, "add", "-A")
+  git(path, "commit", "-m", "new commit")
+  const rescan = await fetch(`${base}/api/scan`, { method: "POST" })
+  expect(rescan.ok).toBe(true)
+  expect(await total()).toBe(2)
 })

@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { IdentityLedger } from "../src/repo-identity"
 import { JsonStore } from "../src/json-store"
 
 // pruneStale 的批量落盘断言要数落盘次数——vi.spyOn 在 ESM 下挡在
@@ -9,7 +10,7 @@ import { JsonStore } from "../src/json-store"
 // 只能整模块 mock：默认原样代理给真实实现，只把 writeFileSync 包一层用于计数
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>()
-  return { ...actual, writeFileSync: vi.fn(actual.writeFileSync) }
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync), writeFileSync: vi.fn(actual.writeFileSync) }
 })
 
 interface Entry { v: number; at?: string }
@@ -237,4 +238,35 @@ describe("JsonStore", () => {
     expect(() => s.flush()).not.toThrow()
     expect(seen.length).toBe(1)
   })
+})
+
+it("retries a transient identity-ledger read without replacing the previous IDs", async () => {
+  const file = tmpFile("repo-identity.json")
+  const path = join(file, "..", "renamed")
+  const disk = JSON.stringify({ original: { path, dev: "1", ino: "2", rootCommit: null, seenAt: new Date().toISOString(), gen: 1 } })
+  writeFileSync(file, disk)
+  vi.mocked(readFileSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error("temporary I/O failure"), { code: "EIO" })
+  })
+  const ledger = new IdentityLedger(file)
+  const scan = () => ledger.resolve([path], async () => null, () => ({ dev: "1", ino: "2" }))
+  await expect(scan()).rejects.toThrow("temporary I/O failure")
+  ledger.flush()
+  expect(readFileSync(file, "utf8")).toBe(disk)
+  expect((await scan()).get(path)).toBe("original")
+  ledger.flush()
+})
+
+it("preserves malformed identity-ledger bytes before rebuilding", async () => {
+  const file = tmpFile("repo-identity.json")
+  const malformed = '{"original":'
+  writeFileSync(file, malformed)
+  const path = join(dirname(file), "new-repo")
+  const ledger = new IdentityLedger(file)
+  await ledger.resolve([path], async () => null, () => null)
+  ledger.flush()
+  const backup = readdirSync(dirname(file)).find((name) => name.startsWith("repo-identity.json.corrupt-"))
+  expect(backup).toBeDefined()
+  expect(readFileSync(join(dirname(file), backup!), "utf8")).toBe(malformed)
+  expect(readFileSync(file, "utf8")).not.toBe(malformed)
 })

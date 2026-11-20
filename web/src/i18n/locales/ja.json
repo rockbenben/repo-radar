@@ -433,6 +433,7 @@
   "update.upToDateDetail": "現在実行中のバージョンが最新のリリースです。",
   "update.availableTitle": "バージョン {version} が利用可能です",
   "update.availableDetail": "今すぐダウンロードしますか？インストールの前にもう一度確認します。",
+  "update.openReleases": "リリースページを開く",
   "update.download": "ダウンロード",
   "update.later": "後で",
   "update.downloadFailedTitle": "アップデートのダウンロードに失敗しました",

@@ -433,6 +433,7 @@
   "update.upToDateDetail": "У вас уже установлена последняя версия.",
   "update.availableTitle": "Доступна версия {version}",
   "update.availableDetail": "Скачать сейчас? Перед установкой мы спросим ещё раз.",
+  "update.openReleases": "Открыть страницу релизов",
   "update.download": "Скачать",
   "update.later": "Позже",
   "update.downloadFailedTitle": "Не удалось скачать обновление",

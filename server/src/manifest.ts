@@ -16,6 +16,20 @@ export interface Manifest {
   repos: ManifestEntry[]
 }
 
+function shareableRemote(remote: string | undefined): string | null {
+  if (!remote) return null
+  if (!/^https?:\/\//i.test(remote)) return remote
+  try {
+    const url = new URL(remote)
+    if (!url.username && !url.password) return remote
+    url.username = ""
+    url.password = ""
+    return url.href
+  } catch {
+    return null
+  }
+}
+
 /** 从当前仓库列表生成可版本控制/分享的清单（记录路径与远程，便于备份、换机、环境重建）。 */
 export function buildManifest(repos: RepoStatus[], now: string): Manifest {
   return {
@@ -24,14 +38,14 @@ export function buildManifest(repos: RepoStatus[], now: string): Manifest {
     repos: repos.map((r) => ({
       name: r.name,
       path: r.path,
-      remote: r.remotes.find((x) => x.name === "origin")?.url ?? r.remotes[0]?.url ?? null,
+      remote: shareableRemote(r.remotes.find((x) => x.name === "origin")?.url ?? r.remotes[0]?.url),
       group: r.group,
       tags: r.tags,
     })),
   }
 }
 
-export interface ImportSummary {
+interface ImportSummary {
   added: number // 新并入 manualRepos 的本机已存在仓库数
   alreadyTracked: number // 清单里已在 manualRepos 的数量
   missing: ManifestEntry[] // 本机不存在的条目（供用户按远程手动克隆）

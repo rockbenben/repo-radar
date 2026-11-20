@@ -1,8 +1,8 @@
 # Development
 
 ```bash
-npm install     # needs Node 22.12+ (the floor the current vite / concurrently / electron require; CI runs 24)
-npm run dev     # vite + the app window with hot reload
+npm install     # Node 22.13+ on the 22.x line, or Node 24+
+npm run dev     # starts the app after Vite binds 127.0.0.1:5173
 npm test        # server + web + desktop test suites and typechecks
 npm run lint    # biome check (lint + import order; no code formatting)
 npm run bench   # scan-concurrency benchmark on synthetic repos (a few minutes)
@@ -49,3 +49,5 @@ outside the process unreliable.
 Windows, macOS and Linux. The server suite drives real `git` and the real file watching APIs, so it
 is run on all three — they behave differently enough (paths and CRLF, FSEvents delivering events
 after a handle closes, inotify limits) that passing on one says little about the others.
+
+The web suite also runs on Node 26 in CI. Development startup requires port 5173 to be free.

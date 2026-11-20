@@ -433,6 +433,7 @@
   "update.upToDateDetail": "คุณใช้รุ่นล่าสุดอยู่แล้ว",
   "update.availableTitle": "มีรุ่น {version} ให้ใช้งาน",
   "update.availableDetail": "ดาวน์โหลดเลยไหม? จะถามอีกครั้งก่อนติดตั้ง",
+  "update.openReleases": "เปิดหน้ารุ่นเผยแพร่",
   "update.download": "ดาวน์โหลด",
   "update.later": "ไว้ทีหลัง",
   "update.downloadFailedTitle": "ดาวน์โหลดอัปเดตไม่สำเร็จ",

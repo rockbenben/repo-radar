@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { checkForUpdates } from "../src/update"
 
 // desktop 单测不加载真 electron（多个文件并行 import 会抢着解压二进制，Windows CI 上 os error 183）。
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => {
     isPackaged: true,
     locale: "en",
     responses,
+    openExternal: vi.fn(async (_url: string) => {}),
     showMessageBox: vi.fn(async (...args: unknown[]) => {
       const options = (args.length === 2 ? args[1] : args[0]) as { cancelId?: number }
       return { response: responses.length > 0 ? responses.shift()! : (options.cancelId ?? 1) }
@@ -32,6 +33,7 @@ vi.mock("electron", () => ({
     getLocale: () => mocks.locale,
   },
   dialog: { showMessageBox: mocks.showMessageBox },
+  shell: { openExternal: mocks.openExternal },
 }))
 
 vi.mock("electron-updater", () => ({ autoUpdater: mocks.autoUpdater }))
@@ -39,7 +41,10 @@ vi.mock("electron-updater", () => ({ autoUpdater: mocks.autoUpdater }))
 const host = { getWindow: () => null }
 const available = { isUpdateAvailable: true, updateInfo: { version: "9.9.9" } }
 
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!
+
 beforeEach(() => {
+  Object.defineProperty(process, "platform", { ...originalPlatform, value: "win32" })
   vi.clearAllMocks()
   mocks.isPackaged = true
   mocks.locale = "en"
@@ -49,6 +54,22 @@ beforeEach(() => {
   mocks.autoUpdater.checkForUpdates.mockReset()
   mocks.autoUpdater.downloadUpdate.mockReset().mockResolvedValue(undefined)
   mocks.autoUpdater.quitAndInstall.mockReset()
+})
+
+afterEach(() => {
+  Object.defineProperty(process, "platform", originalPlatform)
+})
+
+it("opens Releases on demand for a packaged macOS app and skips startup checks", async () => {
+  Object.defineProperty(process, "platform", { ...originalPlatform, value: "darwin" })
+  mocks.autoUpdater.checkForUpdates.mockResolvedValue(available)
+  await expect(checkForUpdates(host, false)).resolves.toBe("skipped")
+  expect(mocks.openExternal).not.toHaveBeenCalled()
+  await expect(checkForUpdates(host, true)).resolves.toBe("openedReleasePage")
+  expect(mocks.openExternal).toHaveBeenCalledExactlyOnceWith("https://github.com/rockbenben/repo-radar/releases/latest")
+  expect(mocks.autoUpdater.checkForUpdates).not.toHaveBeenCalled()
+  expect(mocks.autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+  expect(mocks.showMessageBox).not.toHaveBeenCalled()
 })
 
 describe("checkForUpdates — 默认关闭与静默边界", () => {

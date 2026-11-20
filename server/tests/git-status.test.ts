@@ -405,3 +405,22 @@ describe("commitRepo", () => {
     expect(r.ok).toBe(false)
   })
 })
+
+it("previews staged additions and their latest working-tree content before the first commit", async () => {
+  const path = makeRepo({ commits: 0 })
+  writeFileSync(join(path, "staged.txt"), "staged only\n")
+  writeFileSync(join(path, "edited.txt"), "index content\n")
+  git(path, "add", "-A")
+  writeFileSync(join(path, "edited.txt"), "working copy\n")
+  writeFileSync(join(path, "loose.txt"), "untracked\n")
+  const preview = await getRepoDiff(path)
+  expect(preview.diff).toContain("+staged only")
+  expect(preview.diff).toContain("+working copy")
+  expect(preview.diff).not.toContain("index content")
+  expect(preview.untracked).toEqual(["loose.txt"])
+})
+
+it("reports Git read failures instead of showing an empty diff", async () => {
+  const path = makeRepo()
+  await expect(getRepoDiff(join(path, "missing"))).rejects.toThrow()
+})

@@ -1,16 +1,22 @@
 import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { lstat } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { lstat, realpath } from "node:fs/promises"
+import { basename, join, resolve } from "node:path"
+import { gitEnvironment } from "./git-env"
 import { detectLanguage } from "./lang"
 import { mapLimit } from "./map-limit"
 import { readRepoMeta } from "./meta"
-import type { CommitInfo, DirtyCounts, RemoteInfo, RepoStatus } from "./types"
+import type { CommitInfo, CommitResult, DirtyCounts, DiscardResult, RemoteInfo, RepoDetail, RepoDiff, RepoStatus, StashActionResult, StashEntry } from "./types"
 import { shouldIgnorePath } from "./watch-filter"
+import { readWorktreeMarker, worktreeMarkers } from "./worktree-marker"
 
 export interface GitResult {
   stdout: string
   stderr: string
+}
+
+interface GitCapture extends GitResult {
+  stdoutTruncated?: true
 }
 
 export class GitError extends Error {
@@ -69,11 +75,24 @@ export const LOG_UTF8 = ["-c", "i18n.logOutputEncoding=UTF-8"]
  */
 const NO_COLOR = ["--no-color"]
 
-export function runGit(cwd: string, args: string[], timeoutMs = DEFAULT_TIMEOUT_MS, extraEnv?: Record<string, string>): Promise<GitResult> {
+export function runGit(cwd: string, args: string[], timeoutMs?: number, extraEnv?: Record<string, string>): Promise<GitResult> {
+  return runGitWithOptions(cwd, args, { timeoutMs, extraEnv })
+}
+
+function runGitWithOptions(
+  cwd: string,
+  args: string[],
+  { timeoutMs = DEFAULT_TIMEOUT_MS, extraEnv, maxOutputChars = Infinity }: {
+    timeoutMs?: number
+    extraEnv?: Record<string, string>
+    maxOutputChars?: number
+  },
+): Promise<GitCapture> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { cwd, windowsHide: true, env: extraEnv ? { ...process.env, ...extraEnv } : undefined })
+    const child = spawn("git", args, { cwd, windowsHide: true, env: gitEnvironment(extraEnv) })
     let stdout = ""
     let stderr = ""
+    let stdoutTruncated = false
     const timer = setTimeout(() => {
       child.kill()
       reject(new GitError(`git ${args.join(" ")} timed out after ${timeoutMs}ms`, stderr, stdout))
@@ -91,21 +110,39 @@ export function runGit(cwd: string, args: string[], timeoutMs = DEFAULT_TIMEOUT_
     // 实测阈值精确为 260：259 字符干净走 child error，260 起必现两条 uncaught。
     child.stdout.on("error", () => {})
     child.stderr.on("error", () => {})
-    child.stdout.on("data", (d: string) => (stdout += d))
-    child.stderr.on("data", (d: string) => (stderr += d))
+    // Drain both pipes through process exit. Only retain the preview prefix.
+    child.stdout.on("data", (chunk: string) => {
+      const remaining = maxOutputChars - stdout.length
+      if (chunk.length > remaining) stdoutTruncated = true
+      if (remaining > 0) stdout += chunk.slice(0, remaining)
+    })
+    child.stderr.on("data", (chunk: string) => {
+      const remaining = maxOutputChars - stderr.length
+      if (remaining > 0) stderr += chunk.slice(0, remaining)
+    })
     child.on("error", (err) => {
       clearTimeout(timer)
       reject(new GitError(`failed to spawn git: ${err.message}`, ""))
     })
     child.on("close", (code) => {
       clearTimeout(timer)
-      if (code === 0) resolve({ stdout, stderr })
+      if (code === 0) resolve(stdoutTruncated ? { stdout, stderr, stdoutTruncated } : { stdout, stderr })
       else reject(new GitError(`git ${args.join(" ")} exited with ${code}`, stderr, stdout))
     })
   })
 }
 
 /** 把 git 输出按行拆分，trim 每行并丢掉空行——Windows CRLF 的尾随 \r 也一并去掉。列表类输出统一走这里。 */
+export async function readWorktree(path: string) {
+  const root = await realpath(path)
+  const { stdout } = await runGit(root, ["rev-parse", "--show-toplevel", "--git-common-dir", "--absolute-git-dir"])
+  const [top, common, gitDir] = stdout.split(/\r?\n/)
+  if (!top || !common || !gitDir || root !== await realpath(top)) {
+    throw new Error("Path is not a Git worktree root")
+  }
+  return { root, gitDir, commonDir: await realpath(resolve(root, common)) }
+}
+
 export function splitLines(r: GitResult): string[] {
   return r.stdout.split("\n").map((s) => s.trim()).filter((s) => s !== "")
 }
@@ -409,13 +446,6 @@ export function parseLastCommit(out: string): { commit: CommitInfo; committedAt:
   return { commit: { hash, message, author, date }, committedAt: committedAt ?? null }
 }
 
-export interface RepoDetail {
-  recentCommits: CommitInfo[]
-  stashes: StashEntry[]
-  branches: string[] // 本地分支名（含当前分支），main/master 置顶，供详情面板切换
-  remoteBranches: string[] // 远程独有分支（本地没有同名的），检出时 git 自动建跟踪分支
-}
-
 const HEADS_PREFIX = "refs/heads/"
 
 /**
@@ -507,14 +537,6 @@ export async function createBranch(path: string, name: string): Promise<{ ok: bo
   }
 }
 
-// code 与 CommitCode 同一约定：稳定枚举供前端按语言组装文案，message 保留中文原文作日志/回退
-type DiscardCode = "discarded" | "outOfScope" | "unbornHead" | "error"
-export interface DiscardResult {
-  ok: boolean
-  code: DiscardCode
-  message: string
-}
-
 /**
  * 丢弃全部未提交改动：reset --hard HEAD（还原已跟踪的改动/删除）+ clean -fd（删未跟踪文件/目录，
  * 但保留 .gitignore 忽略项，不加 -x 以免误删 node_modules/.env 等）。**不可恢复**。
@@ -594,17 +616,6 @@ export async function discardChanges(path: string): Promise<DiscardResult> {
 const STASH_SEP = "\x1f"
 const STASH_TIMEOUT_MS = 60_000
 
-export interface StashEntry {
-  ref: string // 当前的 stash@{n}；仅用于就地 diff/统计，操作一律按 sha 定位（不受丢弃/弹出后重新编号影响）
-  sha: string // stash 提交 id；稳定不变。几乎唯一——仅当两条 stash 内容+时间戳(秒)+父提交全同才会撞 sha（罕见，且此时两者可互换）
-  branch: string | null // 从 "WIP on <branch>:" 解析出的分支
-  message: string // stash 描述，如 "WIP on main: e728679 2"
-  date: string // ISO 8601 提交时间
-  files: number
-  insertions: number
-  deletions: number
-}
-
 // stash 提交不可变：按 sha 记住改动量统计，避免每次详情/收纳箱打开都重跑 N 个 git stash show。
 // 加一个上限，长期运行也不会无界增长（stash 丢弃后其 sha 条目留着是无害的，命中即失效由 sha 唯一性保证）。
 const stashStatCache = new Map<string, { files: number; insertions: number; deletions: number }>()
@@ -638,12 +649,12 @@ async function includeUntrackedSupported(cwd: string): Promise<boolean> {
   return untrackedProbe
 }
 // 按探测到的版本决定是否带 --include-untracked；不做「失败即退回」的兜底重试——那会把真错误掩盖成「diff 无未跟踪内容」。失败直接抛。
-async function stashShow(path: string, extra: string[], ref: string): Promise<GitResult> {
+async function stashShow(path: string, extra: string[], ref: string, maxOutputChars?: number): Promise<GitCapture> {
   // -c core.quotePath=false：见 QUOTE_PATH_OFF。stash diff 里的中文/emoji 文件名否则是 "\344\270\255…"
   const args = [...QUOTE_PATH_OFF, "--no-optional-locks", "stash", "show", ...NO_COLOR]
   if (await includeUntrackedSupported(path)) args.push("--include-untracked")
   args.push(...extra, ref)
-  return runGit(path, args)
+  return runGitWithOptions(path, args, { maxOutputChars })
 }
 
 /** 列出单个仓库的全部 stash（含改动量统计）。任一步失败都退化为空/零，绝不抛。 */
@@ -716,9 +727,7 @@ export async function stashDiff(path: string, sha: string): Promise<string | nul
   if (!splitLines(listing).includes(sha)) return null // 确实没有这条 stash → 404
   // 直接把 sha（stash 是提交，git stash show 接受提交号）传给 stash show，不经 stash@{n}——
   // 免疫并发 drop/pop 造成的重新编号：即便这条刚被丢弃，提交对象仍在，diff 仍是它本身。失败则抛 →500。
-  let diff = (await stashShow(path, ["-p"], sha)).stdout
-  if (diff.length > DIFF_MAX_CHARS) diff = `${diff.slice(0, DIFF_MAX_CHARS)}\n… (diff 已截断)`
-  return diff
+  return formatDiffPreview(await stashShow(path, ["-p"], sha, DIFF_MAX_CHARS))
 }
 
 export type StashOp = "apply" | "pop" | "drop"
@@ -727,7 +736,7 @@ export type StashOp = "apply" | "pop" | "drop"
  * 对单条 stash 执行 apply/pop/drop，按 sha 定位当前 ref（sha 唯一，且重新编号后仍稳定）。
  * pop 遇冲突时 git 会保留该 stash 并非零退出——如实回报 stderr，工作区的冲突由下次刷新体现。
  */
-export async function stashAction(path: string, sha: string, op: StashOp): Promise<{ ok: boolean; message: string; conflict?: boolean }> {
+export async function stashAction(path: string, sha: string, op: StashOp): Promise<StashActionResult> {
   const ref = (await stashRefMap(path)).get(sha)
   if (ref === undefined) return { ok: false, message: "stash 未找到（可能已被处理）" }
   try {
@@ -828,11 +837,19 @@ export async function runRepoAction(path: string, action: RepoAction): Promise<{
  * 安全删除已合并的本地分支（git branch -d，只删已合并的，未合并会失败而非强删）。
  * 返回每个分支的删除结果。
  */
+export async function getMergedMainBranches(path: string): Promise<string[]> {
+  const result = await runGit(path, ["branch", "--format=%(HEAD)%09%(refname)", "--merged"])
+  const lines = result.stdout.split("\n")
+  if (!lines.some((line) => /^\*\trefs\/heads\/(main|master)\r?$/.test(line))) return []
+  return localBranchNames({ ...result, stdout: lines.map((line) => line.slice(2)).join("\n") })
+    .filter((name) => name !== "main" && name !== "master")
+}
+
 export async function deleteBranches(path: string, names: string[]): Promise<{ name: string; ok: boolean; message: string }[]> {
   const out: { name: string; ok: boolean; message: string }[] = []
   for (const name of names) {
     try {
-      await runGit(path, ["branch", "-d", name])
+      await runGit(path, ["branch", "-d", "--", name])
       out.push({ name, ok: true, message: "已删除" })
     } catch (err) {
       const msg = gitErrMessage(err)
@@ -844,44 +861,31 @@ export async function deleteBranches(path: string, names: string[]): Promise<{ n
 
 const DIFF_MAX_CHARS = 20_000
 
-export interface RepoDiff {
-  diff: string
-  untracked: string[]
+function formatDiffPreview({ stdout, stdoutTruncated }: GitCapture): string {
+  if (!stdoutTruncated) return stdout
+  // At the character limit, drop a dangling UTF-16 high surrogate before appending the legacy notice.
+  return `${stdout.replace(/[\uD800-\uDBFF]$/u, "")}\n… (diff 已截断)`
 }
 
 export async function getRepoDiff(path: string): Promise<RepoDiff> {
-  let diff = ""
-  // 三条命令都带 QUOTE_PATH_OFF：diff 头和未跟踪列表都是**路径**，不带就是一屏八进制转义
-  try {
-    const r = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "diff", ...NO_COLOR, "HEAD"])
-    diff = r.stdout
-  } catch {
-    try {
-      const r = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "diff", ...NO_COLOR])
-      diff = r.stdout
-    } catch {
-      diff = ""
-    }
-  }
-  if (diff.length > DIFF_MAX_CHARS) {
-    diff = `${diff.slice(0, DIFF_MAX_CHARS)}\n… (diff 已截断)`
-  }
+  const diffAgainst = (base: string) =>
+    runGitWithOptions(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "diff", ...NO_COLOR, base, "--"], { maxOutputChars: DIFF_MAX_CHARS })
+  const result = await diffAgainst("HEAD").catch(async (err: unknown) => {
+    const status = await runGit(path, ["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=no"])
+      .catch(() => null)
+    if (!status || !splitLines(status).includes("# branch.oid (initial)")) throw err
+    const { stdout } = await runGit(path, ["rev-parse", "--show-object-format"])
+    // Git before --show-object-format echoes the option and supports only SHA-1.
+    const format = stdout.trim()
+    const emptyTree = createHash(format === "--show-object-format" ? "sha1" : format).update("tree 0\0").digest("hex")
+    return diffAgainst(emptyTree)
+  })
   const untracked = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "ls-files", "--others", "--exclude-standard"])
-    .then((r) => r.stdout.split("\n").filter((line) => line !== ""))
-    .catch(() => [])
-  return { diff, untracked }
+    .then((r) => r.stdout.split(/\r?\n/).filter((line) => line !== ""))
+  return { diff: formatDiffPreview(result), untracked }
 }
 
 const COMMIT_TIMEOUT_MS = 120_000
-
-// code 是稳定枚举，供前端按语言组装文案；message 保留中文原文作日志/回退；detail 是 git 原始报错
-type CommitCode = "committed" | "committedPushed" | "pushFailed" | "commitError"
-export interface CommitResult {
-  ok: boolean
-  code: CommitCode
-  message: string
-  detail?: string
-}
 
 export async function commitRepo(path: string, message: string, push: boolean): Promise<CommitResult> {
   try {
@@ -949,7 +953,8 @@ export interface RepoHeavy {
 /** 1 个 git 进程，外加至多 TOUCHED_STAT_LIMIT 次 lstat（异步、限并发、带总时限，见
  *  worktreeTouchedAt）。status 失败（非 git 目录、git 缺失）直接抛出，由调用方决定如何降级。
  *  --no-optional-locks：读状态时不刷新/写 .git/index，避免触发文件监听的自反馈 */
-export async function getRepoCore(path: string): Promise<RepoCore> {
+export async function getRepoCore(path: string, verifyRoot = false): Promise<RepoCore> {
+  if (verifyRoot) await readWorktree(path)
   const status = await runGit(path, [...QUOTE_PATH_OFF, "--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=normal"])
   const parsed = parseStatus(status.stdout)
   return {
@@ -1107,9 +1112,9 @@ function latestOf(a: string | null, b: string | null): string | null {
  * git 操作为止。代价是每仓库每轮几次 existsSync/readFileSync 加一次 readdirSync，
  * 一个进程都不 spawn——当初并进 heavy 是图结构方便，不是为了省开销。
  */
-export function composeStatus(path: string, id: string, core: RepoCore, heavy: RepoHeavy): RepoStatus {
+export function composeStatus(path: string, id: string, core: RepoCore, heavy: RepoHeavy, marker?: string): RepoStatus {
   const meta = readRepoMeta(path, heavy.remotes)
-  return {
+  const status: RepoStatus = {
     id,
     path,
     name: basename(path),
@@ -1146,12 +1151,15 @@ export function composeStatus(path: string, id: string, core: RepoCore, heavy: R
     error: null,
     scannedAt: new Date().toISOString(),
   }
+  if (marker !== undefined) worktreeMarkers.set(status, marker)
+  return status
 }
 
 /** 完整刷新（core + heavy）。id 可由调用方指定——身份账本认领后，仓库沿用老 id 而不是按新路径重算 */
 export async function getRepoStatus(path: string, id: string = repoId(path)): Promise<RepoStatus> {
+  const marker = readWorktreeMarker(path)
   const core = await getRepoCore(path)
   // 这条路径不落盘任何东西，降级与否只影响「要不要写缓存」，这里丢掉它即可（旧行为不变）
   const { heavy } = await getRepoHeavy(path, core)
-  return composeStatus(path, id, core, heavy)
+  return composeStatus(path, id, core, heavy, marker)
 }

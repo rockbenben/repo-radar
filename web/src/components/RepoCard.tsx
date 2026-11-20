@@ -4,7 +4,7 @@ import { gt, useT } from "../i18n"
 import { healthMessage } from "../lib/healthText"
 import { isSideBranch, langColor, remoteWeb } from "../lib/meta"
 import { relativeTime } from "../lib/time"
-import type { CommitInfo, HealthIssue, RepoStatus } from "../types"
+import type { CommitInfo, HealthIssue, RepoDetail, RepoStatus } from "../types"
 
 // 卡片内快速预览：点"⋯"弹出最近提交，不用打开详情弹窗。内容按需拉取。
 function CommitPreview({ repoId, changes }: { repoId: string; changes: number }) {
@@ -20,7 +20,7 @@ function CommitPreview({ repoId, changes }: { repoId: string; changes: number })
     setCommits(null) // 先回到「加载中」：宁可空一下，也别把旧列表当成新的展示
     fetch(`/api/repos/${repoId}/detail?basic=1`) // 只要最近提交，跳过 stash/分支重活
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
+      .then((d: RepoDetail | null) => {
         if (!cancelled) setCommits(d?.recentCommits ?? [])
       })
       .catch(() => {

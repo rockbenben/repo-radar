@@ -433,6 +433,7 @@
   "update.upToDateDetail": "目前執行的就是最新發行版。",
   "update.availableTitle": "發現新版本 v{version}",
   "update.availableDetail": "要現在下載嗎？下載完成後還會再問一次是否安裝。",
+  "update.openReleases": "開啟發行頁面",
   "update.download": "下載",
   "update.later": "稍後",
   "update.downloadFailedTitle": "下載更新失敗",

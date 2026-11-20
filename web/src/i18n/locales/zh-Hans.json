@@ -433,6 +433,7 @@
   "update.upToDateDetail": "当前运行的就是最新发布版。",
   "update.availableTitle": "发现新版本 v{version}",
   "update.availableDetail": "要现在下载吗？下载完成后还会再问一次是否安装。",
+  "update.openReleases": "打开发布页",
   "update.download": "下载",
   "update.later": "稍后",
   "update.downloadFailedTitle": "下载更新失败",

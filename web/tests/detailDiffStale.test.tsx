@@ -259,3 +259,23 @@ describe("卡片「⋯」预览的最近提交", () => {
     expect(seen.filter((u) => u.includes("basic=1")).length).toBe(2)
   })
 })
+
+it("shows a read error and retries a failed diff request", async () => {
+  let diffCalls = 0
+  vi.stubGlobal("fetch", vi.fn(async (url: unknown) => {
+    const path = String(url)
+    if (path.endsWith("/diff")) {
+      if (++diffCalls === 1) return new Response(null, { status: 500 })
+      return Response.json({ diff: "+recovered", untracked: [] })
+    }
+    return Response.json(path.includes("/heatmap")
+      ? { days: [] }
+      : { recentCommits: [], stashes: [], branches: [], remoteBranches: [] })
+  }))
+  render(panel(stub(dirty(1))))
+  fireEvent.click(await screen.findByText("查看 diff"))
+  expect(await screen.findByText(/HTTP 500/)).toBeTruthy()
+  fireEvent.click(await screen.findByRole("button", { name: "重试" }))
+  expect(await screen.findByText("+recovered")).toBeTruthy()
+  expect(diffCalls).toBe(2)
+})

@@ -179,8 +179,7 @@ export class IdentityLedger {
   private byPath = new Map<string, string>() // 归一化路径 → id
 
   constructor(file: string, onCorrupt?: (err: unknown) => void, onWriteError?: (err: unknown) => void) {
-    this.store = new JsonStore({ file, isValid: isIdentityEntry, debounceMs: 1000, onCorrupt, onWriteError })
-    this.reindex()
+    this.store = new JsonStore({ file, isValid: isIdentityEntry, debounceMs: 1000, protectOnLoad: true, onCorrupt, onWriteError })
   }
 
   private reindex(): void {
@@ -234,6 +233,7 @@ export class IdentityLedger {
     statOf: (path: string) => { dev: string; ino: string } | null = IdentityLedger.statDotGit,
     existsOf: (path: string) => boolean = IdentityLedger.pathExists,
   ): Promise<Map<string, string>> {
+    this.reindex() // 先读到完整账本，失败时整轮退出，下一轮重试。
     // 先按归一化路径去重。同一仓库以两种拼写（大小写/分隔符）出现在同一轮时，两条会算出
     // 同一个 repoId，后一条被下面的撞车守卫改成合成 id，又在 reindex 时**赢下**那个共享的
     // 归一化键——用户 config.json 里那个真 id 就成了孤儿，标签全丢。去重同时把这条隐含

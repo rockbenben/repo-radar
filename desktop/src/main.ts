@@ -135,6 +135,7 @@ const trayIconPath =
 // Linux 又没有 macOS 那种 Dock/activate 路径，用户就再也叫不回面板，只能去杀进程。
 // 因此 Linux 上关窗即退出；托盘照常创建，有就是额外入口，没有也不影响正常使用。
 const hideOnClose = process.platform !== "linux"
+const manualUpdates = process.platform === "darwin"
 
 // 只有拿到单实例锁的那个进程才该做后续初始化：创建 backend、注册监听器、起窗口。
 // 全部收进这个函数里（包括 mainWindow/showWindow，因为 showWindow 要引用 backend.port），
@@ -189,7 +190,7 @@ function bootstrap(): void {
       return
     }
     mainWindow = createWindow({
-      url: isDev ? "http://localhost:5173" : `http://127.0.0.1:${backend.port}`,
+      url: isDev ? "http://127.0.0.1:5173" : `http://127.0.0.1:${backend.port}`,
       stateFile: windowStateFile,
       iconPath: appIconPath, // 只有 Linux 会用到（见 window.ts 里的注释）：任务栏用 256px 大图
       isQuitting: () => quitting,
@@ -221,9 +222,11 @@ function bootstrap(): void {
       shutdown: () => void quit(),
       // 设置面板里那一下「检查更新」：跑在主进程里（原生对话框 + electron-updater 都在这儿），
       // 设置面板只是个网页，它自己没法弹原生框
+      manualUpdates,
       checkUpdate: (lang) => checkForUpdates({ getWindow: () => mainWindow }, true, lang),
       // 首次加的扫描目录不该逼用户手打路径：桌面端直接开系统文件夹选择器。
       // web 只是调这个端点；服务器模式没有它，按钮会隐藏。
+      openDirectory: (path) => shell.openPath(path),
       pickDirectory: async () => {
         const win = mainWindow
         const options = {
@@ -328,6 +331,10 @@ function bootstrap(): void {
   app
     .whenReady()
     .then(async () => {
+      // 安全基线：桌面端所有通信走本地回环 HTTP/WS，不需要任何系统特权 API，默认拒绝
+      session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+      session.defaultSession.setPermissionCheckHandler(() => false)
+
       cleanupLegacyEntries(autostartStateFile) // 迁移：旧 SEA 版的自启项会拉起旧 exe，和本应用抢端口
 
       // 版本变化即清一次 HTTP 缓存：必须在任何窗口 loadURL 之前（showWindow 最早在本回调末尾
@@ -391,7 +398,7 @@ function bootstrap(): void {
         {
           show: mainT(app.getLocale(), "tray.show"),
           rescan: mainT(app.getLocale(), "bar.rescan"),
-          checkUpdate: mainT(app.getLocale(), "settings.checkUpdatesNowBtn"),
+          checkUpdate: mainT(app.getLocale(), manualUpdates ? "update.openReleases" : "settings.checkUpdatesNowBtn"),
           openLogs: mainT(app.getLocale(), "tray.openLogs"),
           quit: mainT(app.getLocale(), "settings.quitBtn"),
         },
@@ -406,7 +413,7 @@ function bootstrap(): void {
         /* 配置读不出来时按「关」处理 */
       }
       // 延后几秒再查：启动扫描正在跑，不该跟它抢带宽。检查本身是异步的，不占主线程。
-      if (wantUpdateCheck) {
+      if (wantUpdateCheck && !manualUpdates) {
         updateTimer = setTimeout(() => {
           updateTimer = null
           void checkForUpdates({ getWindow: () => mainWindow }, false)

@@ -127,7 +127,7 @@ export function createWindow(options: WindowOptions): BrowserWindow {
     // 不传的话任务栏/Alt-Tab 切换器上会显示通用的 Electron 图标。iconPath 由调用方
     // （main.ts）传入，这里不硬编码路径——window.ts 不该关心图标文件实际在哪。
     icon: iconPath,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
   if (state.maximized) win.maximize()
   win.once("ready-to-show", () => win.show())

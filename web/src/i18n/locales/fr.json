@@ -433,6 +433,7 @@
   "update.upToDateDetail": "Vous utilisez déjà la dernière version.",
   "update.availableTitle": "La version {version} est disponible",
   "update.availableDetail": "Télécharger maintenant ? Une confirmation vous sera demandée avant l'installation.",
+  "update.openReleases": "Ouvrir la page des versions",
   "update.download": "Télécharger",
   "update.later": "Plus tard",
   "update.downloadFailedTitle": "Échec du téléchargement de la mise à jour",

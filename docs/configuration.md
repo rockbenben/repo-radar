@@ -12,7 +12,7 @@ fields are covered in the README; this page is the rest.
 | `roots` / `excludes` | where to scan (finds `.git` up to 6 deep, skipping dot-folders and not following symlinks) and which folder names to skip |
 | `manualRepos` | repos added outside the roots. Unlike scanned repos these are **not** tracked by identity: rename or move one and its card errors until you fix the path here |
 | `health` | `{ staleDays, disabledRules }` — tune the "stale" threshold or switch off individual checks |
-| `open` | command templates for the editor / terminal / folder buttons (`{path}` = the repo path) |
+| `open` | editor, terminal, and folder commands. The built-in values select platform defaults. Custom values take an executable and arguments, with quotes around arguments containing spaces. `{path}` is inserted as literal text in an argument. For shell pipelines or command sequences, use a separate executable script |
 | `autoWatch` / `autoScanMinutes` / `watchLimit` / `autoFetchMinutes` / `notifications` | background behaviour. Only `autoScanMinutes` (30) is on by default |
 | `checkUpdates` | desktop builds only: ask GitHub once at startup whether a newer release exists. Off by default; the check never downloads or installs anything — both need your confirmation |
 | `tags` / `favorites` / `groupOverrides` / `notes` / `archived` | per-repo organization |

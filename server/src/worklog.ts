@@ -1,23 +1,9 @@
 import { LOG_UTF8, NO_SHOW_SIGNATURE, runGit, splitLines } from "./git"
+import { localDay } from "./local-date"
 import { mapLimit } from "./map-limit"
+import type { WorklogResponse } from "./types"
 
-interface WorklogCommit {
-  repoId: string
-  repoName: string
-  repoDir: string // 目录名（repoName 用的是 displayName，两个名字都带上前端才能对上看板卡片）
-  hash: string // 短 hash（7 位）
-  date: string // committer ISO 8601（含时区偏移），仅用于按绝对时刻排序
-  day: string // 本地日期 YYYY-MM-DD（Node 从 %cI 按本机本地时区算，分组与范围过滤同一时区）
-  time: string // 本地 HH:mm
-  subject: string
-  author: string // 作者名 %an
-  authorEmail: string // 作者邮箱 %ae（前端按邮箱筛选「提交人」，比名字稳）
-}
-
-export interface WorklogResult {
-  commits: WorklogCommit[]
-  failed: string[] // 读取失败的仓库名（结果可能不全，前端据此提示）
-}
+type WorklogResult = Pick<WorklogResponse, "commits" | "failed">
 
 /**
  * 各仓库的「有效 user.email」并集（仓库本地覆盖优先于全局，git config 自动就近取）。
@@ -71,8 +57,9 @@ export async function getWorklog(
       const lines = splitLines(res)
       // 命中上限且截断处（最老一条）仍不早于 since：更深处可能还有窗口内的提交没扫到 → 计入 failed，
       // 前端会亮「结果可能不全」；截断处已早于窗口则说明窗口内已扫全，无需提示
-      if (lines.length >= WORKLOG_MAX_COMMITS && (lines[lines.length - 1]?.split(SEP)[1] ?? "").slice(0, 10) >= since) {
-        failed.push(r.displayName ?? r.name)
+      if (lines.length >= WORKLOG_MAX_COMMITS) {
+        const oldest = new Date(lines[lines.length - 1].split(SEP)[1])
+        if (Number.isNaN(oldest.getTime()) || localDay(oldest) >= since) failed.push(r.displayName ?? r.name)
       }
       return lines
         .map((line) => {
@@ -88,7 +75,7 @@ export async function getWorklog(
             repoDir: r.name,
             hash,
             date,
-            day: ok ? `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}` : (date ?? "").slice(0, 10),
+            day: ok ? localDay(d) : (date ?? "").slice(0, 10),
             time: ok ? `${p2(d.getHours())}:${p2(d.getMinutes())}` : "",
             subject: subject ?? "",
             author: author ?? "",

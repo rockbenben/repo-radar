@@ -12,14 +12,15 @@ import { InboxCache } from "./inbox-cache"
 import { mapLimit } from "./map-limit"
 import { isPortUnavailable, PORT, portCandidates } from "./port"
 import { forgetRememberedPort, loadRememberedPort, saveRememberedPort } from "./port-state"
-import { drainRepoLocks, pendingRepoOps, trackPending, withRepoLock } from "./queue"
+import { drainRepoLocks, pendingRepoOps, trackPending } from "./queue"
 import { RepoCache } from "./repo-cache"
 import { IdentityLedger } from "./repo-identity"
+import { withRepoTarget } from "./repo-target"
 import { type ApiExtras, createApi, originAllowed } from "./routes"
 import { createSerialQueue } from "./serial"
 import { createShutdown } from "./shutdown"
 import { diskStatic } from "./static"
-import { evictRepoStats } from "./stats"
+import { clearStatsCache, evictRepoStats } from "./stats"
 import { RepoStore } from "./store"
 import type { GithubInbox, RepoStatus } from "./types"
 import { RepoWatcher } from "./watcher"
@@ -31,7 +32,7 @@ export interface BackendOptions {
   port?: number // 仅测试用；正常走 REPO_RADAR_PORT / DEFAULT_PORT
   allowPortFallback?: boolean // 端口绑不上时可否改用别的（默认 true）。显式端口/开发模式下必须关掉，见 portCandidateList
   devOrigins?: boolean // 是否放行 vite dev server（5173）作为同源。**只能在开发模式下为真**，见 routes.ts 的 DEV_ORIGINS
-  extras?: Pick<ApiExtras, "autostart" | "shutdown" | "checkUpdate" | "pickDirectory">
+  extras?: Pick<ApiExtras, "autostart" | "shutdown" | "checkUpdate" | "pickDirectory" | "openDirectory" | "manualUpdates">
 }
 
 /** 一轮 inbox 补全里，某个仓库的「等我的」发生了变化。before 为 null 表示此前没有缓存（首次拿到） */
@@ -355,7 +356,7 @@ export function createBackend(options: BackendOptions): Backend {
   // 身份账本：仓库改名/移动后继续用老 id，config.json 里按 id 存的标签/收藏/归档/便签不受影响
   const identity = new IdentityLedger(
     join(dirname(configFile), "repo-identity.json"),
-    onCorrupt("repo-identity.json"),
+    (err) => console.error(`[repo-radar] repo-identity.json 读取失败 / identity ledger load failed: ${errText(err)}`),
     onWriteError("repo-identity.json", "本次运行期间改名/移动过的仓库，重启后会丢失标签/收藏/归档/便签"),
   )
   const store = new RepoStore(
@@ -408,7 +409,7 @@ export function createBackend(options: BackendOptions): Backend {
           // 都可能被二级限流单独置空，各自沿用对应的上次计数——避免 PR 数在「不含自己/含总数」间震荡，
           // 也避免 issue 数因 mine 缺失被静默按 0 算而虚高（见 github.ts parseInboxResponse 的注释）
           const before = inboxCache.get(t.id, t.url)
-          const inbox = await getGithubInbox(t.slug, before?.prs, before?.issues)
+          const inbox = await getGithubInbox(t.slug, before ?? undefined)
           if (inbox === null) return // 拉不到（未登录/网络）：保留旧缓存，别把状态抹空
           inboxCache.set(t.id, t.url, inbox)
           const updated = store.redecorate(t.id)
@@ -508,6 +509,7 @@ export function createBackend(options: BackendOptions): Backend {
     // refreshOne 不算「扫描」，把它算进来会让这个时间永远显示「刚刚」，等于没有信息量。
     // 放在 applyWatch/applyRepos 之后：前者抛错时整轮扫描算失败（POST /api/scan 返回 500，
     // 界面弹红条），此时绝不能已经广播过「扫描完成」，让顶栏同时显示「上次扫描 刚刚」
+    clearStatsCache()
     lastScanAt = new Date().toISOString()
     // 带上完整仓库列表：定时兜底重扫没有任何人在等 HTTP 响应，只发时刻的话服务端 store
     // 更新了、界面却还停在旧数据——新增/删除的仓库根本不会出现或消失，而顶栏偏偏在说
@@ -557,7 +559,7 @@ export function createBackend(options: BackendOptions): Backend {
         try {
           // 走仓库锁：一是别和用户正在做的 commit/push 在同一个 .git 上撞车，
           // 二是退出时的排空只认锁里的操作——不包进来，定时 fetch 就会被硬切在写 refs 的中途
-          await withRepoLock(r.id, () => runRepoAction(r.path, "fetch"))
+          await withRepoTarget(r, (path) => runRepoAction(path, "fetch"))
           const updated = await store.refreshOne(r.id, { skipCache: true }) // 刚 fetch 过，见 RefreshOptions
           if (updated) hub.broadcast("repo:updated", { repo: updated })
         } catch {

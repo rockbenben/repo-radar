@@ -39,7 +39,7 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200
 
 const CONFIG = { roots: ["D:\\repos"], manualRepos: [], autoWatch: true, autoScanMinutes: 30, watchLimit: 200, autoFetchMinutes: 0, notifications: false }
 
-function stubFetch(repos: RepoStatus[]): void {
+function stubFetch(repos: RepoStatus[], manualUpdates = false): void {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown, init?: { method?: string }) => {
@@ -48,7 +48,7 @@ function stubFetch(repos: RepoStatus[]): void {
       if (url.includes("/api/scan")) return (init?.method ?? "GET").toUpperCase() === "POST" ? json(repos) : json({ lastScanAt: null, watch: { watched: 0, total: 0 } })
       if (url.includes("/api/repos")) return json(repos)
       if (url.includes("/api/config")) return json(CONFIG)
-      if (url.includes("/api/version")) return json({ version: "test", canQuit: false, port: 17420 })
+      if (url.includes("/api/version")) return json({ version: "test", canQuit: false, manualUpdates, port: 17420 })
       if (url.includes("/api/autostart")) return json({ supported: false, enabled: false })
       return json({})
     }),
@@ -168,4 +168,15 @@ describe("「按语言」分组的「未识别语言」组名跟随当前界面�
 
     expect(groupNames()).toEqual(["TypeScript"])
   })
+})
+
+it("offers the release page instead of an automatic-update toggle on macOS", async () => {
+  stubFetch([], true)
+  render(<Harness />)
+  switchToEnglish()
+  act(() => screen.getByTitle("Settings").click())
+  const button = await screen.findByRole("button", { name: "Open releases" })
+  expect(screen.queryByRole("switch", { name: "Check for new versions" })).toBeNull()
+  await act(async () => button.click())
+  expect(fetch).toHaveBeenCalledWith("/api/update/check", expect.objectContaining({ method: "POST" }))
 })

@@ -52,7 +52,7 @@ function setup() {
 
   const opened: { template: string; path: string }[] = []
   const appWithOpen = createApi(store, configFile, {
-    openFn: (template, path) => opened.push({ template, path }),
+    openFn: (template, path) => { opened.push({ template, path }) },
   })
 
   return { app, appWithOpen, opened, store, configFile, repo, cleanup: () => rmSync(dir, { recursive: true, force: true, maxRetries: 3 }) }

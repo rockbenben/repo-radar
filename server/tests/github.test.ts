@@ -40,6 +40,8 @@ function stdout(opts: {
   return JSON.stringify({ data })
 }
 
+const previous = { prs: 7, issues: 6, ciFailed: true, ciSha: "old-head", byViewer: true }
+
 describe("parseInboxResponse", () => {
   it("me 已知、mine/prOthers 都正常 → 按'减去自己'口径计算，byViewer=true", () => {
     const r = parseInboxResponse(stdout({ pullRequests: 10, issues: 10, mine: 3, prOthers: 4 }), 0, "octocat")
@@ -53,7 +55,7 @@ describe("parseInboxResponse", () => {
 
   // Important 1：mine 字段被二级限流单独置空时，之前会静默按 0 算，issues 虚高「自己开的」那部分
   it("mine 被限流置空、有旧缓存 issues → 沿用旧缓存，不按 0 算", () => {
-    const r = parseInboxResponse(stdout({ pullRequests: 10, issues: 10, mine: null, prOthers: 4 }), 0, "octocat", undefined, 6)
+    const r = parseInboxResponse(stdout({ pullRequests: 10, issues: 10, mine: null, prOthers: 4 }), 0, "octocat", previous)
     expect(r).toMatchObject({ issues: 6 })
   })
 
@@ -63,7 +65,7 @@ describe("parseInboxResponse", () => {
   })
 
   it("prOthers 被限流置空、有旧缓存 prs → 沿用旧缓存（既有行为，回归保护）", () => {
-    const r = parseInboxResponse(stdout({ pullRequests: 10, issues: 10, mine: 3, prOthers: null }), 0, "octocat", 7)
+    const r = parseInboxResponse(stdout({ pullRequests: 10, issues: 10, mine: 3, prOthers: null }), 0, "octocat", previous)
     expect(r).toMatchObject({ prs: 7 })
   })
 
@@ -84,4 +86,21 @@ describe("parseInboxResponse", () => {
     const r = parseInboxResponse(stdout({ pullRequests: 0, issues: 0, mine: 0, prOthers: 0, ciState: "FAILURE", ciSha: "deadbeef" }), 0, "octocat")
     expect(r).toMatchObject({ ciFailed: true, ciSha: "deadbeef" })
   })
+})
+
+it("does not invent a green CI result when the first response has a CI field error", () => {
+  const data = { repository: {
+    pullRequests: { totalCount: 7 }, issues: { totalCount: 5 },
+    defaultBranchRef: { target: { oid: "new-head", statusCheckRollup: null } },
+  } }
+  const partial = JSON.stringify({
+    data,
+    errors: [{ path: ["repository", "defaultBranchRef", "target", "statusCheckRollup"] }],
+  })
+  expect(parseInboxResponse(partial, 1, null)).toBeNull()
+  expect(parseInboxResponse(partial, 1, null, previous)).toMatchObject({
+    prs: 7, issues: 5, ciFailed: true, ciSha: "old-head",
+  })
+  const unrelated = JSON.stringify({ data, errors: [{ path: ["prOthers"] }] })
+  expect(parseInboxResponse(unrelated, 1, null, previous)).toMatchObject({ ciFailed: false, ciSha: "new-head" })
 })

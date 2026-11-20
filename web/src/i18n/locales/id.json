@@ -433,6 +433,7 @@
   "update.upToDateDetail": "Anda sudah menjalankan rilis terbaru.",
   "update.availableTitle": "Versi {version} tersedia",
   "update.availableDetail": "Unduh sekarang? Anda akan ditanya lagi sebelum memasang.",
+  "update.openReleases": "Buka halaman rilis",
   "update.download": "Unduh",
   "update.later": "Nanti",
   "update.downloadFailedTitle": "Gagal mengunduh pembaruan",
