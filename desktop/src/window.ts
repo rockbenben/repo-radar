@@ -1,4 +1,6 @@
+import { join } from "node:path"
 import { BrowserWindow, screen, shell } from "electron"
+import { TITLE_BAR_THEME, titleBarOverlay } from "./titlebar"
 import { loadState, MIN_HEIGHT, MIN_WIDTH, saveState, type WindowState } from "./window-state"
 
 /**
@@ -105,13 +107,13 @@ export function saveWindowState(win: BrowserWindow, stateFile: string): void {
 }
 
 /**
- * 主窗口。前端仍通过 HTTP 与本机后端通信，因此渲染进程不需要任何 Node 能力——
- * 保持 contextIsolation 开、nodeIntegration 关，也就不需要 preload。
+ * 前端通过本地 HTTP 访问后端。Windows 的 preload 仅同步原生标题栏配色。
  */
 export function createWindow(options: WindowOptions): BrowserWindow {
   const { url, stateFile, iconPath, isQuitting, hideOnClose } = options
   const displays = screen.getAllDisplays().map((d) => d.workArea)
   const state = loadState(stateFile, displays)
+  const integratedTitleBar = process.platform === "win32"
 
   const win = new BrowserWindow({
     x: state.x,
@@ -127,7 +129,13 @@ export function createWindow(options: WindowOptions): BrowserWindow {
     // 不传的话任务栏/Alt-Tab 切换器上会显示通用的 Electron 图标。iconPath 由调用方
     // （main.ts）传入，这里不硬编码路径——window.ts 不该关心图标文件实际在哪。
     icon: iconPath,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    ...(integratedTitleBar && { titleBarStyle: "hidden", titleBarOverlay: titleBarOverlay("dark") }),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      ...(integratedTitleBar && { preload: join(__dirname, "preload.cjs") }),
+    },
   })
   if (state.maximized) win.maximize()
   win.once("ready-to-show", () => win.show())
@@ -137,6 +145,15 @@ export function createWindow(options: WindowOptions): BrowserWindow {
   // 既是功能倒退（用户到不了系统浏览器），也是安全边界缺口（该窗口仍能任意导航、加载任意站点）。
   // baseUrl 用调用方传入的 url 派生，dev（5173）与 prod（17420）都能正确算作「站内」。
   const baseUrl = new URL(url).origin
+  if (integratedTitleBar) {
+    win.webContents.on("ipc-message", (event, channel, mode: unknown) => {
+      const frame = event.senderFrame
+      if (
+        channel === TITLE_BAR_THEME && frame?.parent === null && isSameOrigin(frame.url, baseUrl) &&
+        (mode === "light" || mode === "dark")
+      ) win.setTitleBarOverlay(titleBarOverlay(mode))
+    })
+  }
   // 打开外部链接前统一过一遍协议白名单（见 isAllowedExternalUrl 的注释）——
   // 只放行 http/https，其余记一行日志、直接忽略，不交给 shell.openExternal
   const openExternalIfAllowed = (targetUrl: string): void => {

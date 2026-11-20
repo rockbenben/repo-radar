@@ -1,4 +1,4 @@
-import { app, type BrowserWindow, dialog } from "electron"
+import { app, type BrowserWindow, dialog, shell } from "electron"
 import { autoUpdater, type UpdateCheckResult } from "electron-updater"
 import { repository } from "../../package.json"
 import { mainT } from "./i18n"
@@ -15,7 +15,7 @@ import { mainT } from "./i18n"
  */
 
 /** 一次检查的结果。调用方（设置面板、托盘菜单）只需要知道这个，不必知道 electron-updater 的细节 */
-export type UpdateOutcome = "upToDate" | "available" | "downloaded" | "failed" | "skipped"
+export type UpdateOutcome = "upToDate" | "available" | "downloaded" | "failed" | "skipped" | "openedReleasePage"
 
 export interface UpdateHost {
   /** 主窗口。托盘应用大部分时间没有可见窗口，弹窗挂到它身上才不会飘在别处 */
@@ -148,6 +148,20 @@ async function runCheckInner(host: UpdateHost, manual: boolean, lang?: string): 
     if (manual) await say(host, tag, DEV_TITLE, DEV_DETAIL)
     return "skipped"
   }
+  if (process.platform === "darwin") {
+    if (!manual) return "skipped"
+    try {
+      if (!RELEASES_URL) throw new Error("Release page unavailable")
+      await shell.openExternal(RELEASES_URL)
+      return "openedReleasePage"
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.warn(`[repo-radar] 无法打开发布页: ${message}`)
+      await say(host, tag, t("msg.updateCheckFail"), RELEASES_URL || message)
+      return "failed"
+    }
+  }
+  attachErrorListener()
   // 发现新版只通知，下载由用户点「下载」触发
   autoUpdater.autoDownload = false
   // 下载完也不在退出时自动装：装不装必须用户点过「现在安装」
