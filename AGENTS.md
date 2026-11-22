@@ -3,6 +3,12 @@
 本地仓库雷达：Electron 托盘应用，监控本机全部 Git 仓库的未完成工作、PR、CI、stash。
 monorepo（npm workspaces）：`server`（Hono 后端 + git 扫描）/ `web`（React + antd 前端）/ `desktop`（Electron 壳）。
 
+## 工作记录导出（供其他项目读取）
+
+- 在「设置 → 常规 → 自动导出工作记录」启用后，默认快照是 `%USERPROFILE%\.repo-radar\worklog.json`，包含最近 30 个本地自然日。每日归档位于快照同目录下的 `archive/YYYY/MM/YYYY-MM-DD.json`。
+- 日、周、月回溯按所需日期读取归档中的 UTF-8 JSON，并汇总 `commits`。`since` 和 `until` 都是该归档日期。文件缺失表示记录尚不可用，存在且 `commits` 为空表示已导出且当天无提交。按个人筛选时，可用 `me.emails` 匹配 `commits[].authorEmail`。
+- 快照与归档共用 `format: "repo-radar-worklog"` 和 `schemaVersion: 1`。读取快照时，可用 `exportedAt` 检查更新时间，并查看 `failed` 判断结果是否可能不完整。详见 [配置参考](docs/configuration.md#automatic-worklog-export)。
+
 ## Health Stack
 
 - typecheck: `npm run typecheck -w server && npm run typecheck -w web && npm run typecheck -w desktop`
