@@ -14,6 +14,7 @@ fields are covered in the README; this page is the rest.
 | `health` | `{ staleDays, disabledRules }` — tune the "stale" threshold or switch off individual checks |
 | `open` | editor, terminal, and folder commands. The built-in values select platform defaults. Custom values take an executable and arguments, with quotes around arguments containing spaces. `{path}` is inserted as literal text in an argument. For shell pipelines or command sequences, use a separate executable script |
 | `autoWatch` / `autoScanMinutes` / `watchLimit` / `notifications` | background behaviour. Only `autoScanMinutes` (30) is on by default |
+| `worklogExportMinutes` / `worklogExportPath` | worklog export interval in minutes (0 disables it) and an optional absolute .json file path |
 | `autoFetchMinutes` | remote refresh interval in minutes. Set `60` for hourly refresh. Defaults to `0` (off) |
 | `autoPull` / `autoPullOverrides` | allow a scheduled remote refresh to fast-forward clean branches. Off globally by default. Each repository can override the global policy |
 | `checkUpdates` | desktop builds only: ask GitHub once at startup whether a newer release exists. Off by default; the check never downloads or installs anything — both need your confirmation |
@@ -35,6 +36,21 @@ protected from auto-pull.
 On upgrade, an existing remote refresh interval takes precedence. A configuration that previously
 enabled remote updates globally on scans uses its former scan interval as the initial remote
 refresh interval.
+
+## Automatic worklog export
+
+Open **Settings → General → Automatic worklog export**. Set a positive interval to enable export.
+Leave the path blank to write `worklog.json` beside the active configuration file
+(`~/.repo-radar/worklog.json` by default), or enter an absolute path to a `.json` file.
+The first export runs after the initial repository scan or when you enable export while the app is running.
+
+Each export atomically replaces the previous UTF-8 JSON snapshot and covers the last 30 local
+calendar days, including today. It includes all authors, using the same commit selection as the
+Worklog tab. Consumers can read `format` (`repo-radar-worklog`), `schemaVersion` (1),
+`exportedAt` (UTC), `since`, `until`, `commits`, `failed`, and `me`.
+Use `me.emails` with `commits[].authorEmail` to reproduce the tab's author filter, and check
+`failed` for incomplete results. The app logs write failures and retries on the next interval.
+Existing files from other programs are protected. Turning off export leaves the last snapshot available.
 
 ## The cache and state files next to it
 

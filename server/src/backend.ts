@@ -577,6 +577,7 @@ export function createBackend(options: BackendOptions): Backend {
     // 界面弹红条），此时绝不能已经广播过「扫描完成」，让顶栏同时显示「上次扫描 刚刚」
     clearStatsCache()
     lastScanAt = new Date().toISOString()
+    automation.reposReady()
     // 带上完整仓库列表：定时兜底重扫没有任何人在等 HTTP 响应，只发时刻的话服务端 store
     // 更新了、界面却还停在旧数据——新增/删除的仓库根本不会出现或消失，而顶栏偏偏在说
     // 「刚扫过」。repo:updated 只能表达「某个仓库变了」，表达不了「这个仓库没了」。

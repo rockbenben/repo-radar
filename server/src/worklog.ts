@@ -1,7 +1,7 @@
-import { LOG_UTF8, NO_SHOW_SIGNATURE, runGit, splitLines } from "./git"
+import { currentGitIdentity, LOG_UTF8, NO_SHOW_SIGNATURE, runGit, splitLines } from "./git"
 import { localDay } from "./local-date"
 import { mapLimit } from "./map-limit"
-import type { WorklogResponse } from "./types"
+import type { RepoStatus, WorklogResponse } from "./types"
 
 type WorklogResult = Pick<WorklogResponse, "commits" | "failed">
 
@@ -13,6 +13,17 @@ type WorklogResult = Pick<WorklogResponse, "commits" | "failed">
 export async function collectUserEmails(paths: string[]): Promise<string[]> {
   const emails = await mapLimit(paths, 8, (p) => runGit(p, ["config", "user.email"]).then((r) => r.stdout.trim()).catch(() => ""))
   return [...new Set(emails.filter((e) => e !== ""))]
+}
+
+export async function queryWorklog(repos: RepoStatus[], since: string, until: string): Promise<WorklogResponse> {
+  const active = repos.filter((repo) => !repo.archived && repo.error === null)
+  const [{ commits, failed }, identity, emails] = await Promise.all([
+    getWorklog(active, since, until),
+    currentGitIdentity(active[0]?.path ?? process.cwd()),
+    collectUserEmails(active.map((repo) => repo.path)),
+  ])
+  const me = identity ? { ...identity, emails: [...new Set([identity.email, ...emails])] } : null
+  return { commits, since, until, failed, me }
 }
 
 const SEP = "\x1f"

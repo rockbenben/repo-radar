@@ -1,8 +1,10 @@
 import { statSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { type Config, loadConfig, MAX_INTERVAL_MINUTES, saveConfig } from "./config"
 import type { RepoStatus } from "./types"
 import { usesPerRepoWatching } from "./watch-strategy"
 import type { RepoWatcher, WatchedRepo } from "./watcher"
+import { exportWorklog } from "./worklog-export"
 
 /** 监听覆盖情况：total 是本该监听的仓库数（非归档），watched 取自 watcher 的真实覆盖数——
  *  不是配置算出来的应然值。某个 root 挂不上时，coverage 必须如实变低，不能装作全覆盖 */
@@ -63,6 +65,7 @@ export interface Automation {
   applyConfig(next: Config, prev: Config): Promise<void>
   /** 启动时装上定时器（监听由首轮扫描的 applyWatch 负责） */
   start(cfg: Config): void
+  reposReady(): void
   /** 退出时拆掉定时器（监听的关闭走 shutdown 的 closeWatcher） */
   stop(): void
   /** 最近一次 applyWatch 的覆盖情况，供界面如实显示「250 个中监听 200 个」 */
@@ -219,6 +222,29 @@ export function createAutomation(deps: AutomationDeps): Automation {
     })
   })
 
+  let worklogTarget: { file: string; minutes: number } | null = null
+  let reposReady = false
+  let exportingWorklog = false
+  const worklogTimer = createTimer(runWorklogExport)
+
+  function runWorklogExport(): void {
+    const target = worklogTarget
+    if (!reposReady || !target || exportingWorklog) return
+    exportingWorklog = true
+    void exportWorklog(target.file, listRepos(), () => worklogTarget === target)
+      .catch((err) => log(`[repo-radar] Automatic worklog export failed: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => {
+        exportingWorklog = false
+        if (worklogTarget !== target) runWorklogExport()
+      })
+  }
+
+  function configureWorklog(minutes: number, file: string): void {
+    worklogTarget = minutes > 0 ? { file: file || join(dirname(configFile), "worklog.json"), minutes } : null
+    worklogTimer.apply(reposReady ? minutes : 0)
+    runWorklogExport()
+  }
+
   async function applyWatch(enabled: boolean, repos?: RepoStatus[]): Promise<void> {
     const list = repos ?? listRepos()
     // 不为「已归档」的仓库建立监听目标——它们从看板/统计/后台处理里都收起。
@@ -350,6 +376,8 @@ export function createAutomation(deps: AutomationDeps): Automation {
     async applyConfig(next, prev) {
       if (next.autoScanMinutes !== prev.autoScanMinutes) scanTimer.apply(next.autoScanMinutes)
       if (next.autoFetchMinutes !== prev.autoFetchMinutes) remoteTimer.apply(next.autoFetchMinutes)
+      if (next.worklogExportMinutes !== prev.worklogExportMinutes || next.worklogExportPath !== prev.worklogExportPath)
+        configureWorklog(next.worklogExportMinutes, next.worklogExportPath)
       const rootsChanged = JSON.stringify(next.roots) !== JSON.stringify(prev.roots)
       const manualReposChanged = JSON.stringify(next.manualRepos) !== JSON.stringify(prev.manualRepos)
       // excludes 只在这条路上能进 watcher（setRoots 是它唯一的入口，见 watcher.setRoots 的
@@ -364,8 +392,17 @@ export function createAutomation(deps: AutomationDeps): Automation {
     start(cfg) {
       scanTimer.apply(cfg.autoScanMinutes)
       remoteTimer.apply(cfg.autoFetchMinutes)
+      configureWorklog(cfg.worklogExportMinutes, cfg.worklogExportPath)
+    },
+    reposReady() {
+      if (reposReady) return
+      reposReady = true
+      worklogTimer.apply(worklogTarget?.minutes ?? 0)
+      runWorklogExport()
     },
     stop() {
+      reposReady = false
+      configureWorklog(0, "")
       scanTimer.apply(0)
       remoteTimer.apply(0)
     },

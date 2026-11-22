@@ -1,7 +1,7 @@
 import { type Context, Hono } from "hono"
 import { type Config, checkMinutes, loadConfig, mergeConfig, saveConfig, validateConfigPatch } from "./config"
 import { WsHub } from "./events"
-import { ACTION_ARGS, commitRepo, createBranch, createStash, currentGitIdentity, deleteBranches, discardChanges, dropStashes, getMergedMainBranches, getRepoDetail, getRepoDiff, listStashes, type RepoAction, repoId, stashAction, stashDiff, switchBranch } from "./git"
+import { ACTION_ARGS, commitRepo, createBranch, createStash, deleteBranches, discardChanges, dropStashes, getMergedMainBranches, getRepoDetail, getRepoDiff, listStashes, type RepoAction, repoId, stashAction, stashDiff, switchBranch } from "./git"
 import { getGithubStatus } from "./github"
 import { buildManifest, importManifest, isManifest } from "./manifest"
 import { mapLimit } from "./map-limit"
@@ -14,8 +14,8 @@ import { cloneRepo, createProject } from "./scaffold"
 import { aggregateHeatmap, buildActivity } from "./stats"
 import { deriveGroup, type RepoStore } from "./store"
 import { type BatchDeps, startBatch, startExec } from "./tasks"
-import type { ActivityResponse, DiffPreview, HeatmapResponse, RepoMutation, RepoStatus, ScanStatus, StashesResponse, TaskStarted, WorklogResponse } from "./types"
-import { collectUserEmails, getWorklog } from "./worklog"
+import type { ActivityResponse, DiffPreview, HeatmapResponse, RepoMutation, RepoStatus, ScanStatus, StashesResponse, TaskStarted } from "./types"
+import { queryWorklog } from "./worklog"
 
 export interface ApiExtras {
   hub?: WsHub
@@ -799,22 +799,7 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     const until = c.req.query("until") ?? ""
     const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
     if (!isDay(since) || !isDay(until) || since > until) return c.json({ error: "bad range" }, 400)
-    // 查未排除、且扫描无错的仓库：扫描出错的仓库（路径被删/无权限/非 git）git log 必失败，会被误报成 partial，
-    // 与 /api/stashes、/api/stats 一样不把 error 仓库当读取失败对外暴露。空仓库仍由 getWorklog 内部区分。
-    const repos = store
-      .list()
-      .filter((r) => !r.archived && r.error === null)
-      .map((r) => ({ id: r.id, name: r.name, displayName: r.displayName, path: r.path }))
-    // 三路互不依赖，并行拿：提交流水 + 全局身份 + 各仓库有效 user.email 并集（含本地覆盖）。
-    // 「只看我」按整组邮箱匹配——不然工作仓库里本地覆盖的邮箱下的提交会被静默漏掉。
-    // 语义即「这台机器上配置过的身份都算我」；若某仓库配了别人/bot 的邮箱会被并入（前端下拉仍单列各邮箱可查）
-    const [{ commits, failed }, me0, repoEmails] = await Promise.all([
-      getWorklog(repos, since, until),
-      currentGitIdentity(repos[0]?.path ?? process.cwd()),
-      collectUserEmails(repos.map((r) => r.path)),
-    ])
-    const me = me0 ? { ...me0, emails: [...new Set([me0.email, ...repoEmails])] } : null
-    return c.json<WorklogResponse>({ commits, since, until, failed, me })
+    return c.json(await queryWorklog(store.list(), since, until))
   })
 
   return app

@@ -2,15 +2,15 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { createBackend, createRescanScheduler, createStructureRescan, INBOX_REFRESH_MS, type Backend } from "../src/backend"
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config"
 import * as github from "../src/github"
 import { pendingRepoOps } from "../src/queue"
-import type { RepoStatus } from "../src/types"
+import type { RepoStatus, WorklogResponse } from "../src/types"
 import { RepoWatcher } from "../src/watcher"
-import { cleanupFixtures, git, makeBehindRepo, makeRepo } from "./fixtures"
+import { cleanupFixtures, git, makeBehindRepo, makeRepo, makeRepoWithDates } from "./fixtures"
 
 /** 手动可控的 promise，精确摆出「上一轮还没结束/还没开跑」的时序——与 serial.test.ts 同一手法 */
 function deferred<T>() {
@@ -68,6 +68,68 @@ async function waitForFirstScan(b: Backend): Promise<void> {
 }
 
 describe("createBackend", () => {
+  it("exports the worklog after scanning and on schedule, and applies destination and interval changes", async () => {
+    const options = { ...opts(), port: 0 }
+    const repo = makeRepoWithDates(["2026-07-01T12:00:00", "2026-07-02T12:00:00", "2026-07-31T12:00:00"])
+    const config = { ...DEFAULT_CONFIG, manualRepos: [repo], autoScanMinutes: 0, worklogExportMinutes: 5 }
+    saveConfig(options.configFile, config)
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+    vi.setSystemTime(new Date(2026, 6, 31, 15))
+    const backend = track(createBackend(options))
+    await backend.start()
+    const api = "http://127.0.0.1:" + backend.port + "/api"
+    const update = (patch: Partial<typeof config>) => fetch(api + "/config", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    })
+    const snapshot = (file: string) => JSON.parse(readFileSync(file, "utf8"))
+    const defaultFile = join(dirname(options.configFile), "worklog.json")
+    await waitForFirstScan(backend)
+    await vi.waitFor(() => expect(snapshot(defaultFile)).toMatchObject({
+      format: "repo-radar-worklog",
+      schemaVersion: 1,
+      since: "2026-07-02",
+      until: "2026-07-31",
+      failed: [],
+    }), { timeout: 10_000 })
+    const first = snapshot(defaultFile)
+    const response = await fetch(api + "/worklog?since=" + first.since + "&until=" + first.until)
+    const requested = (await response.json()) as WorklogResponse
+    expect(first.commits).toEqual(requested.commits)
+    expect(first.commits).toHaveLength(2)
+
+    vi.advanceTimersByTime(5 * 60_000)
+    await vi.waitFor(() => expect(snapshot(defaultFile).exportedAt).not.toBe(first.exportedAt), { timeout: 10_000 })
+    const lastDefault = readFileSync(defaultFile, "utf8")
+
+    expect((await update({ worklogExportPath: "relative.json" })).status).toBe(400)
+    const custom = join(dirname(defaultFile), "nested", "my-worklog.json")
+    expect((await update({ worklogExportPath: custom, worklogExportMinutes: 1 })).status).toBe(200)
+    await vi.waitFor(() => expect(snapshot(custom).commits).toEqual(first.commits), { timeout: 10_000 })
+
+    expect(loadConfig(options.configFile).worklogExportPath).toBe(custom)
+    const unrelated = join(dirname(defaultFile), "unrelated.json")
+    writeFileSync(unrelated, '{"keep":true}')
+    const logged = vi.spyOn(console, "log").mockImplementation(() => {})
+    try {
+      expect((await update({ worklogExportPath: unrelated })).status).toBe(200)
+      await vi.waitFor(() => expect(logged).toHaveBeenCalledWith(expect.stringContaining("Destination already exists")), { timeout: 10_000 })
+    } finally {
+      logged.mockRestore()
+    }
+    expect(readFileSync(unrelated, "utf8")).toBe('{"keep":true}')
+    expect(readFileSync(defaultFile, "utf8")).toBe(lastDefault)
+    expect(loadConfig(options.configFile).worklogExportPath).toBe(unrelated)
+    const timersBeforeDisable = vi.getTimerCount()
+
+    const lastCustom = readFileSync(custom, "utf8")
+    expect((await update({ worklogExportPath: custom, worklogExportMinutes: 0 })).status).toBe(200)
+    vi.advanceTimersByTime(10 * 60_000)
+    expect(vi.getTimerCount()).toBe(timersBeforeDisable - 1)
+    expect(readFileSync(custom, "utf8")).toBe(lastCustom)
+  })
+
   it("coalesces GitHub copies, backs off after failure and keeps manual refresh immediate", async () => {
     const o = { ...opts(), port: 0 }
     const first = makeRepo()

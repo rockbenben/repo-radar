@@ -190,6 +190,8 @@ export default function App({
   const [configLoaded, setConfigLoaded] = useState(false)
   const [autoFetchMinutes, setAutoFetchMinutes] = useState(0)
   const [fetchMinutesInput, setFetchMinutesInput] = useState<number | null>(0)
+  const [worklogExport, setWorklogExport] = useState<{ minutes: number | null; path: string }>({ minutes: 0, path: "" })
+  const [savingWorklogExport, setSavingWorklogExport] = useState(false)
   const [autoPull, setAutoPull] = useState(false)
   const [watchLimit, setWatchLimit] = useState(200) // 同时监听的仓库数上限（0=无上限；默认 200）
   // 实际挂上监听的仓库数 / 本该监听的总数。截断只写服务端日志的话，常驻托盘的应用
@@ -746,6 +748,10 @@ export default function App({
         const fetchMinutes = typeof c.autoFetchMinutes === "number" ? c.autoFetchMinutes : 0
         setAutoFetchMinutes(fetchMinutes)
         setFetchMinutesInput(fetchMinutes)
+        setWorklogExport({
+          minutes: typeof c.worklogExportMinutes === "number" ? c.worklogExportMinutes : 0,
+          path: typeof c.worklogExportPath === "string" ? c.worklogExportPath : "",
+        })
         setAutoPull(c.autoPull === true)
         setNotifications(!!c.notifications)
         setCheckUpdates(!!c.checkUpdates)
@@ -933,6 +939,32 @@ export default function App({
     } catch {
       setFetchMinutesInput(autoFetchMinutes)
       message.error(t("msg.saveFail"))
+    }
+  }
+
+  async function saveWorklogExport() {
+    if (worklogExport.minutes === null || savingWorklogExport) return
+    setSavingWorklogExport(true)
+    try {
+      const response = await fetch("/api/config", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          worklogExportMinutes: worklogExport.minutes,
+          worklogExportPath: worklogExport.path.trim(),
+        }),
+      })
+      if (!response.ok) {
+        const problem = await response.json().catch(() => null)
+        throw new Error(problem?.error || t("msg.saveFail"))
+      }
+      const saved = await response.json()
+      setWorklogExport({ minutes: saved.worklogExportMinutes, path: saved.worklogExportPath })
+      message.success(t("settings.worklogExportSaved"))
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : t("msg.saveFail"))
+    } finally {
+      setSavingWorklogExport(false)
     }
   }
 
@@ -1407,6 +1439,54 @@ export default function App({
                   ]}
                 />
               </div>
+              <div className="grp">{t("settings.worklogExport")}</div>
+              <form onSubmit={(event) => {
+                event.preventDefault()
+                void saveWorklogExport()
+              }}>
+                <div className="row">
+                  <label className="lb" htmlFor="worklog-export-minutes">
+                    {t("settings.worklogExportMinutes")}
+                    <span className="hint">{t("settings.worklogExportMinutesHint")}</span>
+                  </label>
+                  <InputNumber
+                    id="worklog-export-minutes"
+                    size="small"
+                    style={{ width: 96 }}
+                    min={0}
+                    precision={0}
+                    value={worklogExport.minutes}
+                    onChange={(minutes) => setWorklogExport((draft) => ({ ...draft, minutes }))}
+                    disabled={!configLoaded || savingWorklogExport}
+                  />
+                </div>
+                <div className="row stack">
+                  <label className="lb" htmlFor="worklog-export-path">
+                    {t("settings.worklogExportPath")}
+                    <span className="hint">{t("settings.worklogExportPathHint")}</span>
+                  </label>
+                  <Input
+                    id="worklog-export-path"
+                    dir="ltr"
+                    size="small"
+                    placeholder="worklog.json"
+                    value={worklogExport.path}
+                    onChange={(event) => {
+                      const path = event.target.value
+                      setWorklogExport((draft) => ({ ...draft, path }))
+                    }}
+                    disabled={!configLoaded || savingWorklogExport}
+                  />
+                  <Button
+                    size="small"
+                    htmlType="submit"
+                    loading={savingWorklogExport}
+                    disabled={!configLoaded || worklogExport.minutes === null}
+                  >
+                    {t("settings.worklogExportSave")}
+                  </Button>
+                </div>
+              </form>
               {/* 从这里开始的开关有网络代价或会打扰人——这正是它们默认关闭的原因，
                   组标题把这条线画给用户看。齿轮的高亮逻辑与本组一致：本组有开启项才点亮 */}
               <div className="grp">{t("settings.grpNetwork")}</div>

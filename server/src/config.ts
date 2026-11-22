@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname } from "node:path"
+import { dirname, isAbsolute, parse } from "node:path"
 import { renameWithRetry } from "./atomic-write"
 
 export interface Config {
@@ -27,6 +27,8 @@ export interface Config {
   // 名额不够时收藏优先、其次按最近提交，超出的仓库靠兜底重扫刷新
   watchLimit: number
   autoFetchMinutes: number // 0 = 关闭定时远程刷新
+  worklogExportMinutes: number // 0 = off
+  worklogExportPath: string // empty = worklog.json next to the config
   autoPull: boolean
   autoPullOverrides: Record<string, boolean> // 仓库 id → 显式开启/关闭；缺省时跟随全局
   notifications: boolean // GitHub「等我的」新增时弹系统通知：默认关闭（打扰性功能一律 opt-in）
@@ -51,6 +53,8 @@ export const DEFAULT_CONFIG: Config = {
   autoScanMinutes: 30,
   watchLimit: 200,
   autoFetchMinutes: 0,
+  worklogExportMinutes: 0,
+  worklogExportPath: "",
   autoPull: false,
   autoPullOverrides: {},
   notifications: false,
@@ -108,6 +112,14 @@ export function checkMinutes(v: unknown, label = "autoScanMinutes"): string | nu
   return null
 }
 
+function isWorklogExportPath(value: unknown): value is string {
+  if (typeof value !== "string") return false
+  if (value === "") return true
+  const { root, ext } = parse(value)
+  return isAbsolute(value) && ext.toLowerCase() === ".json" && !value.includes("\0") &&
+    (process.platform !== "win32" || (root.length > 1 && !/^[/\\]{2}[?.][/\\]/.test(value) && !value.slice(root.length).includes(":")))
+}
+
 export function validateConfigPatch(body: unknown): string | null {
   if (!isRecord(body)) return "body must be an object"
   for (const key of ["roots", "excludes", "manualRepos", "favorites", "archived"] as const) {
@@ -135,6 +147,10 @@ export function validateConfigPatch(body: unknown): string | null {
   if (minutes !== null) return minutes
   const fetchMinutes = checkMinutes(body.autoFetchMinutes, "autoFetchMinutes")
   if (fetchMinutes !== null) return fetchMinutes
+  const exportMinutes = checkMinutes(body.worklogExportMinutes, "worklogExportMinutes")
+  if (exportMinutes !== null) return exportMinutes
+  if (body.worklogExportPath !== undefined && !isWorklogExportPath(body.worklogExportPath))
+    return "worklogExportPath must be an absolute .json file path or an empty string"
   if (body.autoPull !== undefined && typeof body.autoPull !== "boolean") return "autoPull must be a boolean"
   if (
     body.autoPullOverrides !== undefined &&
@@ -244,6 +260,11 @@ export function loadConfig(file: string): Config {
     cfg.autoFetchMinutes, DEFAULT_CONFIG.autoFetchMinutes, MAX_INTERVAL_MINUTES,
   )
   if (raw.autoFetchMinutes === undefined && previouslyCheckedRemotes) cfg.autoFetchMinutes = cfg.autoScanMinutes
+  cfg.worklogExportMinutes = sanitizeNumber(cfg.worklogExportMinutes, DEFAULT_CONFIG.worklogExportMinutes, MAX_INTERVAL_MINUTES)
+  if (!isWorklogExportPath(cfg.worklogExportPath)) {
+    cfg.worklogExportPath = DEFAULT_CONFIG.worklogExportPath
+    cfg.worklogExportMinutes = 0
+  }
   cfg.watchLimit = sanitizeNumber(cfg.watchLimit, DEFAULT_CONFIG.watchLimit)
   return cfg
 }
