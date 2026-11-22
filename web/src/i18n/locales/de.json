@@ -81,7 +81,7 @@
   "settings.grpDisplay": "Anzeige",
   "settings.worklogExport": "Arbeitsprotokoll automatisch exportieren",
   "settings.worklogExportMinutes": "Exportintervall (Minuten)",
-  "settings.worklogExportMinutesHint": "0 deaktiviert den Export. Jede Datei umfasst die letzten 30 Kalendertage einschließlich heute.",
+  "settings.worklogExportMinutesHint": "0 deaktiviert den Export. Die aktuelle Datei umfasst die letzten 30 Tage einschließlich heute. Tagesdateien liegen zusätzlich im Ordner archive.",
   "settings.worklogExportPath": "Pfad zur JSON-Datei",
   "settings.worklogExportPathHint": "Gib einen absoluten Pfad zu einer .json-Datei ein oder lass das Feld leer, um worklog.json neben der Konfigurationsdatei zu speichern.",
   "settings.worklogExportSave": "Exporteinstellungen speichern",

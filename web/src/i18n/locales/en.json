@@ -81,7 +81,7 @@
   "settings.grpDisplay": "Display",
   "settings.worklogExport": "Automatic worklog export",
   "settings.worklogExportMinutes": "Export interval (minutes)",
-  "settings.worklogExportMinutesHint": "0 turns off export. Each file covers the last 30 calendar days, including today.",
+  "settings.worklogExportMinutesHint": "0 turns off export. The snapshot covers the last 30 days, including today. Daily files are also saved in the archive folder.",
   "settings.worklogExportPath": "JSON file path",
   "settings.worklogExportPathHint": "Enter an absolute .json path, or leave blank to save worklog.json beside the configuration file.",
   "settings.worklogExportSave": "Save export settings",

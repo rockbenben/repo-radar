@@ -81,7 +81,7 @@
   "settings.grpDisplay": "Görünüm",
   "settings.worklogExport": "İş günlüğünü otomatik dışa aktar",
   "settings.worklogExportMinutes": "Dışa aktarma aralığı (dakika)",
-  "settings.worklogExportMinutesHint": "0, dışa aktarmayı kapatır. Her dosya bugün dahil son 30 takvim gününü kapsar.",
+  "settings.worklogExportMinutesHint": "0, dışa aktarmayı kapatır. Özet dosyası bugün dahil son 30 günü kapsar. Günlük dosyalar ayrıca archive klasörüne kaydedilir.",
   "settings.worklogExportPath": "JSON dosyasının yolu",
   "settings.worklogExportPathHint": "Bir .json dosyasının mutlak yolunu girin veya worklog.json dosyasını yapılandırma dosyasının yanına kaydetmek için boş bırakın.",
   "settings.worklogExportSave": "Dışa aktarma ayarlarını kaydet",

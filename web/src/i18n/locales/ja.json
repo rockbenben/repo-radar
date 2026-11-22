@@ -81,7 +81,7 @@
   "settings.grpDisplay": "表示",
   "settings.worklogExport": "作業ログの自動エクスポート",
   "settings.worklogExportMinutes": "エクスポート間隔（分）",
-  "settings.worklogExportMinutesHint": "0 でエクスポートを無効にします。各ファイルには今日を含む直近 30 日分の記録が含まれます。",
+  "settings.worklogExportMinutesHint": "0 でエクスポートを無効にします。スナップショットには今日を含む直近 30 日分が入り、日別ファイルは archive フォルダーにも保存されます。",
   "settings.worklogExportPath": "JSON ファイルのパス",
   "settings.worklogExportPathHint": ".json ファイルの絶対パスを入力してください。空欄の場合は設定ファイルと同じ場所に worklog.json を保存します。",
   "settings.worklogExportSave": "エクスポート設定を保存",

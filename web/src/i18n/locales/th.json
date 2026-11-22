@@ -81,7 +81,7 @@
   "settings.grpDisplay": "การแสดงผล",
   "settings.worklogExport": "ส่งออกบันทึกการทำงานอัตโนมัติ",
   "settings.worklogExportMinutes": "ช่วงเวลาระหว่างการส่งออก (นาที)",
-  "settings.worklogExportMinutesHint": "ตั้งเป็น 0 เพื่อปิดการส่งออก แต่ละไฟล์ครอบคลุม 30 วันปฏิทินล่าสุดรวมวันนี้",
+  "settings.worklogExportMinutesHint": "ตั้งเป็น 0 เพื่อปิดการส่งออก ไฟล์สรุปครอบคลุม 30 วันล่าสุดรวมวันนี้ และบันทึกไฟล์รายวันไว้ในโฟลเดอร์ archive ด้วย",
   "settings.worklogExportPath": "พาธไฟล์ JSON",
   "settings.worklogExportPathHint": "ป้อนพาธแบบสัมบูรณ์ของไฟล์ .json หรือเว้นว่างเพื่อบันทึก worklog.json ไว้ข้างไฟล์การตั้งค่า",
   "settings.worklogExportSave": "บันทึกการตั้งค่าการส่งออก",

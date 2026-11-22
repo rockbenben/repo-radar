@@ -93,6 +93,8 @@ describe("createBackend", () => {
       until: "2026-07-31",
       failed: [],
     }), { timeout: 10_000 })
+    const firstArchivedMonth = join(dirname(defaultFile), "archive", "2026", "07", "2026-07-01.json")
+    await vi.waitFor(() => expect(snapshot(firstArchivedMonth).commits).toHaveLength(1), { timeout: 10_000 })
     const first = snapshot(defaultFile)
     const response = await fetch(api + "/worklog?since=" + first.since + "&until=" + first.until)
     const requested = (await response.json()) as WorklogResponse
@@ -107,6 +109,8 @@ describe("createBackend", () => {
     const custom = join(dirname(defaultFile), "nested", "my-worklog.json")
     expect((await update({ worklogExportPath: custom, worklogExportMinutes: 1 })).status).toBe(200)
     await vi.waitFor(() => expect(snapshot(custom).commits).toEqual(first.commits), { timeout: 10_000 })
+    const customDaily = join(dirname(custom), "archive", "2026", "07", "2026-07-31.json")
+    await vi.waitFor(() => expect(snapshot(customDaily).commits).toHaveLength(1), { timeout: 10_000 })
 
     expect(loadConfig(options.configFile).worklogExportPath).toBe(custom)
     const unrelated = join(dirname(defaultFile), "unrelated.json")
@@ -128,6 +132,41 @@ describe("createBackend", () => {
     vi.advanceTimersByTime(10 * 60_000)
     expect(vi.getTimerCount()).toBe(timersBeforeDisable - 1)
     expect(readFileSync(custom, "utf8")).toBe(lastCustom)
+  })
+
+  it("backfills daily archives across long shutdowns and preserves previously archived days", async () => {
+    const options = { ...opts(), port: 0 }
+    const repo = makeRepoWithDates(["2026-06-01T12:00:00", "2026-07-02T12:00:00", "2026-08-02T12:00:00", "2026-09-10T12:00:00"])
+    saveConfig(options.configFile, { ...DEFAULT_CONFIG, manualRepos: [repo], autoScanMinutes: 0, worklogExportMinutes: 60 })
+    const dir = dirname(options.configFile)
+    const pathFor = (day: string) => join(dir, "archive", day.slice(0, 4), day.slice(5, 7), day + ".json")
+    const daily = (day: string) => JSON.parse(readFileSync(pathFor(day), "utf8")) as WorklogResponse
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date(2026, 6, 31, 15))
+    const initial = track(createBackend(options))
+    await initial.start()
+    await vi.waitFor(() => expect(daily("2026-07-01").commits).toEqual([]), { timeout: 10_000 })
+    expect(daily("2026-06-01").commits).toHaveLength(1)
+    expect(daily("2026-07-31").commits).toEqual([])
+    const preserved = readFileSync(pathFor("2026-07-02"), "utf8")
+    await initial.stop()
+    rmSync(pathFor("2026-06-01"))
+
+    vi.setSystemTime(new Date(2026, 8, 10, 15))
+    await track(createBackend(options)).start()
+    await vi.waitFor(() => expect(daily("2026-08-11").commits).toEqual([]), { timeout: 10_000 })
+    expect(daily("2026-06-01").commits).toHaveLength(1)
+    expect(readFileSync(pathFor("2026-07-02"), "utf8")).toBe(preserved)
+    expect(daily("2026-08-02")).toMatchObject({
+      since: "2026-08-02",
+      until: "2026-08-02",
+      failed: [],
+      commits: [expect.objectContaining({ day: "2026-08-02" })],
+    })
+    expect(daily("2026-09-10").commits).toHaveLength(1)
+    const recent = JSON.parse(readFileSync(join(dir, "worklog.json"), "utf8")) as WorklogResponse
+    expect(recent.since).toBe("2026-08-12")
+    expect(recent.commits.map((commit) => commit.day)).toEqual(["2026-09-10"])
   })
 
   it("coalesces GitHub copies, backs off after failure and keeps manual refresh immediate", async () => {

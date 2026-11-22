@@ -81,7 +81,7 @@
   "settings.grpDisplay": "العرض",
   "settings.worklogExport": "تصدير سجل العمل تلقائيًا",
   "settings.worklogExportMinutes": "فاصل التصدير (بالدقائق)",
-  "settings.worklogExportMinutesHint": "القيمة 0 توقف التصدير. يغطي كل ملف آخر 30 يومًا تقويميًا، بما فيها اليوم.",
+  "settings.worklogExportMinutesHint": "القيمة 0 توقف التصدير. يشمل الملف الموجز آخر 30 يومًا، بما فيها اليوم. يُحفظ كل يوم أيضًا في مجلد archive.",
   "settings.worklogExportPath": "مسار ملف JSON",
   "settings.worklogExportPathHint": "أدخل مسارًا مطلقًا لملف .json، أو اتركه فارغًا لحفظ worklog.json بجانب ملف الإعدادات.",
   "settings.worklogExportSave": "حفظ إعدادات التصدير",

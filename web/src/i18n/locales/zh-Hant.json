@@ -81,7 +81,7 @@
   "settings.grpDisplay": "顯示",
   "settings.worklogExport": "自動匯出工作記錄",
   "settings.worklogExportMinutes": "匯出間隔（分鐘）",
-  "settings.worklogExportMinutesHint": "填 0 關閉匯出。每次匯出最近 30 個日曆日的提交，包含今天。",
+  "settings.worklogExportMinutesHint": "填 0 關閉匯出。快照保留最近 30 天（含今天），每日記錄另存於 archive 資料夾。",
   "settings.worklogExportPath": "JSON 檔案路徑",
   "settings.worklogExportPathHint": "填寫 .json 檔案的絕對路徑。留白時儲存至設定檔旁的 worklog.json。",
   "settings.worklogExportSave": "儲存匯出設定",

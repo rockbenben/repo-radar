@@ -50,7 +50,19 @@ Worklog tab. Consumers can read `format` (`repo-radar-worklog`), `schemaVersion`
 `exportedAt` (UTC), `since`, `until`, `commits`, `failed`, and `me`.
 Use `me.emails` with `commits[].authorEmail` to reproduce the tab's author filter, and check
 `failed` for incomplete results. The app logs write failures and retries on the next interval.
-Existing files from other programs are protected. Turning off export leaves the last snapshot available.
+Daily files are saved alongside the snapshot under
+`archive/YYYY/MM/YYYY-MM-DD.json`. They use the same schema, with `since` and `until` both
+set to the file's local date. Days with no commits have an empty `commits` array. For weekly
+or monthly summaries, read the relevant daily files in `archive/`.
+
+The first export backfills from the first day of the previous calendar month. On startup and
+each scheduled export, Repo Radar fills missing dates since archiving began, including gaps
+longer than 30 days. It refreshes today and yesterday, and revisits the most recent archived
+day after an interruption. Incomplete Git results leave the affected daily files as they were.
+Repo Radar logs the failure and retries missing days on the next export.
+
+Existing files from other programs are protected. Turning off export leaves the snapshot and
+daily archives available. Archive files have no automatic expiry.
 
 ## The cache and state files next to it
 

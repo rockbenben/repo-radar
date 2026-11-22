@@ -81,7 +81,7 @@
   "settings.grpDisplay": "डिस्प्ले",
   "settings.worklogExport": "कार्य लॉग का स्वचालित निर्यात",
   "settings.worklogExportMinutes": "निर्यात का अंतराल (मिनट)",
-  "settings.worklogExportMinutesHint": "0 से निर्यात बंद हो जाता है। हर फ़ाइल में आज समेत पिछले 30 कैलेंडर दिनों का रिकॉर्ड होता है।",
+  "settings.worklogExportMinutesHint": "0 से निर्यात बंद हो जाता है। हाल की फ़ाइल में आज समेत पिछले 30 दिन होते हैं। हर दिन की फ़ाइल archive फ़ोल्डर में भी सहेजी जाती है।",
   "settings.worklogExportPath": "JSON फ़ाइल का पथ",
   "settings.worklogExportPathHint": ".json फ़ाइल का पूरा पथ दर्ज करें या कॉन्फ़िगरेशन फ़ाइल के साथ worklog.json सहेजने के लिए खाली छोड़ें।",
   "settings.worklogExportSave": "निर्यात सेटिंग सहेजें",

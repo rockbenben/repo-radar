@@ -1,6 +1,12 @@
-import { afterAll, describe, expect, it } from "vitest"
-import { getWorklog } from "../src/worklog"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterAll, describe, expect, it, vi } from "vitest"
+import * as worklog from "../src/worklog"
+import { exportWorklog } from "../src/worklog-export"
 import { cleanupFixtures, makeRepoWithDates } from "./fixtures"
+
+const { getWorklog } = worklog
 
 afterAll(cleanupFixtures)
 
@@ -47,4 +53,40 @@ describe("getWorklog", () => {
     expect(commits).toEqual([])
     expect(failed).toEqual(["broken"]) // 读取失败如实记录，不静默吞掉
   })
+})
+
+it("preserves successful daily files and retries missing days after incomplete Git results", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rr-worklog-archive-"))
+  const file = join(dir, "worklog.json")
+  const previous = join(dir, "archive", "2026", "07", "2026-07-14.json")
+  const missing = join(dir, "archive", "2026", "07", "2026-07-15.json")
+  const log = vi.fn()
+  const query = vi.spyOn(worklog, "queryWorklog").mockImplementation(async (_, since, until) => ({
+    since,
+    until,
+    commits: [],
+    failed: [],
+    me: null,
+  }))
+  try {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date(2026, 6, 14, 15))
+    await exportWorklog(file, [], () => true, log)
+    const saved = readFileSync(previous, "utf8")
+
+    vi.setSystemTime(new Date(2026, 6, 15, 15))
+    query.mockImplementationOnce(async (_, since, until) => ({ since, until, commits: [], failed: ["offline"], me: null }))
+    await exportWorklog(file, [], () => true, log)
+    expect(readFileSync(previous, "utf8")).toBe(saved)
+    expect(existsSync(missing)).toBe(false)
+    expect(JSON.parse(readFileSync(file, "utf8")).failed).toEqual(["offline"])
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Incomplete Git results for: offline"))
+
+    await exportWorklog(file, [], () => true, log)
+    expect(JSON.parse(readFileSync(missing, "utf8"))).toMatchObject({ since: "2026-07-15", until: "2026-07-15", failed: [] })
+  } finally {
+    query.mockRestore()
+    vi.useRealTimers()
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+  }
 })

@@ -81,7 +81,7 @@
   "settings.grpDisplay": "ডিসপ্লে",
   "settings.worklogExport": "কাজের লগ স্বয়ংক্রিয়ভাবে রপ্তানি",
   "settings.worklogExportMinutes": "রপ্তানির ব্যবধান (মিনিট)",
-  "settings.worklogExportMinutesHint": "০ দিলে রপ্তানি বন্ধ থাকে। প্রতিটি ফাইলে আজসহ গত ৩০ ক্যালেন্ডার দিনের তথ্য থাকে।",
+  "settings.worklogExportMinutesHint": "০ দিলে রপ্তানি বন্ধ থাকে। সাম্প্রতিক ফাইলে আজসহ গত ৩০ দিনের তথ্য থাকে। প্রতিদিনের তথ্য archive ফোল্ডারেও সংরক্ষিত হয়।",
   "settings.worklogExportPath": "JSON ফাইলের পথ",
   "settings.worklogExportPathHint": "একটি .json ফাইলের পূর্ণ পথ দিন, অথবা কনফিগারেশন ফাইলের পাশে worklog.json সংরক্ষণ করতে ফাঁকা রাখুন।",
   "settings.worklogExportSave": "রপ্তানির সেটিংস সংরক্ষণ করুন",

@@ -81,7 +81,7 @@
   "settings.grpDisplay": "Hiển thị",
   "settings.worklogExport": "Tự động xuất nhật ký công việc",
   "settings.worklogExportMinutes": "Khoảng cách giữa các lần xuất (phút)",
-  "settings.worklogExportMinutesHint": "Đặt 0 để tắt xuất. Mỗi tệp bao gồm 30 ngày gần nhất, kể cả hôm nay.",
+  "settings.worklogExportMinutesHint": "Đặt 0 để tắt xuất. Tệp tổng hợp bao gồm 30 ngày gần nhất, kể cả hôm nay. Các tệp hằng ngày cũng được lưu trong thư mục archive.",
   "settings.worklogExportPath": "Đường dẫn tệp JSON",
   "settings.worklogExportPathHint": "Nhập đường dẫn tuyệt đối đến tệp .json hoặc để trống để lưu worklog.json cạnh tệp cấu hình.",
   "settings.worklogExportSave": "Lưu cài đặt xuất",

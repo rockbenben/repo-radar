@@ -231,7 +231,7 @@ export function createAutomation(deps: AutomationDeps): Automation {
     const target = worklogTarget
     if (!reposReady || !target || exportingWorklog) return
     exportingWorklog = true
-    void exportWorklog(target.file, listRepos(), () => worklogTarget === target)
+    void exportWorklog(target.file, listRepos(), () => worklogTarget === target, log)
       .catch((err) => log(`[repo-radar] Automatic worklog export failed: ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => {
         exportingWorklog = false

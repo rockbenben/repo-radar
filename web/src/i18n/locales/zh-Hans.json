@@ -81,7 +81,7 @@
   "settings.grpDisplay": "显示",
   "settings.worklogExport": "自动导出工作记录",
   "settings.worklogExportMinutes": "导出间隔（分钟）",
-  "settings.worklogExportMinutesHint": "填 0 关闭导出。每次导出最近 30 个自然日的提交，含今天。",
+  "settings.worklogExportMinutesHint": "填 0 关闭导出。快照保留最近 30 天（含今天），每日记录另存于 archive 文件夹。",
   "settings.worklogExportPath": "JSON 文件路径",
   "settings.worklogExportPathHint": "填写 .json 文件的绝对路径。留空时保存到配置文件旁的 worklog.json。",
   "settings.worklogExportSave": "保存导出设置",

@@ -81,7 +81,7 @@
   "settings.grpDisplay": "표시",
   "settings.worklogExport": "작업 기록 자동 내보내기",
   "settings.worklogExportMinutes": "내보내기 간격(분)",
-  "settings.worklogExportMinutesHint": "0으로 설정하면 내보내기가 꺼집니다. 각 파일에는 오늘을 포함한 최근 30일의 기록이 들어 있습니다.",
+  "settings.worklogExportMinutesHint": "0으로 설정하면 내보내기가 꺼집니다. 스냅샷에는 오늘을 포함한 최근 30일의 기록이 들어 있으며, 일별 파일은 archive 폴더에도 저장됩니다.",
   "settings.worklogExportPath": "JSON 파일 경로",
   "settings.worklogExportPathHint": ".json 파일의 절대 경로를 입력하세요. 비워 두면 설정 파일과 같은 폴더에 worklog.json을 저장합니다.",
   "settings.worklogExportSave": "내보내기 설정 저장",

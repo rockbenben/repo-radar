@@ -81,7 +81,7 @@
   "settings.grpDisplay": "Tampilan",
   "settings.worklogExport": "Ekspor otomatis catatan kerja",
   "settings.worklogExportMinutes": "Interval ekspor (menit)",
-  "settings.worklogExportMinutesHint": "0 menonaktifkan ekspor. Setiap file mencakup 30 hari kalender terakhir, termasuk hari ini.",
+  "settings.worklogExportMinutesHint": "0 menonaktifkan ekspor. File ringkasan mencakup 30 hari terakhir, termasuk hari ini. File harian juga disimpan di folder archive.",
   "settings.worklogExportPath": "Jalur file JSON",
   "settings.worklogExportPathHint": "Masukkan jalur absolut ke file .json atau kosongkan untuk menyimpan worklog.json di samping file konfigurasi.",
   "settings.worklogExportSave": "Simpan pengaturan ekspor",
