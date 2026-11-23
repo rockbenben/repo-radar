@@ -15,6 +15,37 @@ import type { MiddlewareHandler } from "hono"
 // rel 取自 URL path（见下面 decodedPath），恒为正斜杠，不随操作系统变化，故只匹配 "/"
 const HASHED_ASSET = /^assets\/[^/]+-[A-Za-z0-9_-]{8,}\.[^/.]+$/
 
+/**
+ * 文档级 CSP，只作用于 index.html（其余静态文件不是文档，加不加都不生效，故不加）。
+ *
+ * 前端的所有资源都来自本机后端自己：脚本/字体/图片是同源静态文件，数据走同源 /api 与 /ws。
+ * 因此这里按「只信任自己」收紧，重点挡住的是被注入的第三方脚本：
+ *
+ * - script-src 'self'：vite 产物是外部 .js 文件，index.html 里只有一条
+ *   `<script type="module" src=...>`，没有内联脚本，所以**不需要** 'unsafe-inline'——
+ *   留了它就等于把 CSP 最关键的一条让出去，注入点照样能执行。
+ * - style-src 必须带 'unsafe-inline'：React 的行内 style 与 antd 的 CSS-in-JS 都靠
+ *   style 属性 / <style> 注入，卡掉这条界面会直接失去样式。
+ * - connect-src 除 'self' 外显式带上回环的 ws://：WebSocket 的 scheme 与页面不同，
+ *   CSP3 的 'self' 匹配规则本该覆盖 ws（较新的 Chromium 已实现），但这条兼容语义历史上
+ *   有过差异，而漏掉的后果是实时刷新**静默**失效（页面照常打开，只是不再自动更新），
+ *   排障时极难定位——宁可多写两个回环源。dev 模式下页面由 vite 提供、不经过这里，不受影响。
+ * - object-src / base-uri / frame-ancestors 一并关死：本应用不用插件、不用 <base>、
+ *   也从不被别的页面嵌入。
+ */
+export const DOCUMENT_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  "connect-src 'self' ws://127.0.0.1:* ws://localhost:*",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ")
+
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -78,6 +109,9 @@ export function diskStatic(root: string): MiddlewareHandler {
     // 文件名不带哈希的资源（favicon.svg、logo.svg、og-image.png 等）一律 no-cache，
     // 否则升级后浏览器仍会用一年前钉住的旧文件
     const cacheControl = HASHED_ASSET.test(rel) ? "public, max-age=31536000, immutable" : "no-cache"
-    return c.body(new Uint8Array(bytes), 200, { "content-type": type, "cache-control": cacheControl })
+    const headers: Record<string, string> = { "content-type": type, "cache-control": cacheControl }
+    // CSP 只对文档生效；见 DOCUMENT_CSP 的注释
+    if (type.startsWith("text/html")) headers["content-security-policy"] = DOCUMENT_CSP
+    return c.body(new Uint8Array(bytes), 200, headers)
   }
 }

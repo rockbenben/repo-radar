@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join, parse } from "node:path"
 import { Hono } from "hono"
 import { afterEach, describe, expect, it } from "vitest"
-import { diskStatic } from "../src/static"
+import { diskStatic, DOCUMENT_CSP } from "../src/static"
 
 const dirs: string[] = []
 function fixture(): string {
@@ -55,6 +55,36 @@ describe("diskStatic", () => {
     const res = await app.request("/favicon.svg")
     expect(res.status).toBe(200)
     expect(res.headers.get("cache-control")).toBe("no-cache")
+  })
+
+  // 安全基线：文档必须带 CSP。脚本这条尤其关键——带了 'unsafe-inline' 的话，
+  // 注入进页面的内联脚本照样能执行，CSP 等于白设（本应用没有内联脚本，不需要它）
+  it("index.html 带严格 CSP：脚本只允许同源、无 unsafe-inline/eval", async () => {
+    const res = await appWith(fixture()).request("/")
+    const csp = res.headers.get("content-security-policy") ?? ""
+    expect(csp).toBe(DOCUMENT_CSP)
+    const directives = new Map(csp.split("; ").map((d) => [d.split(" ")[0], d.slice(d.indexOf(" ") + 1)]))
+    expect(directives.get("script-src")).toBe("'self'")
+    expect(directives.get("object-src")).toBe("'none'")
+    expect(directives.get("frame-ancestors")).toBe("'none'")
+    expect(csp).not.toContain("'unsafe-eval'")
+  })
+
+  // 实时刷新走 WebSocket（ws://），与文档的 http:// 不同源。漏掉这条源的话页面照常打开、
+  // 只是不再自动更新——静默故障，因此单独锁住它
+  it("CSP 放行回环 WebSocket，否则实时刷新会静默失效", async () => {
+    const res = await appWith(fixture()).request("/")
+    const csp = res.headers.get("content-security-policy") ?? ""
+    const connect = csp.split("; ").find((d) => d.startsWith("connect-src "))
+    expect(connect).toContain("'self'")
+    expect(connect).toContain("ws://127.0.0.1:*")
+  })
+
+  // CSP 只对文档有意义；静态资源是二进制/脚本，不必背这个头
+  it("静态资源不带 CSP", async () => {
+    const app = appWith(fixture())
+    expect((await app.request("/assets/app-a1b2c3d4.js")).headers.get("content-security-policy")).toBeNull()
+    expect((await app.request("/favicon.svg")).headers.get("content-security-policy")).toBeNull()
   })
 
   it("不存在的路径交给下一个处理器（API 的 404 不能被静态层吞掉）", async () => {
