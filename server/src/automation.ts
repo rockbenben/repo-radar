@@ -1,10 +1,10 @@
 import { statSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, resolve } from "node:path"
 import { type Config, loadConfig, MAX_INTERVAL_MINUTES, saveConfig } from "./config"
-import type { RepoStatus } from "./types"
+import type { RepoStatus, WorklogExportStatus } from "./types"
 import { usesPerRepoWatching } from "./watch-strategy"
 import type { RepoWatcher, WatchedRepo } from "./watcher"
-import { exportWorklog } from "./worklog-export"
+import { exportWorklog, pendingWorklogDates, worklogArchiveDir, worklogExportHistory } from "./worklog-export"
 
 /** 监听覆盖情况：total 是本该监听的仓库数（非归档），watched 取自 watcher 的真实覆盖数——
  *  不是配置算出来的应然值。某个 root 挂不上时，coverage 必须如实变低，不能装作全覆盖 */
@@ -66,6 +66,8 @@ export interface Automation {
   /** 启动时装上定时器（监听由首轮扫描的 applyWatch 负责） */
   start(cfg: Config): void
   reposReady(): void
+  worklogStatus(): WorklogExportStatus
+  exportWorklogNow(): Promise<boolean>
   /** 退出时拆掉定时器（监听的关闭走 shutdown 的 closeWatcher） */
   stop(): void
   /** 最近一次 applyWatch 的覆盖情况，供界面如实显示「250 个中监听 200 个」 */
@@ -222,27 +224,52 @@ export function createAutomation(deps: AutomationDeps): Automation {
     })
   })
 
-  let worklogTarget: { file: string; minutes: number } | null = null
+  const defaultWorklogFile = resolve(dirname(configFile), "worklog.json")
+  const history = worklogExportHistory(configFile, log)
+  const historyKey = (file: string) => process.platform === "win32" ? file.toLowerCase() : file
+  let worklogTarget = { file: defaultWorklogFile, minutes: 0 }
   let reposReady = false
-  let exportingWorklog = false
-  const worklogTimer = createTimer(runWorklogExport)
+  let worklogFlight: { target: typeof worklogTarget; task: Promise<boolean> } | null = null
+  const worklogTimer = createTimer(runScheduledWorklog)
 
-  function runWorklogExport(): void {
-    const target = worklogTarget
-    if (!reposReady || !target || exportingWorklog) return
-    exportingWorklog = true
-    void exportWorklog(target.file, listRepos(), () => worklogTarget === target, log)
-      .catch((err) => log(`[repo-radar] Automatic worklog export failed: ${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => {
-        exportingWorklog = false
-        if (worklogTarget !== target) runWorklogExport()
+  function runScheduledWorklog(): void {
+    if (worklogTarget.minutes > 0) void runWorklogExport()
+  }
+
+  function runWorklogExport(target = worklogTarget): Promise<boolean> {
+    const isCurrent = () => reposReady && worklogTarget === target
+    if (!isCurrent()) return Promise.resolve(false)
+    if (worklogFlight) {
+      return worklogFlight.target === target ? worklogFlight.task : worklogFlight.task.then(() => runWorklogExport(target))
+    }
+
+    let failure: string | null = null
+    const reportFailure = (reason: string) => {
+      failure = reason
+      log(`[repo-radar] Worklog export failed: ${reason}`)
+    }
+    const task = exportWorklog(target.file, listRepos(), isCurrent, reportFailure)
+      .catch((err) => reportFailure(err instanceof Error ? err.message : String(err)))
+      .then(() => {
+        if (!isCurrent()) return false
+        const key = historyKey(target.file)
+        const previous = history.get(key)
+        const at = new Date().toISOString()
+        history.set(key, {
+          lastSuccessAt: failure === null ? at : (previous?.lastSuccessAt ?? null),
+          lastFailure: failure === null ? (previous?.lastFailure ?? null) : { at, reason: failure },
+        })
+        return failure === null
       })
+      .finally(() => { worklogFlight = null })
+    worklogFlight = { target, task }
+    return task
   }
 
   function configureWorklog(minutes: number, file: string): void {
-    worklogTarget = minutes > 0 ? { file: file || join(dirname(configFile), "worklog.json"), minutes } : null
+    worklogTarget = { file: file ? resolve(file) : defaultWorklogFile, minutes }
     worklogTimer.apply(reposReady ? minutes : 0)
-    runWorklogExport()
+    runScheduledWorklog()
   }
 
   async function applyWatch(enabled: boolean, repos?: RepoStatus[]): Promise<void> {
@@ -397,9 +424,28 @@ export function createAutomation(deps: AutomationDeps): Automation {
     reposReady() {
       if (reposReady) return
       reposReady = true
-      worklogTimer.apply(worklogTarget?.minutes ?? 0)
-      runWorklogExport()
+      worklogTimer.apply(worklogTarget.minutes)
+      runScheduledWorklog()
     },
+    worklogStatus() {
+      const archiveDir = worklogArchiveDir(worklogTarget.file)
+      const previous = history.get(historyKey(worklogTarget.file))
+      let pendingDates: string[] | null = null
+      try {
+        pendingDates = pendingWorklogDates(archiveDir)
+      } catch {
+        // A directory that cannot be read must not look like a complete archive.
+      }
+      return {
+        archiveDir,
+        ready: reposReady,
+        running: worklogFlight !== null && worklogFlight.target === worklogTarget,
+        pendingDates,
+        lastSuccessAt: previous?.lastSuccessAt ?? null,
+        lastFailure: previous?.lastFailure ?? null,
+      }
+    },
+    exportWorklogNow: () => runWorklogExport(),
     stop() {
       reposReady = false
       configureWorklog(0, "")

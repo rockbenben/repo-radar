@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
@@ -8,8 +8,9 @@ import { createBackend, createRescanScheduler, createStructureRescan, INBOX_REFR
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config"
 import * as github from "../src/github"
 import { pendingRepoOps } from "../src/queue"
-import type { RepoStatus, WorklogResponse } from "../src/types"
+import type { RepoStatus, WorklogExportStatus, WorklogResponse } from "../src/types"
 import { RepoWatcher } from "../src/watcher"
+import * as worklog from "../src/worklog"
 import { cleanupFixtures, git, makeBehindRepo, makeRepo, makeRepoWithDates } from "./fixtures"
 
 /** 手动可控的 promise，精确摆出「上一轮还没结束/还没开跑」的时序——与 serial.test.ts 同一手法 */
@@ -167,6 +168,86 @@ describe("createBackend", () => {
     const recent = JSON.parse(readFileSync(join(dir, "worklog.json"), "utf8")) as WorklogResponse
     expect(recent.since).toBe("2026-08-12")
     expect(recent.commits.map((commit) => commit.day)).toEqual(["2026-09-10"])
+  })
+
+  it("shows missing export dates, runs on demand with scheduling off and remembers outcomes after restart", async () => {
+    const options = { ...opts(), port: 0 }
+    const repo = makeRepoWithDates(["2026-07-14T12:00:00", "2026-07-15T12:00:00"])
+    const file = join(dirname(options.configFile), "custom", "snapshot.json")
+    const archiveDir = join(dirname(file), "archive")
+    const yesterday = join(archiveDir, "2026", "07", "2026-07-14.json")
+    const today = join(archiveDir, "2026", "07", "2026-07-15.json")
+    saveConfig(options.configFile, { ...DEFAULT_CONFIG, manualRepos: [repo], autoScanMinutes: 0, worklogExportPath: file })
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date(2026, 6, 15, 15))
+
+    const backend = track(createBackend(options))
+    await backend.start()
+    await waitForFirstScan(backend)
+    const url = (port: number) => `http://127.0.0.1:${port}/api/worklog/export`
+    const status = async (port = backend.port) => (await (await fetch(url(port))).json()) as WorklogExportStatus
+    const run = async () => (await (await fetch(url(backend.port), { method: "POST" })).json()) as {
+      success: boolean
+      status: WorklogExportStatus
+    }
+
+    expect(await status()).toMatchObject({ archiveDir, ready: true, running: false, lastSuccessAt: null, lastFailure: null })
+    expect((await status()).pendingDates).toContain("2026-07-15")
+    expect(existsSync(archiveDir)).toBe(false)
+    const first = await run()
+    expect(first.success).toBe(true)
+    expect(first.status).toMatchObject({ pendingDates: [], lastSuccessAt: new Date().toISOString() })
+    expect(JSON.parse(readFileSync(today, "utf8")).commits).toHaveLength(1)
+
+    // Simulate a deleted day and a destination that cannot be replaced.
+    rmSync(yesterday)
+    rmSync(today)
+    mkdirSync(today)
+    vi.setSystemTime(new Date(2026, 6, 15, 16))
+    const broken = await run()
+    expect(broken.success).toBe(false)
+    expect(broken.status).toMatchObject({
+      pendingDates: ["2026-07-15"],
+      lastSuccessAt: first.status.lastSuccessAt,
+      lastFailure: { at: new Date().toISOString(), reason: expect.stringContaining("2026-07-15") },
+    })
+    expect(existsSync(yesterday)).toBe(true)
+
+    rmdirSync(today)
+    vi.setSystemTime(new Date(2026, 6, 15, 17))
+    const original = worklog.queryWorklog
+    const query = vi.spyOn(worklog, "queryWorklog")
+    const entered = deferred<void>()
+    const release = deferred<void>()
+    query.mockImplementationOnce(async (...args) => {
+      entered.resolve()
+      await release.promise
+      return original(...args)
+    })
+    let retried: Awaited<ReturnType<typeof run>>
+    try {
+      const request = run()
+      await entered.promise
+      expect((await status()).running).toBe(true)
+      release.resolve()
+      retried = await request
+      expect(query).toHaveBeenCalledTimes(1)
+    } finally {
+      release.resolve()
+      query.mockRestore()
+    }
+    expect(retried.success).toBe(true)
+    expect(retried.status).toMatchObject({
+      pendingDates: [],
+      running: false,
+      lastSuccessAt: new Date().toISOString(),
+      lastFailure: broken.status.lastFailure,
+    })
+    await backend.stop()
+    const restarted = track(createBackend(options))
+    await restarted.start()
+    await waitForFirstScan(restarted)
+    expect(await status(restarted.port)).toEqual(retried.status)
   })
 
   it("coalesces GitHub copies, backs off after failure and keeps manual refresh immediate", async () => {

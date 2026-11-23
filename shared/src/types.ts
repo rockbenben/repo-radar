@@ -207,6 +207,15 @@ export interface WorklogResponse {
   me: { name: string; email: string; emails?: string[] } | null
 }
 
+export interface WorklogExportStatus {
+  archiveDir: string
+  ready: boolean
+  running: boolean
+  pendingDates: string[] | null
+  lastSuccessAt: string | null
+  lastFailure: { at: string; reason: string } | null
+}
+
 export interface ScanStatus {
   lastScanAt: string | null
   watch: { watched: number; total: number }

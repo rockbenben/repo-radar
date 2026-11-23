@@ -3,8 +3,9 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync 
 import { dirname, join } from "node:path"
 import { setImmediate } from "node:timers/promises"
 import { renameWithRetry } from "./atomic-write"
+import { JsonStore } from "./json-store"
 import { localDay } from "./local-date"
-import type { RepoStatus, WorklogResponse } from "./types"
+import type { RepoStatus, WorklogExportStatus, WorklogResponse } from "./types"
 import { queryWorklog } from "./worklog"
 
 const FORMAT = "repo-radar-worklog"
@@ -40,6 +41,28 @@ function writeWorklog(file: string, worklog: WorklogResponse): void {
   writeSnapshot(file, `${JSON.stringify(snapshot, null, 2)}\n`)
 }
 
+export function worklogArchiveDir(file: string): string {
+  return join(dirname(file), "archive")
+}
+
+type ExportHistory = Pick<WorklogExportStatus, "lastSuccessAt" | "lastFailure">
+
+function validExportHistory(value: unknown): value is ExportHistory {
+  if (typeof value !== "object" || value === null) return false
+  const { lastSuccessAt, lastFailure } = value as ExportHistory
+  return (lastSuccessAt === null || typeof lastSuccessAt === "string") &&
+    (lastFailure === null || (typeof lastFailure?.at === "string" && typeof lastFailure.reason === "string"))
+}
+
+export function worklogExportHistory(configFile: string, log: (message: string) => void): JsonStore<ExportHistory> {
+  return new JsonStore({
+    file: `${configFile}.worklog-status`,
+    isValid: validExportHistory,
+    onCorrupt: (err) => log(`[repo-radar] Could not read worklog export status: ${String(err)}`),
+    onWriteError: (err) => log(`[repo-radar] Could not save worklog export status: ${String(err)}`),
+  })
+}
+
 function archiveMonth(root: string, day: string): string {
   return join(root, day.slice(0, 4), day.slice(5, 7))
 }
@@ -57,12 +80,13 @@ function readDirectory(path: string) {
   }
 }
 
-/** Month directories also record where coverage starts if the first export fails to fill that month. */
-function archiveDaysToWrite(root: string, now: Date): string[] {
+function initialArchiveDay(now: Date): string {
+  return localDay(new Date(now.getFullYear(), now.getMonth() - 1, 1, 12))
+}
+
+function planArchive(root: string, now: Date): { writes: string[]; pending: string[] } {
   const today = localDay(now)
-  const initial = new Date(now.getFullYear(), now.getMonth() - 1, 1, 12)
-  let start = localDay(initial)
-  mkdirSync(archiveMonth(root, start), { recursive: true })
+  let start = initialArchiveDay(now)
 
   const existing = new Set<string>()
   let latest = ""
@@ -78,11 +102,11 @@ function archiveDaysToWrite(root: string, now: Date): string[] {
       for (const file of readDirectory(join(yearPath, month.name))) {
         const day = file.name.slice(0, -5)
         if (!file.isFile() || !file.name.endsWith(".json") || !day.startsWith(`${prefix}-`) ||
-          !/^\d{4}-\d{2}-\d{2}$/.test(day) || day >= today) continue
+          !/^\d{4}-\d{2}-\d{2}$/.test(day) || day > today) continue
         const dayOfMonth = Number(day.slice(-2))
         if (dayOfMonth < 1 || dayOfMonth > daysInMonth) continue
         existing.add(day)
-        if (day > latest) latest = day
+        if (day < today && day > latest) latest = day
       }
     }
   }
@@ -90,15 +114,22 @@ function archiveDaysToWrite(root: string, now: Date): string[] {
   const yesterday = new Date(now)
   yesterday.setDate(yesterday.getDate() - 1)
   const refreshSince = localDay(yesterday)
-  const days: string[] = []
+  const writes: string[] = []
+  const pending: string[] = []
   // Iterate the calendar labels in UTC so DST cannot duplicate or skip a date.
   const date = new Date(`${start}T12:00:00Z`)
   for (let day = start; day <= today; day = date.toISOString().slice(0, 10)) {
     // Refresh the latest historical file too: it may have been written before the app went offline.
-    if (day >= refreshSince || day === latest || !existing.has(day)) days.push(day)
+    const missing = !existing.has(day)
+    if (missing) pending.push(day)
+    if (missing || day >= refreshSince || day === latest) writes.push(day)
     date.setUTCDate(date.getUTCDate() + 1)
   }
-  return days
+  return { writes, pending }
+}
+
+export function pendingWorklogDates(archiveDir: string): string[] {
+  return planArchive(archiveDir, new Date()).pending
 }
 
 async function archiveWorklog(
@@ -106,11 +137,11 @@ async function archiveWorklog(
   days: string[],
   worklog: WorklogResponse,
   isCurrent: () => boolean,
-  log: (message: string) => void,
+  reportFailure: (message: string) => void,
 ): Promise<void> {
   if (!isCurrent() || days.length === 0) return
   if (worklog.failed.length > 0) {
-    log(`[repo-radar] Worklog archive deferred for ${days[0]} through ${days[days.length - 1]}. Incomplete Git results for: ${worklog.failed.join(", ")}`)
+    reportFailure(`Worklog archive deferred for ${days[0]} through ${days[days.length - 1]}. Incomplete Git results for: ${worklog.failed.join(", ")}`)
     return
   }
 
@@ -126,7 +157,7 @@ async function archiveWorklog(
     try {
       writeWorklog(dateFile(root, day), { ...worklog, since: day, until: day, commits: byDay.get(day) ?? [] })
     } catch (err) {
-      log(`[repo-radar] Worklog archive write failed for ${day}: ${err instanceof Error ? err.message : String(err)}`)
+      reportFailure(`Worklog archive write failed for ${day}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 }
@@ -135,7 +166,7 @@ export async function exportWorklog(
   file: string,
   repos: RepoStatus[],
   isCurrent: () => boolean,
-  log: (message: string) => void,
+  reportFailure: (message: string) => void,
 ): Promise<void> {
   const now = new Date()
   const firstDay = new Date(now)
@@ -144,11 +175,13 @@ export async function exportWorklog(
   if (!isCurrent()) return
   writeWorklog(file, recent)
 
-  const root = join(dirname(file), "archive")
-  const days = archiveDaysToWrite(root, now)
-  await archiveWorklog(root, days.filter((day) => day >= recent.since), recent, isCurrent, log)
+  const root = worklogArchiveDir(file)
+  // Keep the original coverage start even when writing its first dates fails.
+  mkdirSync(archiveMonth(root, initialArchiveDay(now)), { recursive: true })
+  const { writes: days } = planArchive(root, now)
+  await archiveWorklog(root, days.filter((day) => day >= recent.since), recent, isCurrent, reportFailure)
   const older = days.filter((day) => day < recent.since)
   if (older.length === 0 || !isCurrent()) return
   const history = await queryWorklog(repos, older[0], older[older.length - 1])
-  await archiveWorklog(root, older, history, isCurrent, log)
+  await archiveWorklog(root, older, history, isCurrent, reportFailure)
 }

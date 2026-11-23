@@ -194,6 +194,12 @@ body{margin:0;background:var(--ink);color:var(--text);font-family:var(--sans);
 /* 整行铺开的设置项（告警灯选择器）：标签在上、控件在下，占满弹层宽度 */
 /* 告警灯那行整行铺开，不进标签列（六盏灯要横着排，塞进 260px 会挤成三行） */
 .rr-settings .row.stack{display:flex;flex-direction:column;align-items:stretch;gap:7px}
+.rr-worklog-export-status > button{align-self:flex-start}
+.rr-worklog-export-status dl{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:6px 12px;margin:3px 0;font-size:12px}
+.rr-worklog-export-status dt{color:var(--dim)}
+.rr-worklog-export-status dd{margin:0;overflow-wrap:anywhere}
+.rr-worklog-export-status summary{cursor:pointer}
+.rr-worklog-export-status ul{max-height:120px;overflow:auto;margin:4px 0;padding-inline-start:20px}
 /* 告警灯选择器：一排和顶栏同款的灯。亮着=顶栏会显示，暗的=已关掉，点一下切换。
    颜色刻意与 .rr-lamp 同源（crit 红 / warn 琥珀 / 其余中性）——设置里看到的就是顶栏会出现的东西，
    不需要在两套视觉语言之间做翻译。关掉的灯用空心点 + 降饱和，一眼能数出关了几盏 */

@@ -42,7 +42,11 @@ refresh interval.
 Open **Settings → General → Automatic worklog export**. Set a positive interval to enable export.
 Leave the path blank to write `worklog.json` beside the active configuration file
 (`~/.repo-radar/worklog.json` by default), or enter an absolute path to a `.json` file.
-The first export runs after the initial repository scan or when you enable export while the app is running.
+The first scheduled export runs after the initial repository scan or when you enable export
+while the app is running. **Export now** uses the saved destination after the initial scan,
+including when the interval is set to 0. It refreshes today's record and fills missing dates.
+The settings panel shows the archive folder, missing dates, last fully successful export time,
+and the most recent failure for that destination. A partial export keeps the previous success time.
 
 Each export atomically replaces the previous UTF-8 JSON snapshot and covers the last 30 local
 calendar days, including today. It includes all authors, using the same commit selection as the

@@ -14,7 +14,7 @@ import { cloneRepo, createProject } from "./scaffold"
 import { aggregateHeatmap, buildActivity } from "./stats"
 import { deriveGroup, type RepoStore } from "./store"
 import { type BatchDeps, startBatch, startExec } from "./tasks"
-import type { ActivityResponse, DiffPreview, HeatmapResponse, RepoMutation, RepoStatus, ScanStatus, StashesResponse, TaskStarted } from "./types"
+import type { ActivityResponse, DiffPreview, HeatmapResponse, RepoMutation, RepoStatus, ScanStatus, StashesResponse, TaskStarted, WorklogExportStatus } from "./types"
 import { queryWorklog } from "./worklog"
 
 export interface ApiExtras {
@@ -40,6 +40,8 @@ export interface ApiExtras {
   syncRepos?: () => void
   lastScanAt?: () => string | null // 最近一次全量扫描完成时刻（ISO）；还没扫完过则为 null
   watchCoverage?: () => { watched: number; total: number } // 实际挂上监听的仓库数 / 本该监听的总数
+  worklogStatus?: () => WorklogExportStatus
+  exportWorklogNow?: () => Promise<boolean>
   refreshInbox?: () => Promise<void> // 立即强制重拉各仓库的 GitHub PR/issue/CI（跳过 TTL）
   boundPort?: () => number // 实际绑定的端口，同源白名单按它算。取函数而非数值：createApi 在 bind 之前就调用了，那时端口还没定
   devOrigins?: boolean // 放行 vite dev server（5173）。**只能在开发模式下为真**，见 DEV_ORIGINS
@@ -792,6 +794,17 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   })
 
   app.get("/api/stats/activity", (c) => c.json<ActivityResponse>({ repos: buildActivity(store.list().filter((r) => !r.archived)) }))
+
+  if (extras.worklogStatus && extras.exportWorklogNow) {
+    const status = extras.worklogStatus
+    const run = extras.exportWorklogNow
+    app.get("/api/worklog/export", (c) => c.json(status()))
+    app.post("/api/worklog/export", async (c) => {
+      if (!status().ready) return c.json({ error: "worklogExportNotReady" }, 409)
+      const success = await run()
+      return c.json({ success, status: status() })
+    })
+  }
 
   // 工作记录：汇总未排除仓库在 [since, until] 天范围内的提交（全部本地分支、排除 merge）
   app.get("/api/worklog", async (c) => {

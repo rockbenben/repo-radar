@@ -628,6 +628,8 @@ export function createBackend(options: BackendOptions): Backend {
     setAutoScan: automation.setAutoScan,
     setWatchLimit: automation.setWatchLimit,
     applyConfig: automation.applyConfig,
+    worklogStatus: automation.worklogStatus,
+    exportWorklogNow: automation.exportWorklogNow,
     syncRepos: () => automation.applyRepos(store.list()),
     lastScanAt: () => lastScanAt,
     watchCoverage: () => automation.coverage(),
