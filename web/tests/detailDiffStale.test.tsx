@@ -103,6 +103,23 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it("从非 origin 的 GitHub 远程查询详情并链接到具体 CI 运行", async () => {
+  const url = "https://github.com/u/demo/actions/runs/123"
+  vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+    const path = String(input)
+    const body = path.endsWith("/github")
+      ? { ok: true, prs: [], prsTruncated: false, run: { workflowName: "Build", status: "completed", conclusion: "failure", url } }
+      : { recentCommits: [], stashes: [], branches: [], remoteBranches: [], days: [] }
+    return new Response(JSON.stringify(body), { status: 200 })
+  }))
+  render(panel({ ...stub(dirty(0)), remotes: [
+    { name: "origin", url: "https://gitlab.com/u/demo.git" },
+    { name: "upstream", url: "https://www.github.com/u/demo.git/" },
+  ] }))
+  fireEvent.click(await screen.findByRole("button", { name: "查询 PR / CI（用 gh）" }))
+  expect((await screen.findByRole("link", { name: /Build/ })).getAttribute("href")).toBe(url)
+})
+
 describe("详情面板的 diff 不会与实时的改动计数脱节", () => {
   it("面板开着时仓库又变了 → diff 重取，不停在第一次那份", async () => {
     let body = "--- OLD DIFF ---"

@@ -1,5 +1,6 @@
 import { App as AntdApp, AutoComplete, Button, Checkbox, Input, Modal, Select, Tag } from "antd"
 import { useEffect, useRef, useState } from "react"
+import { githubRemoteUrl } from "../../../shared/src/github"
 import { useT } from "../i18n"
 import { errText } from "../lib/errText"
 import { healthMessage } from "../lib/healthText"
@@ -805,7 +806,7 @@ export function DetailPanel({
           </section>
         )}
 
-        {web?.host === "github.com" && (
+        {githubRemoteUrl(repo.remotes) && (
           <section>
             <h3>{t("detail.github")}</h3>
             {gh === null ? (
@@ -834,7 +835,11 @@ export function DetailPanel({
                 ))}
                 {gh.run && (
                   <div className="kv" style={{ marginTop: 4 }}>
-                    {t("detail.latestCI", { workflow: gh.run.workflowName })}{" "}
+                    {gh.run.url ? (
+                      <a href={gh.run.url} target="_blank" rel="noreferrer" style={{ color: "var(--sig)" }}>
+                        {t("detail.latestCI", { workflow: gh.run.workflowName })}
+                      </a>
+                    ) : t("detail.latestCI", { workflow: gh.run.workflowName })}{" "}
                     <span
                       style={{
                         color:

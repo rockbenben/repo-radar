@@ -857,6 +857,10 @@ describe("api", () => {
     expect(body.repos).toHaveLength(1)
     expect(body.repos[0].stashes).toHaveLength(1)
     expect(body.repos[0].stashes[0].sha).toMatch(/^[0-9a-f]{40}$/)
+    const selected = await t.app.request(`/api/stashes?repoId=${body.repos[0].id}`)
+    expect(await selected.json()).toEqual(body)
+    const missing = await t.app.request("/api/stashes?repoId=missing")
+    expect(await missing.json()).toEqual({ repos: [] })
     t.cleanup()
   })
 

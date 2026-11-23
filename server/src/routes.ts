@@ -2,7 +2,7 @@ import { type Context, Hono } from "hono"
 import { type Config, checkMinutes, INVALID_WORKLOG_EXPORT_PATH, loadConfig, mergeConfig, saveConfig, validateConfigPatch } from "./config"
 import { WsHub } from "./events"
 import { ACTION_ARGS, commitRepo, createBranch, createStash, deleteBranches, discardChanges, dropStashes, getMergedMainBranches, getRepoDetail, getRepoDiff, listStashes, type RepoAction, repoId, stashAction, stashDiff, switchBranch } from "./git"
-import { getGithubStatus } from "./github"
+import { getGithubStatus, githubRemoteUrl, githubSlug } from "./github"
 import { buildManifest, importManifest, isManifest } from "./manifest"
 import { mapLimit } from "./map-limit"
 import { type OpenTarget, openTarget } from "./open"
@@ -237,7 +237,8 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
   app.get("/api/repos/:id/github", async (c) => {
     const repo = store.get(c.req.param("id"))
     if (!repo) return c.json({ error: "repo not found" }, 404)
-    return c.json(await getGithubStatus(repo.path))
+    const remote = githubRemoteUrl(repo.remotes)
+    return c.json(await getGithubStatus(repo.path, remote ? githubSlug(remote) : null))
   })
 
   app.post("/api/repos/:id/commit", async (c) => {
@@ -295,7 +296,9 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
 
   // 跨仓库 stash 收纳箱：聚合所有未排除、有 stash 的仓库（排除的仓库不在此出现，与统计一致）
   app.get("/api/stashes", async (c) => {
-    const repos = store.list().filter((r) => !r.archived && r.stashCount > 0)
+    const repoId = c.req.query("repoId")
+    const selected = repoId === undefined ? store.list() : [store.get(repoId)]
+    const repos = selected.filter((r): r is RepoStatus => r != null && !r.archived && r.stashCount > 0)
     // 限并发：避免仓库数×每仓 stash 数把 git 进程一次性铺开
     const groups = await mapLimit(repos, 8, async (r) => ({
       id: r.id,

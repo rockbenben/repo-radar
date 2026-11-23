@@ -11,7 +11,7 @@ export function remoteWeb(remotes: RemoteInfo[]): { host: string; url: string; l
   // ssh:// 与 git:// 形式 → https（服务端 githubSlug 认这些形式，web 端不认会导致队列跳转失灵、点了只能开详情）
   const ssh = /^(?:ssh|git):\/\/(?:[^@/\s]+@)?(.+)$/i.exec(u)
   if (ssh) u = `https://${ssh[1]}`
-  u = u.replace(/\.git$/, "").replace(/\/+$/, "")
+  u = u.replace(/\/+$/, "").replace(/\.git$/, "")
   try {
     const parsed = new URL(u)
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null
@@ -20,12 +20,6 @@ export function remoteWeb(remotes: RemoteInfo[]): { host: string; url: string; l
   } catch {
     return null // 本地 bare 路径等非 http 远程：不提供跳转
   }
-}
-
-/** 主机名恰为 github.com 的远程（不做子串匹配——corp-github.com 不算）。与服务端 githubRemoteUrl 同一判定 */
-export function isGithubUrl(url: string): boolean {
-  const host = remoteWeb([{ name: "x", url }])?.host.toLowerCase()
-  return host === "github.com" || host === "www.github.com"
 }
 
 const MAIN_BRANCHES = new Set(["main", "master"])

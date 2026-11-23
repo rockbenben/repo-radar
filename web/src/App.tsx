@@ -1,6 +1,7 @@
 import { App as AntdApp, Button, Dropdown, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Switch, Tooltip } from "antd"
 import { type ChangeEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { CockpitHero, GITHUB_KINDS, type QueueItem } from "./components/CockpitHero"
+import { githubRemoteUrl, isGithubInboxKind } from "../../shared/src/github"
+import { CockpitHero, type QueueItem } from "./components/CockpitHero"
 import { CommandPalette } from "./components/CommandPalette"
 import { DetailPanel } from "./components/DetailPanel"
 import { RepoCard } from "./components/RepoCard"
@@ -34,7 +35,6 @@ import { type HasRootsState, resolveEmptyArea } from "./lib/emptyState"
 import { errText } from "./lib/errText"
 import { applyFilter, type FilterState } from "./lib/filter"
 import { visibleLamps } from "./lib/lamps"
-import { isGithubUrl } from "./lib/meta"
 import { type LogEntry, loadLog, loadViews, pref, type SavedView, savePref } from "./lib/prefs"
 import { mergeRepo, parentOf } from "./lib/repos"
 import { relativeTime } from "./lib/time"
@@ -149,7 +149,8 @@ export default function App({
     () => pref("group", "none") as "folder" | "language" | "none",
   )
   const [showArchived, setShowArchived] = useState(() => pref("arch", "0") === "1")
-  const [showStash, setShowStash] = useState(false) // 跨仓库 stash 收纳箱子视图（不持久化，刷新即回看板）
+  const [stashView, setStashView] = useState<{ repoId?: string } | null>(null)
+  const showStash = stashView !== null
   const [batchTag, setBatchTag] = useState("")
   const [execCmd, setExecCmd] = useState("")
   const [execResultOpen, setExecResultOpen] = useState(false)
@@ -262,7 +263,7 @@ export default function App({
         // 不会因此无界堆积：:pr/:issue/:ci 这三个键只可能在 githubInbox 非空（即确实有 GitHub 远程）时被创建
         const unknown =
           r.error !== null ||
-          (GITHUB_KINDS.has(kind) && r.githubInbox === null && (r.remotes.length === 0 || r.remotes.some((rm) => isGithubUrl(rm.url))))
+          (isGithubInboxKind(kind) && r.githubInbox === null && (r.remotes.length === 0 || githubRemoteUrl(r.remotes) !== undefined))
         if (unknown) {
           next[k] = v
           continue
@@ -294,7 +295,7 @@ export default function App({
   const showRepoDetail = (id: string) => {
     if (!repos.some((r) => r.id === id)) return
     setView("board")
-    setShowStash(false)
+    setStashView(null)
     setDetailId(id)
   }
 
@@ -1168,7 +1169,7 @@ export default function App({
       <Button
         onClick={() => {
           if (!showStash) setShowArchived(false)
-          setShowStash(!showStash)
+          setStashView(showStash ? null : {})
         }}
       >
         {showStash ? t("annun.backToRepos") : t("annun.stashView", { n: stashTotal })}
@@ -1179,7 +1180,7 @@ export default function App({
     <Tooltip title={showArchived ? undefined : t("annun.archivedViewTip")} trigger={["hover", "focus"]}>
       <Button
         onClick={() => {
-          if (!showArchived) setShowStash(false)
+          if (!showArchived) setStashView(null)
           setShowArchived(!showArchived)
         }}
       >
@@ -1708,13 +1709,13 @@ export default function App({
       ) : showStash ? (
         <main className="rr-main rr-secondary">
           <div className="rr-board-head">
-            <h1>{t("annun.stashView", { n: stashTotal })}</h1>
+            <h1>{t("annun.stashView", { n: stashView.repoId ? (active.find((r) => r.id === stashView.repoId)?.stashCount ?? 0) : stashTotal })}</h1>
             <div className="rr-board-links">
               {archiveLink}
               {stashLink}
             </div>
           </div>
-          <StashView onLog={addLog} />
+          <StashView key={stashView.repoId ?? "all"} repoId={stashView.repoId} onLog={addLog} />
         </main>
       ) : (
         <main className="rr-main" ref={boardRef}>
@@ -1740,7 +1741,7 @@ export default function App({
               <CockpitHero
                 queue={actionQueueVisible}
                 onOpenRepo={showRepoDetail}
-                onOpenStash={() => setShowStash(true)}
+                onOpenStash={(repoId) => setStashView({ repoId })}
                 onPush={(id) => runBatch("push", [id])}
                 onDismiss={dismissItem}
                 open={cockpitOpen}

@@ -58,6 +58,7 @@ function stubFetch(repos: RepoStatus[]): void {
       if (url.includes("/api/config")) return json(CONFIG)
       if (url.includes("/api/version")) return json({ version: "test", canQuit: false, port: 17420 })
       if (url.includes("/api/autostart")) return json({ supported: false, enabled: false })
+      if (url.startsWith("/api/stashes")) return json({ repos: [] })
       return json({})
     }),
   )
@@ -117,6 +118,37 @@ it("按 GitHub 时间排序，较新的 issue 排在 PR 和旧缓存之前", asy
     expect(names).toEqual(["recent", "old-pr", "legacy"])
     expect(queueReasons()[0]).toBe("1 个 issue 等你处理")
   })
+})
+
+it("单项直达 GitHub 条目，多项打开对应列表，使用后端选中的 GitHub 远程", async () => {
+  const open = vi.fn()
+  vi.stubGlobal("open", open)
+  const githubRepo = repo({ ...inbox(1, 0), latestPr: { number: 113, createdAt: "2026-04-01T00:00:00Z" } })
+  stubFetch([
+    { ...githubRepo, remotes: [
+      { name: "origin", url: "https://gitlab.com/u/demo.git" },
+      { name: "upstream", url: "ssh://git@www.github.com/u/demo.git/" },
+    ] },
+    { ...repo(inbox(2, 0)), id: "multi", name: "multi" },
+  ])
+  render(view())
+  fireEvent.click(await screen.findByText("1 个 PR 等你处理"))
+  expect(open).toHaveBeenLastCalledWith("https://github.com/u/demo/pull/113", "_blank", "noopener,noreferrer")
+  fireEvent.click(screen.getByText("2 个 PR 等你处理"))
+  expect(open).toHaveBeenLastCalledWith("https://github.com/u/demo/pulls", "_blank", "noopener,noreferrer")
+})
+
+it("从 stash 提醒打开指向当前仓库的收纳箱", async () => {
+  stubFetch([{ ...repo(inbox(0, 0)), stashCount: 1, stashOldest: "2025-01-01T00:00:00Z" }])
+  const fetchMock = vi.mocked(fetch)
+  render(view())
+  const stash = await waitFor(() => {
+    const button = document.querySelector(".queue-list .open")
+    expect(button).not.toBeNull()
+    return button!
+  })
+  fireEvent.click(stash)
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === "/api/stashes?repoId=r1")).toBe(true))
 })
 
 describe("计数类「已处理」在面板关着期间也不会被静默压制", () => {

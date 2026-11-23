@@ -2,6 +2,8 @@ import { spawn } from "node:child_process"
 import { gitEnvironment } from "./git-env"
 import type { GithubInbox, GithubInboxItem, GithubStatus } from "./types"
 
+export { githubRemoteUrl, githubSlug } from "../../shared/src/github"
+
 const GH_TIMEOUT_MS = 15_000
 
 interface GhResult {
@@ -39,29 +41,6 @@ export async function ghAvailable(): Promise<boolean> {
   const v = await runGh(process.cwd(), ["--version"])
   if (v.code === 0) ghOk = true
   return v.code === 0
-}
-
-/**
- * 从远程 URL 解析出 owner/repo（https / ssh / scp 形式）；解析不出返回 null。
- * 主机名必须恰为 github.com——不做子串匹配，corp-github.com / xgithub.com 不是 GitHub，
- * 否则会拿别人家 me/proj 的 PR/issue/CI 数据糊到无关仓库上。
- */
-export function githubSlug(url: string): string | null {
-  // userinfo 用 [^@/\s]+ ——须放行 user:token@（CI/token 克隆的标准形式），不能只允许 \w.-
-  const m = url.trim().match(/^(?:(?:https?|git|ssh):\/\/)?(?:[^@/\s]+@)?([\w.-]+)[:/]([^/:]+)\/([^/:]+?)(?:\.git)?\/?$/i)
-  if (!m) return null
-  const host = m[1].toLowerCase()
-  if (host !== "github.com" && host !== "www.github.com") return null
-  return `${m[2]}/${m[3]}`
-}
-
-/**
- * 多远程时挑「那一个」GitHub 远程：优先名为 origin 的，否则第一个——
- * 与前端跳转（remoteWeb 同样 origin 优先）保持同序，保证「计数来自哪个仓库，点开就是哪个仓库」。
- */
-export function githubRemoteUrl(remotes: { name: string; url: string }[]): string | undefined {
-  const gh = remotes.filter((r) => githubSlug(r.url) !== null)
-  return (gh.find((r) => r.name === "origin") ?? gh[0])?.url
 }
 
 /**
@@ -244,16 +223,17 @@ export async function getGithubInbox(slug: string, previous?: GithubInbox): Prom
 // gh 一次请求最多返回 100 条，正好取这个值：再大只会多分几页、不会消掉上限
 const PR_LIST_LIMIT = 100
 
-export async function getGithubStatus(cwd: string): Promise<GithubStatus> {
+export async function getGithubStatus(cwd: string, slug: string | null): Promise<GithubStatus> {
   const empty: GithubStatus = { ok: false, error: null, prs: [], prsTruncated: false, run: null }
 
   // gh 未安装 / 未登录：回**错误码**，中文句子交给前端按界面语言翻译（界面有 18 种语言，
   // 服务端写死中文的话，英文界面里会蹦出一句中文）。映射见 web/src/lib/errText.ts。
   if (!(await ghAvailable())) return { ...empty, error: "ghMissing" } // 复用缓存探测，别每次点开都白 spawn 一次 --version
+  if (!slug) return { ...empty, error: "ghQueryFailed" }
 
   // --limit：gh 默认只抓 30 条，而面板把这个数组的长度当「Open PRs: N」渲染——超过 30 个开放 PR 的
   // 仓库会显示 30，同屏的行动队列却走 GraphQL totalCount 显示真实数字，两个数当场打架
-  const prRes = await runGh(cwd, ["pr", "list", "--state", "open", "--limit", String(PR_LIST_LIMIT), "--json", "number,title,url,isDraft"])
+  const prRes = await runGh(cwd, ["pr", "list", "--repo", slug, "--state", "open", "--limit", String(PR_LIST_LIMIT), "--json", "number,title,url,isDraft,createdAt"])
   if (prRes.code !== 0) {
     const msg = prRes.stderr.trim().split("\n").pop() || "ghQueryFailed"
     // 常见：未登录、当前目录不是 GitHub 仓库
@@ -262,12 +242,13 @@ export async function getGithubStatus(cwd: string): Promise<GithubStatus> {
 
   let prs: GithubStatus["prs"] = []
   try {
-    prs = JSON.parse(prRes.stdout || "[]") as GithubStatus["prs"]
+    const rows = JSON.parse(prRes.stdout || "[]") as (GithubStatus["prs"][number] & { createdAt?: string })[]
+    prs = rows.sort((a, b) => (Date.parse(b.createdAt ?? "") || 0) - (Date.parse(a.createdAt ?? "") || 0))
   } catch {
     prs = []
   }
 
-  const runRes = await runGh(cwd, ["run", "list", "--limit", "1", "--json", "status,conclusion,workflowName,headBranch"])
+  const runRes = await runGh(cwd, ["run", "list", "--repo", slug, "--limit", "1", "--json", "status,conclusion,workflowName,headBranch,url"])
   let run: GithubStatus["run"] = null
   if (runRes.code === 0) {
     try {

@@ -1,13 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react"
+import { githubInboxUrl, githubRemoteUrl, githubSlug, isGithubInboxKind } from "../../../shared/src/github"
 import { useT } from "../i18n"
-import { isGithubUrl, remoteWeb } from "../lib/meta"
 import type { RepoStatus } from "../types"
 
 export type QueueItem = { r: RepoStatus; sev: "crit" | "warn"; kind: string; n: number; age: number; score: number; githubTime?: number }
 
-/** GitHub 来源的队列类型（等我的）：点击跳 GitHub 对应页；App 的「已处理」清理也据此判断 inbox=null 是否算未知 */
-export const GITHUB_KINDS = new Set(["pr", "issue", "ci"])
-const GH_PATH: Record<string, string> = { pr: "/pulls", issue: "/issues", ci: "/actions" }
 const PREVIEW_SIZE = 3
 const AGED_KINDS = new Set(["dirty", "unpushed", "stash"]) // 显示「搁 N 天」的类型（release 另用「距上个 tag N 天」，含义不同）
 
@@ -27,7 +24,7 @@ export function CockpitHero({
 }: {
   queue: QueueItem[]
   onOpenRepo: (id: string) => void
-  onOpenStash: () => void
+  onOpenStash: (id: string) => void
   onPush: (id: string) => void
   onDismiss: (q: QueueItem) => void
   open: boolean
@@ -77,16 +74,24 @@ export function CockpitHero({
         return t("queue.unpushed", { n: q.n })
     }
   }
-  // 点击主区按类型分流：等我的 → 跳 GitHub 对应页（新标签）；stash → 直达收纳箱；其余 → 开本地详情。
-  // URL 只从 github.com 的远程里挑（isGithubUrl 精确匹配主机名），remoteWeb 再 origin 优先——
-  // 与服务端计数的挑选逻辑（githubRemoteUrl）同序，保证「计数来自哪个仓库，点开就是哪个仓库」
   const act = (q: QueueItem) => {
-    const web = GITHUB_KINDS.has(q.kind) ? remoteWeb(q.r.remotes.filter((rm) => isGithubUrl(rm.url))) : null
-    if (web) window.open(web.url + (GH_PATH[q.kind] ?? ""), "_blank", "noopener,noreferrer")
-    else if (q.kind === "stash") onOpenStash()
+    if (isGithubInboxKind(q.kind)) {
+      const remote = githubRemoteUrl(q.r.remotes)
+      const slug = remote && githubSlug(remote)
+      if (slug) {
+        const inbox = q.r.githubInbox
+        // 一行有多个 PR 或 issue 时，打开完整列表以保留对所有待处理项的访问。
+        const target = q.kind === "ci" ? inbox?.ciSha : q.n === 1
+          ? (q.kind === "pr" ? inbox?.latestPr?.number : inbox?.latestIssue?.number)
+          : null
+        window.open(githubInboxUrl(slug, q.kind, target), "_blank", "noopener,noreferrer")
+        return
+      }
+    }
+    if (q.kind === "stash") onOpenStash(q.r.id)
     else onOpenRepo(q.r.id)
   }
-  const itemTitle = (q: QueueItem) => (GITHUB_KINDS.has(q.kind) ? t("queue.openGithub") : q.kind === "stash" ? t("queue.openStash") : t("common.openRepoTip"))
+  const itemTitle = (q: QueueItem) => (isGithubInboxKind(q.kind) ? t("queue.openGithub") : q.kind === "stash" ? t("queue.openStash") : t("common.openRepoTip"))
 
   const shown = expanded ? queue : queue.slice(0, PREVIEW_SIZE)
   const toggleLabel = t(open ? "cockpit.hide" : "cockpit.show")

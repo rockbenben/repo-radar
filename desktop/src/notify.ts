@@ -1,5 +1,6 @@
 import { Notification } from "electron"
 import type { InboxChange } from "../../server/src/backend"
+import { githubInboxUrl } from "../../shared/src/github"
 
 /**
  * 「等我的」新增时的系统通知。
@@ -23,7 +24,7 @@ export interface NotificationContent {
 }
 
 const MAX_REPOS = 3 // 超出部分折叠成 +N：通知栏宽度有限，列太多等于什么都没说
-type NotificationItem = { text: string; path: string; time: number }
+type NotificationItem = { text: string; url: string; time: number }
 
 /** 单个仓库的新增摘要；没有任何「新增」时返回 null */
 function summarizeOne(change: InboxChange) {
@@ -42,12 +43,12 @@ function summarizeOne(change: InboxChange) {
     if (prs > 0) {
       const latest = change.after.latestPr
       const target = latest?.number !== change.before.latestPr?.number ? latest : null
-      parts.push({ text: `PR +${prs}`, path: target ? `/pull/${target.number}` : "/pulls", time: Date.parse(target?.createdAt ?? "") || 0 })
+      parts.push({ text: `PR +${prs}`, url: githubInboxUrl(change.slug, "pr", target?.number), time: Date.parse(target?.createdAt ?? "") || 0 })
     }
     if (issues > 0) {
       const latest = change.after.latestIssue
       const target = latest?.number !== change.before.latestIssue?.number ? latest : null
-      parts.push({ text: `Issue +${issues}`, path: target ? `/issues/${target.number}` : "/issues", time: Date.parse(target?.createdAt ?? "") || 0 })
+      parts.push({ text: `Issue +${issues}`, url: githubInboxUrl(change.slug, "issue", target?.number), time: Date.parse(target?.createdAt ?? "") || 0 })
     }
   }
 
@@ -65,21 +66,19 @@ function summarizeOne(change: InboxChange) {
       change.after.ciSha &&
       change.before.ciSha !== change.after.ciSha
     if (isCiStatusFlipped || isNewCommitWithFailure) {
-      const sha = change.after.ciSha
       parts.push({
         text: "CI ✗",
-        path: sha && /^[0-9a-f]{40}$/i.test(sha) ? `/commit/${sha}/checks` : "/actions",
+        url: githubInboxUrl(change.slug, "ci", change.after.ciSha),
         time: Date.parse(change.after.ciCommittedAt ?? "") || 0,
       })
     }
   }
   if (parts.length === 0) return null
   const target = parts.reduce((latest, item) => item.time > latest.time ? item : latest)
-  const repoPath = change.slug.split("/").map(encodeURIComponent).join("/")
   return {
     name: change.name,
     text: parts.map((item) => item.text).join(" · "),
-    url: `https://github.com/${repoPath}${target.path}`,
+    url: target.url,
     time: target.time,
   }
 }

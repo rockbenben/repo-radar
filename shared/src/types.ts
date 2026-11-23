@@ -171,7 +171,7 @@ export interface GithubStatus {
   error: string | null
   prs: { number: number; title: string; url: string; isDraft: boolean }[]
   prsTruncated: boolean // prs 被服务端上限截断：计数要显示成「N+」，否则与「恰好 N 个」无从区分
-  run: { status: string; conclusion: string | null; workflowName: string; headBranch: string } | null
+  run: { status: string; conclusion: string | null; workflowName: string; headBranch: string; url?: string } | null
 }
 
 export interface WorklogCommit {

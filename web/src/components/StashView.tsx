@@ -14,7 +14,7 @@ const skey = (repoId: string, sha: string) => `${repoId}:${sha}`
 
 type DropItem = { repoId: string; sha: string; name: string }
 
-export function StashView({ onLog }: { onLog: (ok: boolean, text: string) => void }) {
+export function StashView({ repoId, onLog }: { repoId?: string; onLog: (ok: boolean, text: string) => void }) {
   const { message, modal } = AntdApp.useApp()
   const t = useT()
   const [data, setData] = useState<RepoStashes[] | null>(null)
@@ -25,7 +25,7 @@ export function StashView({ onLog }: { onLog: (ok: boolean, text: string) => voi
 
   const load = async (isInitial = false) => {
     try {
-      const r = await fetch("/api/stashes")
+      const r = await fetch(repoId ? `/api/stashes?repoId=${encodeURIComponent(repoId)}` : "/api/stashes")
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const body = (await r.json()) as StashesResponse
       setData(body.repos)
