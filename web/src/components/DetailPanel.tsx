@@ -553,7 +553,7 @@ export function DetailPanel({
               {/* 回显**按钮上那个名字**，不是裸 git 子命令名：中文界面里按钮写「拉取」、
                   回显却是 fetch，用户会以为自己点错了动作（action.fetch 早期就译成了「拉取」） */}
               <span className="act">{t(`action.${syncing ?? syncResult!.action}`)}</span>
-              {!syncing && syncResult!.message && <span className="d" title={syncResult!.message}>· {syncResult!.message}</span>}
+              {!syncing && syncResult!.message && <span className="d" title={errText(t, syncResult!.message)}>· {errText(t, syncResult!.message)}</span>}
             </div>
           )}
         </section>
@@ -611,9 +611,10 @@ export function DetailPanel({
                 {diff && "untracked" in diff && diff.untracked.length > 0 && (
                   <div className="kv" style={{ marginTop: 8 }}>
                     {t("detail.untracked", { files: diff.untracked.join("、") })}
+                    <div>{t("detail.untrackedHint")}</div>
                   </div>
                 )}
-                <div className="rr-diff">
+                <div className="rr-diff" hidden={diff !== null && "untracked" in diff && diff.diff === "" && diff.untracked.length > 0}>
                   {diff === null ? (
                     <div className="ln" style={{ color: "var(--dim)" }}>
                       {t("detail.diffLoading")}

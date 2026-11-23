@@ -1,5 +1,5 @@
 import { type Context, Hono } from "hono"
-import { type Config, checkMinutes, loadConfig, mergeConfig, saveConfig, validateConfigPatch } from "./config"
+import { type Config, checkMinutes, INVALID_WORKLOG_EXPORT_PATH, loadConfig, mergeConfig, saveConfig, validateConfigPatch } from "./config"
 import { WsHub } from "./events"
 import { ACTION_ARGS, commitRepo, createBranch, createStash, deleteBranches, discardChanges, dropStashes, getMergedMainBranches, getRepoDetail, getRepoDiff, listStashes, type RepoAction, repoId, stashAction, stashDiff, switchBranch } from "./git"
 import { getGithubStatus } from "./github"
@@ -766,7 +766,10 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
       return c.json({ error: "invalid JSON body" }, 400)
     }
     const problem = validateConfigPatch(body)
-    if (problem !== null) return c.json({ error: problem }, 400)
+    if (problem !== null) {
+      if (problem === INVALID_WORKLOG_EXPORT_PATH) return c.json({ error: problem, field: "worklogExportPath" }, 400)
+      return c.json({ error: problem }, 400)
+    }
     const prev = loadConfig(configFile)
     const next = mergeConfig(prev, body)
     saveConfig(configFile, next)

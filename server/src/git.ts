@@ -886,11 +886,8 @@ export async function runRepoAction(path: string, action: RepoAction): Promise<{
     const lines = (`${r.stdout}\n${r.stderr}`).trim().split("\n")
     return { ok: true, message: lines[lines.length - 1] ?? "" }
   } catch (err) {
-    if (err instanceof GitError && err.stderr.trim() !== "") {
-      const lines = err.stderr.trim().split("\n")
-      return { ok: false, message: lines[lines.length - 1] }
-    }
-    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+    const message = gitErrMessage(err)
+    return { ok: false, message: action === "push" && message === "fatal: No configured push destination." ? "noPushDestination" : message }
   }
 }
 

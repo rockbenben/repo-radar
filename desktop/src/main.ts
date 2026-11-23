@@ -16,7 +16,7 @@ import { createQuit } from "./quit"
 import { createTray } from "./tray"
 import { checkForUpdates } from "./update"
 import { loadLastVersion, saveLastVersion } from "./version-state"
-import { createWindow, saveWindowState } from "./window"
+import { createWindow, isSameOrigin, saveWindowState } from "./window"
 
 // REPO_RADAR_CONFIG 设置时必须是绝对路径。早先曾用 path.resolve() 把相对路径按 cwd
 // 兜底展开，理由是下面 app.setPath("userData", ...) 对相对路径会直接抛 `Path must be
@@ -335,7 +335,15 @@ function bootstrap(): void {
     .whenReady()
     .then(async () => {
       // 安全基线：桌面端所有通信走本地回环 HTTP/WS，不需要任何系统特权 API，默认拒绝
-      session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+      session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+        const origin = isDev ? "http://127.0.0.1:5173" : `http://127.0.0.1:${backend.port}`
+        callback(
+          permission === "clipboard-sanitized-write" &&
+          webContents === mainWindow?.webContents &&
+          details.isMainFrame &&
+          isSameOrigin(details.requestingUrl, origin),
+        )
+      })
       session.defaultSession.setPermissionCheckHandler(() => false)
 
       cleanupLegacyEntries(autostartStateFile) // 迁移：旧 SEA 版的自启项会拉起旧 exe，和本应用抢端口

@@ -15,6 +15,7 @@ const ERR_KEY: Record<string, string> = {
   ghMissing: "err.ghMissing",
   ghNotLoggedIn: "err.ghNotLoggedIn",
   ghQueryFailed: "err.ghQueryFailed",
+  noPushDestination: "err.noPushDestination",
   // 批量执行命令（服务端只回码，文案在这里）
   willExecute: "err.willExecute",
   execFailed: "err.execFailed",

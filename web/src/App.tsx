@@ -109,7 +109,7 @@ export default function App({
       const r = b.results[0]
       return r.ok
         ? t("batch.doneOne", { name: r.name, action })
-        : t("batch.doneOneFail", { name: r.name, action, err: r.message })
+        : t("batch.doneOneFail", { name: r.name, action, err: errText(t, r.message) })
     }
     return (
       t("batch.done", { action: batchActionWord(b.action, b.dryRun), ok: b.results.length - failedItems.length }) +
@@ -156,11 +156,16 @@ export default function App({
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general")
-  // 首次引导的「添加扫描目录」直达扫描那一栏；齿轮进来则停在「常规」。
-  // 两个 CTA 共用这一个入口，别各写各的 setTab+setOpen
+  // antd 隐藏弹窗时会缓存子组件。每次打开都让扫描编辑器从已保存配置开始。
+  const [scanSettingsSession, setScanSettingsSession] = useState(0)
+  const openSettings = () => {
+    setScanSettingsSession((session) => session + 1)
+    setSettingsOpen(true)
+  }
+  // 看板和新增菜单的扫描入口直达扫描栏，齿轮保留当前栏。
   const openScanSettings = () => {
     setSettingsTab("scan")
-    setSettingsOpen(true)
+    openSettings()
   }
   // 是否已配置过扫描来源（roots 或手动仓库）：null=config 还没拉到。首次引导欢迎页只在
   // 明确「没配置过」时出现——配置了但扫出 0 个仓库的用户应看到「未发现仓库」而不是被当成新用户
@@ -192,6 +197,7 @@ export default function App({
   const [autoFetchMinutes, setAutoFetchMinutes] = useState(0)
   const [fetchMinutesInput, setFetchMinutesInput] = useState<number | null>(0)
   const [worklogExport, setWorklogExport] = useState<{ minutes: number | null; path: string }>({ minutes: 0, path: "" })
+  const [invalidWorklogPath, setInvalidWorklogPath] = useState(false)
   const [savedWorklogPath, setSavedWorklogPath] = useState("")
   const [savingWorklogExport, setSavingWorklogExport] = useState(false)
   const [autoPull, setAutoPull] = useState(false)
@@ -364,7 +370,7 @@ export default function App({
           if (e.payload.scope === "single" && e.payload.results.length === 1) {
             const r = e.payload.results[0]
             if (r.ok) addLog(true, tRef.current("batch.doneOne", { name: r.name, action }))
-            else addLog(false, tRef.current("batch.doneOneFail", { name: r.name, action, err: r.message }))
+            else addLog(false, tRef.current("batch.doneOneFail", { name: r.name, action, err: errText(tRef.current, r.message) }))
           } else {
             addLog(
               f.length === 0,
@@ -957,11 +963,16 @@ export default function App({
       })
       if (!response.ok) {
         const problem = await response.json().catch(() => null)
+        if (response.status === 400 && problem?.field === "worklogExportPath") {
+          setInvalidWorklogPath(true)
+          return
+        }
         throw new Error(problem?.error || t("msg.saveFail"))
       }
       const saved = await response.json()
       setWorklogExport({ minutes: saved.worklogExportMinutes, path: saved.worklogExportPath })
       setSavedWorklogPath(saved.worklogExportPath)
+      setInvalidWorklogPath(false)
       message.success(t("settings.worklogExportSaved"))
     } catch (err) {
       message.error(err instanceof Error ? err.message : t("msg.saveFail"))
@@ -1263,7 +1274,7 @@ export default function App({
                  原来那条是「设置：主题 · 自动扫描 · 定时拉取 · 提醒」——枚举了 4 项而设置里现在有十来项，
                  还把「GitHub 提醒」称作「提醒」，界面上同一个东西两个叫法 */
               title={t("settings.title")}
-              onClick={() => setSettingsOpen(true)}
+              onClick={openSettings}
             >
               ⚙
             </Button>
@@ -1473,12 +1484,21 @@ export default function App({
                     size="small"
                     placeholder="worklog.json"
                     value={worklogExport.path}
+                    status={invalidWorklogPath ? "error" : undefined}
+                    aria-invalid={invalidWorklogPath}
+                    aria-describedby={invalidWorklogPath ? "worklog-export-path-error" : undefined}
                     onChange={(event) => {
                       const path = event.target.value
+                      setInvalidWorklogPath(false)
                       setWorklogExport((draft) => ({ ...draft, path }))
                     }}
                     disabled={!configLoaded || savingWorklogExport}
                   />
+                  {invalidWorklogPath && (
+                    <span id="worklog-export-path-error" className="hint warn" role="alert">
+                      {t("settings.worklogExportPathInvalid")}
+                    </span>
+                  )}
                   <Button
                     size="small"
                     htmlType="submit"
@@ -1583,6 +1603,7 @@ export default function App({
                 这样敲了一半还没保存的路径不会因为切栏被抹掉（代价是弹窗一开就拉一次 /api/config，
                 本机一个 GET，换不丢用户输入很划算） */}
             <ScanConfigEditor
+              key={scanSettingsSession}
               open={settingsOpen}
               hidden={settingsTab !== "scan"}
               onClose={() => setSettingsOpen(false)}
@@ -2008,6 +2029,11 @@ export default function App({
                     : hasFilters
                       ? t("empty.noMatch")
                       : t("empty.noRepos", { roots: scanRoots.join(" · ") })}
+                  {!showArchived && !hasFilters && repos.length === 0 && (
+                    <div>
+                      <Button type="link" onClick={openScanSettings}>{t("empty.editScanRoots")}</Button>
+                    </div>
+                  )}
                 </div>
               )
             )

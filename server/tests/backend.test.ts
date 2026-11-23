@@ -106,7 +106,9 @@ describe("createBackend", () => {
     await vi.waitFor(() => expect(snapshot(defaultFile).exportedAt).not.toBe(first.exportedAt), { timeout: 10_000 })
     const lastDefault = readFileSync(defaultFile, "utf8")
 
-    expect((await update({ worklogExportPath: "relative.json" })).status).toBe(400)
+    const invalidPath = await update({ worklogExportPath: "relative.json" })
+    expect(invalidPath.status).toBe(400)
+    expect(await invalidPath.json()).toMatchObject({ field: "worklogExportPath" })
     const custom = join(dirname(defaultFile), "nested", "my-worklog.json")
     expect((await update({ worklogExportPath: custom, worklogExportMinutes: 1 })).status).toBe(200)
     await vi.waitFor(() => expect(snapshot(custom).commits).toEqual(first.commits), { timeout: 10_000 })

@@ -112,6 +112,8 @@ export function checkMinutes(v: unknown, label = "autoScanMinutes"): string | nu
   return null
 }
 
+export const INVALID_WORKLOG_EXPORT_PATH = "worklogExportPath must be an absolute .json file path or an empty string"
+
 function isWorklogExportPath(value: unknown): value is string {
   if (typeof value !== "string") return false
   if (value === "") return true
@@ -150,7 +152,7 @@ export function validateConfigPatch(body: unknown): string | null {
   const exportMinutes = checkMinutes(body.worklogExportMinutes, "worklogExportMinutes")
   if (exportMinutes !== null) return exportMinutes
   if (body.worklogExportPath !== undefined && !isWorklogExportPath(body.worklogExportPath))
-    return "worklogExportPath must be an absolute .json file path or an empty string"
+    return INVALID_WORKLOG_EXPORT_PATH
   if (body.autoPull !== undefined && typeof body.autoPull !== "boolean") return "autoPull must be a boolean"
   if (
     body.autoPullOverrides !== undefined &&
