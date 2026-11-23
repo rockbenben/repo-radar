@@ -1060,10 +1060,12 @@ export default function App({
   }, [])
   // 该你了：按紧迫度排的跨仓库行动队列。每个仓库列出全部问题、取「第一条没被已处理的」——
   // 不是取最紧迫那条再过滤：那样把 PR 点了已处理，会连带藏掉同仓库排位更低的冲突/落后等仍在的问题。
-  // 「等我的」（CI 红 / PR / issue）> 「要丢的活」（冲突/落后/没提交/没推）>「该交付的」（该发版）>「快忘的」（stash 搁置）。
+  // 「等我的」（CI 红 / PR / issue）按 GitHub 时间倒序，同仓库也优先显示最新的一类。
+  // 其后是本地事项（冲突/落后/没提交/没推）、发版和搁置的 stash。
   // biome-ignore-start lint/correctness/useExhaustiveDependencies: queueTick 是 10 分钟心跳，本体不读它，
   // 只为让 stash 打盹等到纯时间条件在长开的标签页里被重评
   const actionQueueVisible = useMemo(() => {
+    const compare = (a: QueueItem, b: QueueItem) => b.score - a.score || (b.githubTime ?? 0) - (a.githubTime ?? 0)
     return active
       .map((r) => {
         const dirty = r.dirty.staged + r.dirty.unstaged + r.dirty.untracked
@@ -1071,10 +1073,10 @@ export default function App({
         const gh = r.githubInbox
         const cands: QueueItem[] = []
         // 等我的（GitHub）
-        if (gh?.ciFailed) cands.push({ r, sev: "crit", kind: "ci", n: 0, age, score: 20000 })
-        if (gh && gh.prs > 0) cands.push({ r, sev: "warn", kind: "pr", n: gh.prs, age, score: 9000 })
+        if (gh?.ciFailed) cands.push({ r, sev: "crit", kind: "ci", n: 0, age, score: 9000, githubTime: Date.parse(gh.ciCommittedAt ?? "") || 0 })
+        if (gh && gh.prs > 0) cands.push({ r, sev: "warn", kind: "pr", n: gh.prs, age, score: 9000, githubTime: Date.parse(gh.latestPr?.createdAt ?? "") || 0 })
+        if (gh && gh.issues > 0) cands.push({ r, sev: "warn", kind: "issue", n: gh.issues, age, score: 9000, githubTime: Date.parse(gh.latestIssue?.createdAt ?? "") || 0 })
         if (r.dirty.conflicted > 0) cands.push({ r, sev: "crit", kind: "conflict", n: r.dirty.conflicted, age, score: 8000 })
-        if (gh && gh.issues > 0) cands.push({ r, sev: "warn", kind: "issue", n: gh.issues, age, score: 7000 })
         // 要丢的活（本地）
         if (r.behind > 0) cands.push({ r, sev: "warn", kind: "behind", n: r.behind, age, score: 5000 })
         if (dirty > 0) cands.push({ r, sev: "warn", kind: "dirty", n: dirty, age, score: 2000 + age })
@@ -1088,10 +1090,10 @@ export default function App({
         // stash 搁着快忘了（age = 最老一条搁的天数）
         const stashDays = activeStashDays(r)
         if (stashDays !== null) cands.push({ r, sev: "warn", kind: "stash", n: r.stashCount, age: stashDays, score: 100 + Math.min(stashDays, 450) })
-        return cands.find((q) => !isDismissed(q)) ?? null
+        return cands.sort(compare).find((q) => !isDismissed(q)) ?? null
       })
       .filter((x): x is QueueItem => x !== null)
-      .sort((a, b) => b.score - a.score)
+      .sort(compare)
   }, [active, isDismissed, queueTick])
   // biome-ignore-end lint/correctness/useExhaustiveDependencies: 心跳豁免块结束
   const dismissItem = (q: { r: RepoStatus; kind: string; n: number }) => setDismissed((d) => ({ ...d, [dismissKey(q)]: dismissVal(q) }))

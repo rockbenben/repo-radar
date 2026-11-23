@@ -42,7 +42,7 @@ describe("Backend.onInboxChanged", () => {
 // 在 CI/本机都不可靠。原先这里还有第三条名为「某个订阅者抛错不影响其它订阅者」的测试，
 // 但它只断言了 b.start() 会 resolve，从未真正触发过投递，已删除——改成直接对抽出来的
 // 投递器 createInboxEmitter 写测试，不依赖任何网络/子进程，真正跑一遍三条保证。
-const oneChange: InboxChange[] = [{ repoId: "r1", name: "repo-one", before: null, after: { prs: 1, issues: 0, ciFailed: false } }]
+const oneChange: InboxChange[] = [{ repoId: "r1", name: "repo-one", slug: "owner/repo-one", before: null, after: { prs: 1, issues: 0, ciFailed: false } }]
 
 describe("createInboxEmitter", () => {
   it("emit 空数组不投递给任何订阅者", () => {

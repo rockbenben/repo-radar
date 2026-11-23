@@ -280,7 +280,11 @@ function bootstrap(): void {
     }
     if (!enabled) return
     const content = summarizeInboxChanges(changes)
-    if (content) showNotification(content, appIconPath, () => void showWindow()) // 点通知 = 把面板叫回来；通知图标用 256px 大图
+    if (content) {
+      showNotification(content, appIconPath, (url) => {
+        void shell.openExternal(url).catch(() => showWindow())
+      })
+    }
   })
 
   // 托盘退出、显式 app.quit() 都走 before-quit，收尾路径不能被绕开

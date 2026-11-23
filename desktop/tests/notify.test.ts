@@ -1,22 +1,55 @@
 import { describe, expect, it, vi } from "vitest"
-import { summarizeInboxChanges } from "../src/notify"
+import { showNotification, summarizeInboxChanges } from "../src/notify"
 import type { InboxChange } from "../../server/src/backend"
 
-// mock electron，避免加载真实 electron 二进制（见 window.test.ts 的说明）：notify.ts 顶层 import 了
-// Notification，import 就会触发 electron 加载；本测试只验纯函数 summarizeInboxChanges，mock 掉即可。
+const notification = vi.hoisted(() => ({ on: vi.fn(), show: vi.fn() }))
 vi.mock("electron", () => ({
   Notification: class {
-    show() {}
-    on() {}
+    static isSupported() { return true }
+    show = notification.show
+    on = notification.on
   },
 }))
 
 const inbox = (prs: number, issues: number, ciFailed = false, ciSha = "abc", byViewer = true) => ({ prs, issues, ciFailed, ciSha, byViewer })
-const change = (name: string, before: ReturnType<typeof inbox> | null, after: ReturnType<typeof inbox>): InboxChange => ({
+const change = (name: string, before: InboxChange["before"], after: InboxChange["after"]): InboxChange => ({
   repoId: name,
   name,
+  slug: `owner/${name}`,
   before,
   after,
+})
+
+it("点击合并通知打开最新的 GitHub 条目，即使仓库名原来会被截断", () => {
+  const r = summarizeInboxChanges([
+    ...["a", "b", "c"].map((name) => change(name, inbox(0, 0), inbox(1, 0))),
+    change("z", inbox(0, 0), {
+      ...inbox(1, 1),
+      latestPr: { number: 41, createdAt: "2026-04-01T00:00:00Z" },
+      latestIssue: { number: 42, createdAt: "2026-04-02T00:00:00Z" },
+    }),
+  ])!
+  expect(r.body).toBe("z: PR +1 · Issue +1 · a: PR +1 · b: PR +1 · +1")
+  const openUrl = vi.fn()
+  showNotification(r, "icon.png", openUrl)
+  expect(openUrl).not.toHaveBeenCalled()
+  const [event, click] = notification.on.mock.lastCall!
+  expect(event).toBe("click")
+  click()
+  expect(openUrl).toHaveBeenCalledWith("https://github.com/owner/z/issues/42")
+})
+
+it("用最新 PR 编号直达条目，编号未变化时打开 PR 列表", () => {
+  const latestPr = { number: 42, createdAt: "2026-04-01T00:00:00Z" }
+  const after = { ...inbox(2, 0), latestPr }
+  expect(summarizeInboxChanges([change("z", inbox(1, 0), after)])?.url).toBe("https://github.com/owner/z/pull/42")
+  expect(summarizeInboxChanges([change("z", { ...inbox(1, 0), latestPr }, after)])?.url).toBe("https://github.com/owner/z/pulls")
+})
+
+it("CI 通知直达失败提交的检查", () => {
+  const sha = "abc123".repeat(6) + "1234"
+  const r = summarizeInboxChanges([change("z", inbox(0, 0), inbox(0, 0, true, sha))])
+  expect(r?.url).toBe(`https://github.com/owner/z/commit/${sha}/checks`)
 })
 
 describe("summarizeInboxChanges — 该不该弹", () => {
@@ -131,7 +164,7 @@ describe("summarizeInboxChanges — CI 通知（ciSha 变化）", () => {
   it("ciFailed 两侧都为 true 但 before.ciSha 为 undefined（旧缓存） → 不通知", () => {
     const before = { prs: 0, issues: 0, ciFailed: true }
     const after = { prs: 0, issues: 0, ciFailed: true, ciSha: "abc" }
-    const r = summarizeInboxChanges([{ repoId: "my-app", name: "my-app", before, after } as InboxChange])
+    const r = summarizeInboxChanges([change("my-app", before, after)])
     expect(r).toBeNull()
   })
 
@@ -162,7 +195,7 @@ describe("summarizeInboxChanges — 口径标记 byViewer（Important 2：重启
   it("旧缓存无 byViewer 字段（undefined）vs 本轮 true → 视为口径不同，不弹计数（升级后第一轮更安全的代价）", () => {
     const before = { prs: 1, issues: 0, ciFailed: false, ciSha: "abc" } // 无 byViewer 字段，模拟老缓存
     const after = { prs: 3, issues: 0, ciFailed: false, ciSha: "abc", byViewer: true }
-    const r = summarizeInboxChanges([{ repoId: "my-app", name: "my-app", before, after } as InboxChange])
+    const r = summarizeInboxChanges([change("my-app", before, after)])
     expect(r).toBeNull()
   })
 })

@@ -19,15 +19,17 @@ import type { InboxChange } from "../../server/src/backend"
 export interface NotificationContent {
   title: string
   body: string
+  url: string
 }
 
 const MAX_REPOS = 3 // 超出部分折叠成 +N：通知栏宽度有限，列太多等于什么都没说
+type NotificationItem = { text: string; path: string; time: number }
 
 /** 单个仓库的新增摘要；没有任何「新增」时返回 null */
-function summarizeOne(change: InboxChange): string | null {
+function summarizeOne(change: InboxChange) {
   // 首次拿到该仓库的缓存：此时全部条目都是「新」的，弹出来等于把历史积压全倒给用户
   if (change.before === null) return null
-  const parts: string[] = []
+  const parts: NotificationItem[] = []
   // byViewer 标记 prs/issues 是否已减去自己开的（true）还是含自己在内（false/undefined）。
   // 两侧口径不同时，计数差不可信——差值里可能整包含着「自己开的」那部分，是虚的，必须跳过：
   // 典型场景是重启后本轮 viewer 查询失败（byViewer 变 false），若仍与上一轮「已减自己」的缓存做差，
@@ -37,8 +39,16 @@ function summarizeOne(change: InboxChange): string | null {
   if (change.before.byViewer === change.after.byViewer) {
     const prs = change.after.prs - change.before.prs
     const issues = change.after.issues - change.before.issues
-    if (prs > 0) parts.push(`PR +${prs}`)
-    if (issues > 0) parts.push(`Issue +${issues}`)
+    if (prs > 0) {
+      const latest = change.after.latestPr
+      const target = latest?.number !== change.before.latestPr?.number ? latest : null
+      parts.push({ text: `PR +${prs}`, path: target ? `/pull/${target.number}` : "/pulls", time: Date.parse(target?.createdAt ?? "") || 0 })
+    }
+    if (issues > 0) {
+      const latest = change.after.latestIssue
+      const target = latest?.number !== change.before.latestIssue?.number ? latest : null
+      parts.push({ text: `Issue +${issues}`, path: target ? `/issues/${target.number}` : "/issues", time: Date.parse(target?.createdAt ?? "") || 0 })
+    }
   }
 
   // CI 通知逻辑：
@@ -55,37 +65,56 @@ function summarizeOne(change: InboxChange): string | null {
       change.after.ciSha &&
       change.before.ciSha !== change.after.ciSha
     if (isCiStatusFlipped || isNewCommitWithFailure) {
-      parts.push("CI ✗")
+      const sha = change.after.ciSha
+      parts.push({
+        text: "CI ✗",
+        path: sha && /^[0-9a-f]{40}$/i.test(sha) ? `/commit/${sha}/checks` : "/actions",
+        time: Date.parse(change.after.ciCommittedAt ?? "") || 0,
+      })
     }
   }
-  return parts.length > 0 ? parts.join(" · ") : null
+  if (parts.length === 0) return null
+  const target = parts.reduce((latest, item) => item.time > latest.time ? item : latest)
+  const repoPath = change.slug.split("/").map(encodeURIComponent).join("/")
+  return {
+    name: change.name,
+    text: parts.map((item) => item.text).join(" · "),
+    url: `https://github.com/${repoPath}${target.path}`,
+    time: target.time,
+  }
 }
 
 export function summarizeInboxChanges(changes: InboxChange[]): NotificationContent | null {
   const withNews = changes
-    .map((c) => ({ name: c.name, text: summarizeOne(c) }))
-    .filter((x): x is { name: string; text: string } => x.text !== null)
+    .map(summarizeOne)
+    .filter((summary) => summary !== null)
 
   if (withNews.length === 0) return null
   // 单个仓库时把名字提到标题，正文只留变化——一眼就知道是哪个仓库的什么事
-  if (withNews.length === 1) return { title: withNews[0].name, body: withNews[0].text }
+  if (withNews.length === 1) {
+    const { name, text, url } = withNews[0]
+    return { title: name, body: text, url }
+  }
 
   // 截断到 MAX_REPOS 前先按仓库名排序：changes 的顺序是本轮并发拉取的完成顺序，每轮都可能不同——
   // 不排序的话「截断后留哪 3 个」是不确定的。字典序不追求语义，只要求跨轮次稳定
   const sorted = [...withNews].sort((a, b) => a.name.localeCompare(b.name))
-  const shown = sorted.slice(0, MAX_REPOS).map((x) => `${x.name}: ${x.text}`)
+  const target = sorted.reduce((latest, item) => item.time > latest.time ? item : latest)
+  // 把点击目标列在正文里，即使其余仓库因长度限制折叠。
+  const shown = [target, ...sorted.filter((item) => item !== target)].slice(0, MAX_REPOS)
+  const body = shown.map((x) => `${x.name}: ${x.text}`)
   const rest = sorted.length - shown.length
-  if (rest > 0) shown.push(`+${rest}`)
-  return { title: "repo-radar", body: shown.join(" · ") }
+  if (rest > 0) body.push(`+${rest}`)
+  return { title: "repo-radar", body: body.join(" · "), url: target.url }
 }
 
 /**
- * 弹通知；点击时调 onClick（把面板叫回来）。系统不支持通知时静默跳过。
+ * 弹通知；点击时打开对应的 GitHub 页面。系统不支持通知时静默跳过。
  * 调用方传入与应用界面共用的 256px 图标。
  */
-export function showNotification(content: NotificationContent, iconPath: string, onClick: () => void): void {
+export function showNotification(content: NotificationContent, iconPath: string, openUrl: (url: string) => void): void {
   if (!Notification.isSupported()) return
   const n = new Notification({ title: content.title, body: content.body, icon: iconPath })
-  n.on("click", onClick)
+  n.on("click", () => openUrl(content.url))
   n.show()
 }

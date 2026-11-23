@@ -40,6 +40,7 @@ export interface BackendOptions {
 export interface InboxChange {
   repoId: string
   name: string
+  slug: string
   before: GithubInbox | null
   after: GithubInbox
 }
@@ -54,6 +55,11 @@ export function inboxEqual(before: GithubInbox | null, after: GithubInbox): bool
     before.issues === after.issues &&
     before.ciFailed === after.ciFailed &&
     before.ciSha === after.ciSha &&
+    before.ciCommittedAt === after.ciCommittedAt &&
+    before.latestPr?.number === after.latestPr?.number &&
+    before.latestPr?.createdAt === after.latestPr?.createdAt &&
+    before.latestIssue?.number === after.latestIssue?.number &&
+    before.latestIssue?.createdAt === after.latestIssue?.createdAt &&
     before.byViewer === after.byViewer
   )
 }
@@ -439,7 +445,7 @@ export function createBackend(options: BackendOptions): Backend {
             const updated = store.redecorate(t.id)
             if (updated) hub.broadcast("repo:updated", { repo: updated })
             if (!inboxEqual(before, inbox)) {
-              changes.push({ repoId: t.id, name: updated?.displayName ?? updated?.name ?? t.id, before, after: inbox })
+              changes.push({ repoId: t.id, name: updated?.displayName ?? updated?.name ?? t.id, slug: t.slug, before, after: inbox })
             }
           } catch {
             /* 单个本地副本失败不影响其它 */

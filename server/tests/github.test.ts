@@ -43,6 +43,28 @@ function stdout(opts: {
 const previous = { prs: 7, issues: 6, ciFailed: true, ciSha: "old-head", byViewer: true }
 
 describe("parseInboxResponse", () => {
+  it("取到和当前登录用户口径一致的最新条目，忽略自己开的仓库头条", () => {
+    const pr = { number: 20, createdAt: "2026-04-01T00:00:00Z" }
+    const issue = { number: 15, createdAt: "2026-03-01T00:00:00Z" }
+    const own = { number: 21, createdAt: "2026-05-01T00:00:00Z" }
+    const committedDate = "2026-04-02T00:00:00Z"
+    const data = {
+      repository: {
+        pullRequests: { totalCount: 2, nodes: [own] },
+        issues: { totalCount: 2, nodes: [own] },
+        mine: { totalCount: 1 },
+        defaultBranchRef: { target: { oid: "head", committedDate } },
+      },
+      prOthers: { issueCount: 1, nodes: [pr] },
+      issueOthers: { nodes: [issue] },
+    }
+    const response = JSON.stringify({ data })
+    expect(parseInboxResponse(response, 0, "octocat")).toMatchObject({
+      prs: 1, issues: 1, latestPr: pr, latestIssue: issue, ciCommittedAt: committedDate,
+    })
+    expect(parseInboxResponse(response, 0, null)).toMatchObject({ latestPr: own, latestIssue: own })
+  })
+
   it("me 已知、mine/prOthers 都正常 → 按'减去自己'口径计算，byViewer=true", () => {
     const r = parseInboxResponse(stdout({ pullRequests: 10, issues: 10, mine: 3, prOthers: 4 }), 0, "octocat")
     expect(r).toMatchObject({ prs: 4, issues: 7, byViewer: true })

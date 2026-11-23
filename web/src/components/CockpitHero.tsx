@@ -3,7 +3,7 @@ import { useT } from "../i18n"
 import { isGithubUrl, remoteWeb } from "../lib/meta"
 import type { RepoStatus } from "../types"
 
-export type QueueItem = { r: RepoStatus; sev: "crit" | "warn"; kind: string; n: number; age: number; score: number }
+export type QueueItem = { r: RepoStatus; sev: "crit" | "warn"; kind: string; n: number; age: number; score: number; githubTime?: number }
 
 /** GitHub 来源的队列类型（等我的）：点击跳 GitHub 对应页；App 的「已处理」清理也据此判断 inbox=null 是否算未知 */
 export const GITHUB_KINDS = new Set(["pr", "issue", "ci"])

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process"
 import { gitEnvironment } from "./git-env"
-import type { GithubInbox, GithubStatus } from "./types"
+import type { GithubInbox, GithubInboxItem, GithubStatus } from "./types"
 
 const GH_TIMEOUT_MS = 15_000
 
@@ -84,13 +84,17 @@ export async function getGithubDescription(slug: string): Promise<{ description:
 }
 
 const INBOX_FIELDS =
-  "pullRequests(states:OPEN){totalCount} issues(states:OPEN){totalCount} defaultBranchRef{target{... on Commit{oid statusCheckRollup{state}}}}"
-const INBOX_QUERY = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${INBOX_FIELDS}}}`
+  "defaultBranchRef{target{... on Commit{oid committedDate statusCheckRollup{state}}}}"
+const OPEN_NEWEST = "states:OPEN,first:1,orderBy:{field:CREATED_AT,direction:DESC}"
+const INBOX_QUERY = `query($owner:String!,$name:String!){repository(owner:$owner,name:$name){${INBOX_FIELDS} ` +
+  `pullRequests(${OPEN_NEWEST}){totalCount nodes{number createdAt}} issues(${OPEN_NEWEST}){totalCount nodes{number createdAt}}}}`
 // 已知当前登录用户时：issue 减掉我自己开的（filterBy）；PR 没有 createdBy 过滤，用 search 直接数「别人开的 open PR」。
 // 「等我的」应是别人提的——自己开的 issue 是备忘、自己开的 PR 是 WIP，都不算
 const INBOX_QUERY_ME =
-  `query($owner:String!,$name:String!,$me:String!,$prq:String!){repository(owner:$owner,name:$name){${INBOX_FIELDS} ` +
-  `mine:issues(states:OPEN,filterBy:{createdBy:$me}){totalCount}} prOthers:search(query:$prq,type:ISSUE){issueCount}}`
+  `query($owner:String!,$name:String!,$me:String!,$prq:String!,$issueq:String!){repository(owner:$owner,name:$name){${INBOX_FIELDS} ` +
+  "pullRequests(states:OPEN){totalCount} issues(states:OPEN){totalCount} mine:issues(states:OPEN,filterBy:{createdBy:$me}){totalCount}} " +
+  "prOthers:search(query:$prq,type:ISSUE,first:1){issueCount nodes{... on PullRequest{number createdAt}}} " +
+  "issueOthers:search(query:$issueq,type:ISSUE,first:1){nodes{... on Issue{number createdAt}}}}"
 
 // 当前登录用户名：只在真拿到时才记死；失败不缓存（下次重试，避免一次抖动永久关掉自开 issue 过滤）。
 // viewerInFlight 去重首轮并发（同一批仓库并发开跑时只查一次登录名）。
@@ -118,17 +122,27 @@ async function ensureViewer(): Promise<string | null> {
   return viewerInFlight
 }
 
+interface InboxNodes {
+  nodes?: (GithubInboxItem | null)[] | null
+}
+
 interface RawInboxResponse {
   errors?: { path?: (string | number)[] }[]
   data?: {
     repository?: {
-      pullRequests?: { totalCount?: number }
-      issues?: { totalCount?: number }
+      pullRequests?: InboxNodes & { totalCount?: number }
+      issues?: InboxNodes & { totalCount?: number }
       mine?: { totalCount?: number }
-      defaultBranchRef?: { target?: { oid?: string; statusCheckRollup?: { state?: string } | null } | null } | null
+      defaultBranchRef?: { target?: { oid?: string; committedDate?: string; statusCheckRollup?: { state?: string } | null } | null } | null
     } | null
-    prOthers?: { issueCount?: number } | null
+    prOthers?: (InboxNodes & { issueCount?: number }) | null
+    issueOthers?: InboxNodes | null
   }
+}
+
+function latestInboxItem(source?: InboxNodes | null): GithubInboxItem | null {
+  const item = source?.nodes?.[0]
+  return item && Number.isSafeInteger(item.number) && item.number > 0 && Number.isFinite(Date.parse(item.createdAt)) ? item : null
 }
 
 /**
@@ -157,11 +171,11 @@ export function parseInboxResponse(
     const errors = j.errors ?? []
     const ciFieldFailed = errors.some(({ path }) => path?.[0] === "repository" && path[1] === "defaultBranchRef")
     const unscopedFailure = code !== 0 && (!errors.length || errors.some(({ path }) => !path?.length))
-    let ci = { ciFailed: state === "FAILURE" || state === "ERROR", ciSha: target?.oid ?? null }
+    let ci = { ciFailed: state === "FAILURE" || state === "ERROR", ciSha: target?.oid ?? null, ciCommittedAt: target?.committedDate ?? null }
     if (ciFieldFailed || (unscopedFailure && state == null)) {
       if (!previous) return null
       // CI 状态和提交是一对。读取失败时一起保留，避免把旧失败算到新提交上。
-      ci = { ciFailed: previous.ciFailed, ciSha: previous.ciSha ?? null }
+      ci = { ciFailed: previous.ciFailed, ciSha: previous.ciSha ?? null, ciCommittedAt: previous.ciCommittedAt ?? null }
     }
     const totalIssues = repo.issues.totalCount ?? 0
     // 只算别人开的：PR 用 search 计数（-author:me）。search 字段失败（限流）时沿用上次值防震荡；
@@ -174,9 +188,13 @@ export function parseInboxResponse(
     // 的口径，可以直接复用，不必再减一次）；没有旧缓存兜底时退回未减的总数——首次查询就撞上限流属实少见，
     // 且此时上层的 before 必为 null，notify.ts 本就不会为「首次」弹通知，退回总数不会造成误报
     const mine = repo.mine?.totalCount
+    const prs = me ? (typeof prOthers === "number" ? prOthers : (previous?.prs ?? repo.pullRequests.totalCount ?? 0)) : (repo.pullRequests.totalCount ?? 0)
+    const issues = !me ? totalIssues : typeof mine === "number" ? Math.max(0, totalIssues - mine) : (previous?.issues ?? totalIssues)
     return {
-      prs: me ? (typeof prOthers === "number" ? prOthers : (previous?.prs ?? repo.pullRequests.totalCount ?? 0)) : (repo.pullRequests.totalCount ?? 0),
-      issues: !me ? totalIssues : typeof mine === "number" ? Math.max(0, totalIssues - mine) : (previous?.issues ?? totalIssues),
+      prs,
+      issues,
+      latestPr: prs > 0 ? latestInboxItem(me ? j.data?.prOthers : repo.pullRequests) : null,
+      latestIssue: issues > 0 ? latestInboxItem(me ? j.data?.issueOthers : repo.issues) : null,
       ...ci,
       // 口径标记：me 已知即代表 prs/issues 本轮都按「减去自己」口径计算（哪怕某个字段触发了上面的
       // 限流兜底，兜底用的缓存计数 本身也是「减去自己」口径的旧值，口径依然成立）。
@@ -213,7 +231,9 @@ export async function getGithubInbox(slug: string, previous?: GithubInbox): Prom
         "-f",
         `me=${me}`,
         "-f",
-        `prq=repo:${slug} is:pr is:open -author:${me}`,
+        `prq=repo:${slug} is:pr is:open -author:${me} sort:created-desc`,
+        "-f",
+        `issueq=repo:${slug} is:issue is:open -author:${me} sort:created-desc`,
       ]
     : ["api", "graphql", "-f", `query=${INBOX_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`]
   const res = await runGh(process.cwd(), args)
