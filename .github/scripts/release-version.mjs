@@ -1,7 +1,8 @@
 // Copy to .github/scripts. Runs before npm ci, so use only Node built-ins.
+
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const number = '(?:0|[1-9][0-9]*)';

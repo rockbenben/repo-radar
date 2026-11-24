@@ -29,6 +29,12 @@ monorepo（npm workspaces）：`server`（Hono 后端 + git 扫描）/ `web`（R
 - `desktop/package.json`（electron）、根 `package.json`（electron-builder、electron-updater）与 `.github/desktop-version-targets.json` 的主版本号保持严格对齐；发布工作流会在第一步断言。
 - 平台策略偏离在 `.desktop-policy.json` 中统一记录（如 Windows 暂未配置 ARM64 runner、开源项目暂无商业代码签名证书、macOS 走手动更新等）。
 
+## Desktop 发布
+
+推送通过 CI 的提交上的稳定 tag `vX.Y.Z` 触发发布。validate 解析 tag 与提交，构建矩阵在安装依赖及测试前注入相同版本。所有平台成功后，发布 job 校验并上传资产到草稿，核对远端摘要再公开。只有首个或更高稳定版才提升 Latest。
+
+需要重跑时使用原 tag 的工作流，或运行 `gh workflow run release.yml --ref vX.Y.Z`。失败的草稿可复用，已公开版本的修复使用新 tag。
+
 ## Lint 约定
 
 - biome 只做检查不做格式化（`formatter.enabled: false`），CSS 文件不在检查范围。

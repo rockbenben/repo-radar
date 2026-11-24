@@ -1,57 +1,67 @@
 name: release
 
 on:
-  workflow_call:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: stable-release
+  group: release-${{ github.ref_name }}
   queue: max
 
+env:
+  TAG: ${{ github.ref_name }}
+
 jobs:
-  plan:
+  validate:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.plan.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
+      - name: Require the release tag ref
+        if: github.ref_type != 'tag'
+        shell: bash
+        run: echo '::error::Dispatch this workflow on the target tag ref' && exit 1
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+        with: { ref: '${{ github.sha }}' }
       - uses: actions/setup-node@v7
         with:
           node-version: 26
-      - name: Determine version from published releases and commits
-        id: plan
+          cache: npm
+      - id: version
+        run: node .github/scripts/release-version.mjs resolve electron
+      - name: Check the remote tag and published release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(node scripts/plan-release.mjs)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Release candidate: ${version:-none}" >> "$GITHUB_STEP_SUMMARY"
+          SOURCE_COMMIT: ${{ steps.version.outputs.commit }}
+        run: node .github/scripts/release-state.mjs guard
+      - name: Apply the release version
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: node .github/scripts/release-version.mjs apply electron
+      - run: npm ci
+      - run: node scripts/check-release-config.mjs
+      - run: npm run lint
 
   build:
-    needs: plan
-    if: needs.plan.outputs.version != ''
-    env:
-      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
         include:
           - { os: windows-latest, label: win }
           - { os: macos-latest, label: mac }
-          - { os: ubuntu-latest, label: linux-x64 }
-          - { os: ubuntu-24.04-arm, label: linux-arm64 }
+          - { os: ubuntu-22.04, label: linux-x64 }
+          - { os: ubuntu-22.04-arm, label: linux-arm64 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.validate.outputs.commit }}
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
@@ -59,11 +69,10 @@ jobs:
           cache: npm
       - name: Apply the release version
         env:
-          APP_VERSION: ${{ needs.plan.outputs.version }}
+          APP_VERSION: ${{ needs.validate.outputs.version }}
         run: node .github/scripts/release-version.mjs apply electron
       - run: npm ci
       - run: node node_modules/electron/install.js
-      - run: npm run lint
       - run: npm test
       - run: npm run build
       - name: Package
@@ -88,19 +97,21 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [plan, build]
+    concurrency:
+      group: desktop-release-publication
+      queue: max
+    needs: [validate, build]
     env:
-      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
-      SOURCE_COMMIT: ${{ github.sha }}
-      TAG: v${{ needs.plan.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      SOURCE_COMMIT: ${{ needs.validate.outputs.commit }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.commit }}
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -132,21 +143,12 @@ jobs:
           set -euo pipefail
           cd out
           find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS
-      - name: Recheck the release plan before publishing
-        id: recheck
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          state="$(node scripts/plan-release.mjs "$RELEASE_VERSION")"
-          echo "state=$state" >> "$GITHUB_OUTPUT"
+      - name: Check the remote tag and published release
+        run: node .github/scripts/release-state.mjs guard
       - id: stage
         uses: softprops/action-gh-release@v3
-        if: steps.recheck.outputs.state != 'published'
         with:
           tag_name: ${{ env.TAG }}
-          target_commitish: ${{ github.sha }}
           draft: true
           prerelease: false
           fail_on_unmatched_files: true
@@ -161,20 +163,10 @@ jobs:
 
             Git must be installed and available on PATH. GitHub features also use the GitHub CLI.
             Verify downloads against `SHA256SUMS`. The Windows and Linux in-app updaters use the `latest*.yml` manifests.
-      - name: Bind the candidate tag and publish the verified draft
-        if: steps.recheck.outputs.state != 'published'
+      - name: Publish the verified draft
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.stage.outputs.id }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          ref="refs/tags/$TAG"
-          existing=$(git ls-remote origin "$ref")
-          if [[ -z "$existing" ]]; then
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="$ref" -f sha="$SOURCE_COMMIT" >/dev/null
-          fi
-          node .github/scripts/release-state.mjs publish out
+        run: node .github/scripts/release-state.mjs publish out
       - name: Verify published assets and digests
         env:
           GH_TOKEN: ${{ github.token }}
@@ -185,7 +177,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$release"
           jq -e --arg tag "$TAG" '.tag_name == $tag and .draft == false and .prerelease == false' "$release" >/dev/null
           published_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
-          [[ "$published_commit" == "$GITHUB_SHA" ]] || { echo "::error::$TAG points to $published_commit"; exit 1; }
+          [[ "$published_commit" == "$SOURCE_COMMIT" ]] || { echo "::error::$TAG points to $published_commit"; exit 1; }
           cd out
           { cat SHA256SUMS; sha256sum SHA256SUMS; } | while read -r digest path; do
             file="${path#./}"

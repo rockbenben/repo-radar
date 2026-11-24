@@ -1,10 +1,31 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdtemp, readdir, rmdir, unlink, writeFile } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
+import { parse } from "yaml"
 import { checkReleaseAssets } from "./check-release-assets.mjs"
+
+test("release is triggered by a manual stable tag and publishes the verified draft", async () => {
+  const workflow = async (name) => parse(await readFile(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8"))
+  const release = await workflow("release")
+  const ci = await workflow("ci")
+  assert.deepEqual(release.on, { push: { tags: ["v*"] }, workflow_dispatch: null })
+  assert.equal(ci.jobs.release, undefined)
+
+  const { validate, build, publish } = release.jobs
+  assert.equal(validate.steps[0].if, "github.ref_type != 'tag'")
+  assert.equal(build.needs, "validate")
+  assert.deepEqual(publish.needs, ["validate", "build"])
+  const apply = build.steps.findIndex((step) => step.run?.endsWith("release-version.mjs apply electron"))
+  const install = build.steps.findIndex((step) => step.run === "npm ci")
+  assert.ok(apply >= 0 && apply < install)
+  const stage = publish.steps.findIndex((step) => step.id === "stage")
+  assert.equal(publish.steps[stage].with.draft, true)
+  assert.match(publish.steps[stage - 1].run, /release-state\.mjs guard$/)
+  assert.match(publish.steps[stage + 1].run, /release-state\.mjs publish out$/)
+})
 
 const version = "1.2.3"
 const prefix = `repo-radar-${version}`
