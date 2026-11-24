@@ -860,10 +860,12 @@ export async function fetchRemoteUpstream(path: string, branch: string): Promise
 export async function fastForwardUpstream(
   path: string, gitDir: string, scanned: RepoStatus, fetched: string, enabled: () => boolean,
 ): Promise<boolean> {
-  const upstream = (await runGit(path, [
-    "rev-parse", "--symbolic-full-name", "--verify", "@{upstream}",
-  ], undefined, AUTO_PULL_ENV)).stdout.trim()
-  if (upstream !== fetched) return false
+  // Read both tips after fetch; the earlier scan can still show an up-to-date branch.
+  // --symbolic-full-name applies to the final argument, giving the tracking ref as well.
+  const [headOid, upstreamOid, upstream] = splitLines(await runGit(path, [
+    "rev-parse", "--revs-only", "HEAD", "@{upstream}", "--symbolic-full-name", "@{upstream}", "--",
+  ], undefined, AUTO_PULL_ENV))
+  if (upstream !== fetched || headOid === upstreamOid) return false
 
   // Fetch may take seconds. Recheck local work and branch tracking before writing.
   const status = await readAutoPullStatus(path, gitDir)

@@ -1,8 +1,31 @@
+import { mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { afterAll, describe, expect, it } from "vitest"
-import { GitError, repoId, runGit } from "../src/git"
-import { cleanupFixtures, makeRepo } from "./fixtures"
+import { fastForwardUpstream, getRepoStatus, GitError, repoId, runGit } from "../src/git"
+import { cleanupFixtures, git, makeBehindRepo, makeRepo } from "./fixtures"
 
 afterAll(cleanupFixtures)
+
+it("fast-forwards after rebase state is cleared even with a leftover REBASE_HEAD and ignored file", async () => {
+  const repo = makeBehindRepo()
+  const gitDir = join(repo, ".git")
+  const scanned = await getRepoStatus(repo)
+  const upstream = "refs/remotes/origin/main"
+  const pull = () => fastForwardUpstream(repo, gitDir, scanned, upstream, () => true)
+  git(repo, "update-ref", "REBASE_HEAD", "HEAD")
+  writeFileSync(join(gitDir, "info", "exclude"), "local.env\n")
+  writeFileSync(join(repo, "local.env"), "local work")
+  for (const name of ["rebase-merge", "rebase-apply"]) {
+    const dir = join(gitDir, name)
+    mkdirSync(dir)
+    expect(await pull()).toBe(false)
+    rmdirSync(dir)
+  }
+  expect(await pull()).toBe(true)
+  expect(git(repo, "rev-parse", "HEAD")).toBe(git(repo, "rev-parse", upstream))
+  expect(readFileSync(join(repo, "local.env"), "utf8")).toBe("local work")
+  expect(await pull()).toBe(false)
+})
 
 describe("runGit", () => {
   it("resolves stdout on success", async () => {
