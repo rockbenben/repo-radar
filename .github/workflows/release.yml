@@ -57,10 +57,11 @@ jobs:
         with:
           node-version: 26
           cache: npm
+      - name: Apply the release version
+        env:
+          APP_VERSION: ${{ needs.plan.outputs.version }}
+        run: node .github/scripts/release-version.mjs apply electron
       - run: npm ci
-      - name: Stamp the application before compiling and packaging
-        shell: bash
-        run: npm pkg set "version=$RELEASE_VERSION"
       - run: node node_modules/electron/install.js
       - run: npm run lint
       - run: npm test
@@ -90,7 +91,8 @@ jobs:
     needs: [plan, build]
     env:
       RELEASE_VERSION: ${{ needs.plan.outputs.version }}
-      RELEASE_TAG: v${{ needs.plan.outputs.version }}
+      SOURCE_COMMIT: ${{ github.sha }}
+      TAG: v${{ needs.plan.outputs.version }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -99,7 +101,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -140,14 +141,14 @@ jobs:
           set -euo pipefail
           state="$(node scripts/plan-release.mjs "$RELEASE_VERSION")"
           echo "state=$state" >> "$GITHUB_OUTPUT"
-      - uses: softprops/action-gh-release@v3
+      - id: stage
+        uses: softprops/action-gh-release@v3
         if: steps.recheck.outputs.state != 'published'
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
+          tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
           draft: true
           prerelease: false
-          make_latest: legacy
           fail_on_unmatched_files: true
           generate_release_notes: true
           files: out/*
@@ -160,12 +161,20 @@ jobs:
 
             Git must be installed and available on PATH. GitHub features also use the GitHub CLI.
             Verify downloads against `SHA256SUMS`. The Windows and Linux in-app updaters use the `latest*.yml` manifests.
-      - name: Publish the complete draft
+      - name: Bind the candidate tag and publish the verified draft
         if: steps.recheck.outputs.state != 'published'
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.stage.outputs.id }}
         shell: bash
-        run: gh release edit "$RELEASE_TAG" --draft=false --latest
+        run: |
+          set -euo pipefail
+          ref="refs/tags/$TAG"
+          existing=$(git ls-remote origin "$ref")
+          if [[ -z "$existing" ]]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="$ref" -f sha="$SOURCE_COMMIT" >/dev/null
+          fi
+          node .github/scripts/release-state.mjs publish out
       - name: Verify published assets and digests
         env:
           GH_TOKEN: ${{ github.token }}
@@ -173,10 +182,10 @@ jobs:
         run: |
           set -euo pipefail
           release="$RUNNER_TEMP/release.json"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$release"
-          jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .draft == false and .prerelease == false' "$release" >/dev/null
-          published_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
-          [[ "$published_commit" == "$GITHUB_SHA" ]] || { echo "::error::$RELEASE_TAG points to $published_commit"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$release"
+          jq -e --arg tag "$TAG" '.tag_name == $tag and .draft == false and .prerelease == false' "$release" >/dev/null
+          published_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha)"
+          [[ "$published_commit" == "$GITHUB_SHA" ]] || { echo "::error::$TAG points to $published_commit"; exit 1; }
           cd out
           { cat SHA256SUMS; sha256sum SHA256SUMS; } | while read -r digest path; do
             file="${path#./}"
@@ -185,8 +194,8 @@ jobs:
               || { echo "::error::Missing or mismatched published asset: $file"; exit 1; }
           done
           latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
-          newest="$(printf '%s\n' "$latest" "$RELEASE_TAG" | sort -V | tail -n 1)"
+          newest="$(printf '%s\n' "$latest" "$TAG" | sort -V | tail -n 1)"
           if [[ ! "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$latest" != "$newest" ]]; then
-            echo "::error::The updater's latest release ($latest) is older than $RELEASE_TAG or is not stable"
+            echo "::error::The updater's latest release ($latest) is older than $TAG or is not stable"
             exit 1
           fi
