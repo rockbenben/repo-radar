@@ -823,7 +823,8 @@ const AUTO_PULL_ENV = { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", GCM_IN
 const AUTO_FETCH_TIMEOUT_MS = 15_000
 
 async function readAutoPullStatus(path: string, gitDir: string): Promise<ParsedStatus | null> {
-  const operations = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_START"]
+  // Git uses the rebase state directories. REBASE_HEAD can outlive a finished rebase.
+  const operations = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_START"]
   const active = await Promise.all(operations.map(async (name) => {
     try {
       await lstat(join(gitDir, name))
