@@ -26,7 +26,7 @@ async function checkUpdateMetadata(directory, version, name, installer, size) {
 
 export async function checkReleaseAssets(directory, version, lane) {
   const prefix = `repo-radar-${version}`
-  const win = `${prefix}-x64-setup.exe`
+  const win = `${prefix}-setup.exe`
   const linuxX64 = `${prefix}-x86_64.AppImage`
   const linuxArm = `${prefix}-arm64.AppImage`
   const lanes = new Map([

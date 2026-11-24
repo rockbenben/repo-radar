@@ -1,12 +1,13 @@
 {
-  "platforms": ["windows-x64", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64"],
+  "platforms": [
+    "windows-x64",
+    "windows-arm64",
+    "macos-arm64",
+    "macos-x64",
+    "linux-x64",
+    "linux-arm64"
+  ],
   "deviations": [
-    {
-      "rule": "platforms",
-      "value": ["windows-x64", "macos-arm64", "macos-x64", "linux-x64", "linux-arm64"],
-      "reason": "Windows ARM64 尚未配置独立 runner 与安装包验收，当前覆盖 Windows x64、macOS 双架构与 Linux 双架构共 5 个分发目标",
-      "revisitWhen": "完成 Windows ARM64 原生环境验证与安装包测试后补齐"
-    },
     {
       "rule": "windows-unsigned",
       "reason": "开源项目暂无商业代码签名证书，在 release 说明中提示 SmartScreen 拦截与处理方式",

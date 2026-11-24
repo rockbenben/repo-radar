@@ -79,6 +79,28 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npx electron-builder --config electron-builder.yml --publish never
+      - name: Verify Windows package architectures
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          for (const [directory, machine] of [['win-unpacked', 0x8664], ['win-arm64-unpacked', 0xaa64]]) {
+            const file = `dist-electron/${directory}/repo-radar.exe`;
+            const fd = fs.openSync(file, 'r');
+            try {
+              const header = Buffer.alloc(6);
+              if (fs.readSync(fd, header, 0, 4, 0x3c) !== 4 ||
+                  fs.readSync(fd, header, 0, 6, header.readUInt32LE(0)) !== 6 ||
+                  header.readUInt32LE(0) !== 0x4550 || header.readUInt16LE(4) !== machine) {
+                throw new Error(`Unexpected Windows executable architecture: ${file}`);
+              }
+            } finally {
+              fs.closeSync(fd);
+            }
+          }
+          NODE
+
       - name: Verify installers and update metadata
         env:
           RELEASE_BUILD: ${{ matrix.label }}
@@ -157,7 +179,7 @@ jobs:
           body: |
             ## Downloads
 
-            - **Windows x64:** NSIS setup executable. The installer is unsigned and may prompt SmartScreen.
+            - **Windows x64 / ARM64:** one NSIS installer for both architectures. The installer is unsigned and may prompt SmartScreen.
             - **macOS Apple Silicon / Intel:** choose the matching DMG. The app is not notarized. Install newer releases manually.
             - **Linux x64 / ARM64:** choose the matching AppImage and mark it executable.
 

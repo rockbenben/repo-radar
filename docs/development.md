@@ -70,5 +70,5 @@ build checkout before compiling the app. After verifying all installers and upda
 publishes the draft and its tag on the tested commit. Retry failed jobs on the original CI run.
 The publish job rechecks the candidate before uploading and verifies the public asset digests.
 
-Windows x64 and both Linux AppImage architectures have updater manifests. The two macOS DMGs use
+Windows x64 and ARM64 share one NSIS installer and updater manifest. Both Linux AppImage architectures have separate updater manifests. The two macOS DMGs use
 manual updates. Release notes include download and signing information for the shipped packages.

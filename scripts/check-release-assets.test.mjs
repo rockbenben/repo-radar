@@ -29,7 +29,7 @@ test("release is triggered by a manual stable tag and publishes the verified dra
 
 const version = "1.2.3"
 const prefix = `repo-radar-${version}`
-const win = `${prefix}-x64-setup.exe`
+const win = `${prefix}-setup.exe`
 const linuxX64 = `${prefix}-x86_64.AppImage`
 const linuxArm = `${prefix}-arm64.AppImage`
 

@@ -37,7 +37,9 @@ asar: true
 
 win:
   appId: com.rockbenben.repo-radar.Desktop  # 与 main.ts 的 Windows 安装版标识一致
-  target: nsis
+  target:
+    - target: nsis
+      arch: [x64, arm64]
   icon: scripts/icon.ico
   extraResources:
     - from: scripts/icon.ico
@@ -47,7 +49,8 @@ nsis:
   guid: c22c52bc-3afa-5460-9659-015bb3ff9cae
   installerLanguages: [en_US]
   displayLanguageSelector: false
-  artifactName: ${name}-${version}-${arch}-setup.${ext}   # -setup 标明是安装器，与 mac/linux 的绿色包区分
+  artifactName: ${name}-${version}-setup.${ext}
+  buildUniversalInstaller: true
   oneClick: false                          # 给出安装目录选择：便携习惯的用户不喜欢被塞进 AppData
   perMachine: false                        # 每用户安装，不需要管理员权限（与自启走 HKCU 一致）
   allowToChangeInstallationDirectory: true
