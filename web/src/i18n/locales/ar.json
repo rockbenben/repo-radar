@@ -2,7 +2,7 @@
   "settings.autoPull": "السحب التلقائي",
   "settings.remoteRefreshInterval": "فاصل تحديث البعيد (بالدقائق)",
   "settings.remoteRefreshHint": "0 للتعطيل، و60 للتحديث كل ساعة.",
-  "settings.autoPullHint": "بعد تحديث البعيد، حدّث الفروع النظيفة المتأخرة فقط بالتقديم السريع.",
+  "settings.autoPullHint": "بعد تحديث البعيد، حدّث الفروع النظيفة المتأخرة فقط بالتقديم السريع. إذا كان التحديث البعيد معطّلًا، يؤدي تفعيل هذا الخيار إلى تشغيله كل ساعة.",
   "settings.autoPullInherit": "اتباع الإعداد العام",
   "settings.autoPullOn": "تشغيل",
   "nav.board": "اللوحة",

@@ -196,3 +196,16 @@ it("saves a custom remote refresh interval independently of automatic pull", asy
   })))
   expect(screen.getByRole("switch", { name: "自动拉取" }).getAttribute("aria-checked")).toBe("false")
 })
+
+it("enables auto-pull without entering an interval and shows the saved shared schedule", async () => {
+  stubFetch([])
+  render(<Harness />)
+  act(() => screen.getByTitle("设置").click())
+  const toggle = await screen.findByRole("switch", { name: "自动拉取" })
+  await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false))
+  vi.mocked(fetch).mockResolvedValueOnce(json({ ...CONFIG, autoPull: true, autoFetchMinutes: 60 }))
+  fireEvent.click(toggle)
+  const interval = screen.getByRole("spinbutton", { name: "远程刷新间隔（分钟）" }) as HTMLInputElement
+  await waitFor(() => expect(interval.value).toBe("60"))
+  expect(toggle.getAttribute("aria-checked")).toBe("true")
+})

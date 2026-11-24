@@ -3,9 +3,10 @@ import type { AddressInfo } from "node:net"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest"
 import { createBackend, createRescanScheduler, createStructureRescan, INBOX_REFRESH_MS, type Backend } from "../src/backend"
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../src/config"
+import * as gitOps from "../src/git"
 import * as github from "../src/github"
 import { pendingRepoOps } from "../src/queue"
 import type { RepoStatus, WorklogExportStatus, WorklogResponse } from "../src/types"
@@ -385,7 +386,9 @@ describe("createBackend", () => {
     }
   })
 
-  it("runs local scans and the remote refresh timer independently, leaving the branch unchanged in fetch-only mode", async () => {
+  it("fetches once per remote tick, with optional fast-forward on the same schedule", async () => {
+    const fetchUpstream = vi.spyOn(gitOps, "fetchRemoteUpstream")
+    onTestFinished(() => { fetchUpstream.mockRestore() })
     const o = { ...opts(), port: 0 }
     const repo = makeBehindRepo()
     git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -401,12 +404,25 @@ describe("createBackend", () => {
     })).status).toBe(200)
     const scan = await fetch(`${base}/api/scan`, { method: "POST" })
     expect(await scan.json()).toEqual([expect.objectContaining({ behind: 0 })])
+    expect(fetchUpstream).not.toHaveBeenCalled()
     vi.advanceTimersByTime(60 * 60_000)
     await vi.waitFor(async () => {
       const response = await fetch(`${base}/api/repos`)
       expect((await response.json()) as RepoStatus[]).toEqual([expect.objectContaining({ behind: 1 })])
     }, { timeout: 10_000 })
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("1")
+    expect(fetchUpstream).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(30 * 60_000)
+    const enable = await fetch(`${base}/api/config`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ autoPull: true }),
+    })
+    expect(await enable.json()).toMatchObject({ autoPull: true, autoFetchMinutes: 60 })
+    expect(fetchUpstream).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(30 * 60_000)
+    await vi.waitFor(() => expect(pendingRepoOps()).toBe(0), { timeout: 10_000 })
+    expect(fetchUpstream).toHaveBeenCalledTimes(2)
+    expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("2")
   })
 
   it("start 后端口可访问，/api/version 自报注入的版本", async () => {

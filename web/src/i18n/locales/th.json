@@ -2,7 +2,7 @@
   "settings.autoPull": "Pull อัตโนมัติ",
   "settings.remoteRefreshInterval": "ช่วงเวลารีเฟรชสถานะระยะไกล (นาที)",
   "settings.remoteRefreshHint": "0 คือปิด ตั้งเป็น 60 เพื่อรีเฟรชทุกชั่วโมง",
-  "settings.autoPullHint": "หลังรีเฟรช จะ fast-forward เฉพาะสาขาที่ไม่มีการแก้ไขและตามหลังต้นทางเท่านั้น",
+  "settings.autoPullHint": "หลังรีเฟรช จะ fast-forward เฉพาะสาขาที่ไม่มีการแก้ไขและตามหลังต้นทางเท่านั้น หากปิดการรีเฟรชรีโมตไว้ การเปิดตัวเลือกนี้จะเปิดการรีเฟรชทุกชั่วโมง",
   "settings.autoPullInherit": "ใช้การตั้งค่าส่วนกลาง",
   "settings.autoPullOn": "เปิด",
   "nav.board": "แผงงาน",

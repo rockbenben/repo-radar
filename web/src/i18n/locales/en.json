@@ -2,7 +2,7 @@
   "settings.autoPull": "Auto-pull",
   "settings.remoteRefreshInterval": "Remote refresh interval (minutes)",
   "settings.remoteRefreshHint": "0 turns it off. Enter 60 for hourly refresh.",
-  "settings.autoPullHint": "After a remote refresh, fast-forward clean branches that are only behind.",
+  "settings.autoPullHint": "After a remote refresh, fast-forward clean branches that are only behind. If remote refresh is off, enabling auto-pull starts hourly refreshes.",
   "settings.autoPullInherit": "Follow global setting",
   "settings.autoPullOn": "On",
   "nav.board": "Board",

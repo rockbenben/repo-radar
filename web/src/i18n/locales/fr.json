@@ -2,7 +2,7 @@
   "settings.autoPull": "Pull automatique",
   "settings.remoteRefreshInterval": "Intervalle d’actualisation distante (minutes)",
   "settings.remoteRefreshHint": "0 désactive l’actualisation. Saisissez 60 pour une fois par heure.",
-  "settings.autoPullHint": "Après l’actualisation, avance uniquement les branches propres qui sont en retard.",
+  "settings.autoPullHint": "Après l’actualisation, avance uniquement les branches propres qui sont en retard. Si l’actualisation distante est désactivée, cette option l’active toutes les heures.",
   "settings.autoPullInherit": "Suivre le réglage global",
   "settings.autoPullOn": "Activé",
   "nav.board": "Tableau",

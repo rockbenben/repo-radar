@@ -2,7 +2,7 @@
   "settings.autoPull": "Tự động pull",
   "settings.remoteRefreshInterval": "Chu kỳ làm mới từ xa (phút)",
   "settings.remoteRefreshHint": "0 để tắt. Nhập 60 để làm mới mỗi giờ.",
-  "settings.autoPullHint": "Sau khi làm mới, chỉ cập nhật fast-forward các nhánh sạch đang tụt lại.",
+  "settings.autoPullHint": "Sau khi làm mới, chỉ cập nhật fast-forward các nhánh sạch đang tụt lại. Nếu làm mới từ xa đang tắt, bật tùy chọn này sẽ làm mới mỗi giờ.",
   "settings.autoPullInherit": "Theo cài đặt chung",
   "settings.autoPullOn": "Bật",
   "nav.board": "Bảng",

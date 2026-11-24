@@ -2,7 +2,7 @@
   "settings.autoPull": "自动拉取",
   "settings.remoteRefreshInterval": "远程刷新间隔（分钟）",
   "settings.remoteRefreshHint": "0 为关闭，60 表示每小时刷新一次。",
-  "settings.autoPullHint": "远程刷新后，仅快进工作区干净且只落后于上游的分支。",
+  "settings.autoPullHint": "远程刷新后，仅快进工作区干净且只落后于上游的分支。远程刷新已关闭时，开启此项会启用每小时刷新。",
   "settings.autoPullInherit": "跟随全局设置",
   "settings.autoPullOn": "开启",
   "nav.board": "看板",

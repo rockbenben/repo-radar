@@ -2,7 +2,7 @@
   "settings.autoPull": "ऑटो-पुल",
   "settings.remoteRefreshInterval": "रिमोट रिफ्रेश का अंतराल (मिनट)",
   "settings.remoteRefreshHint": "0 से बंद करें। हर घंटे रिफ्रेश के लिए 60 डालें।",
-  "settings.autoPullHint": "रिमोट रिफ्रेश के बाद केवल पीछे चल रही साफ़ ब्रांच फ़ास्ट-फ़ॉरवर्ड होंगी।",
+  "settings.autoPullHint": "रिमोट रिफ्रेश के बाद केवल पीछे चल रही साफ़ ब्रांच फ़ास्ट-फ़ॉरवर्ड होंगी। अगर रिमोट रिफ़्रेश बंद है, तो यह विकल्प चालू करने पर हर घंटे रिफ़्रेश होगा।",
   "settings.autoPullInherit": "वैश्विक सेटिंग अपनाएँ",
   "settings.autoPullOn": "चालू",
   "nav.board": "बोर्ड",

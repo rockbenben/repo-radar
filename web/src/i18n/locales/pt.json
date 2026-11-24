@@ -2,7 +2,7 @@
   "settings.autoPull": "Pull automático",
   "settings.remoteRefreshInterval": "Intervalo de atualização remota (minutos)",
   "settings.remoteRefreshHint": "0 desativa. Use 60 para atualizar a cada hora.",
-  "settings.autoPullHint": "Após atualizar o remoto, avança apenas branches limpas que estejam atrasadas.",
+  "settings.autoPullHint": "Após atualizar o remoto, avança apenas branches limpas que estejam atrasadas. Se a atualização remota estiver desativada, esta opção ativa a atualização de hora em hora.",
   "settings.autoPullInherit": "Seguir a configuração global",
   "settings.autoPullOn": "Ativado",
   "nav.board": "Painel",

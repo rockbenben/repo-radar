@@ -197,6 +197,7 @@ export default function App({
   const [configLoaded, setConfigLoaded] = useState(false)
   const [autoFetchMinutes, setAutoFetchMinutes] = useState(0)
   const [fetchMinutesInput, setFetchMinutesInput] = useState<number | null>(0)
+  const [savingRemoteSettings, setSavingRemoteSettings] = useState(false)
   const [worklogExport, setWorklogExport] = useState<{ minutes: number | null; path: string }>({ minutes: 0, path: "" })
   const [invalidWorklogPath, setInvalidWorklogPath] = useState(false)
   const [savedWorklogPath, setSavedWorklogPath] = useState("")
@@ -608,6 +609,11 @@ export default function App({
         if (!res.ok) return
         const updated = (await res.json()) as RepoStatus
         setRepos((rs) => mergeRepo(rs, updated))
+        const minutes = res.headers.get("X-Repo-Radar-Remote-Refresh-Minutes")
+        if (minutes !== null) {
+          setAutoFetchMinutes(Number(minutes))
+          setFetchMinutesInput(Number(minutes))
+        }
       } catch {
         // 静默：保持原状
       }
@@ -931,11 +937,13 @@ export default function App({
     }
   }
   async function saveRemoteRefreshInterval() {
+    if (savingRemoteSettings) return
     const minutes = fetchMinutesInput
     if (minutes === null || minutes === autoFetchMinutes) {
       setFetchMinutesInput(autoFetchMinutes)
       return
     }
+    setSavingRemoteSettings(true)
     try {
       const r = await fetch("/api/config", {
         method: "PUT",
@@ -947,6 +955,8 @@ export default function App({
     } catch {
       setFetchMinutesInput(autoFetchMinutes)
       message.error(t("msg.saveFail"))
+    } finally {
+      setSavingRemoteSettings(false)
     }
   }
 
@@ -983,6 +993,8 @@ export default function App({
   }
 
   async function changeAutoPull(enabled: boolean) {
+    if (savingRemoteSettings) return
+    setSavingRemoteSettings(true)
     try {
       const r = await fetch("/api/config", {
         method: "PUT",
@@ -990,9 +1002,14 @@ export default function App({
         body: JSON.stringify({ autoPull: enabled }),
       })
       if (!r.ok) throw new Error()
-      setAutoPull(enabled)
+      const saved = await r.json()
+      setAutoPull(saved.autoPull)
+      setAutoFetchMinutes(saved.autoFetchMinutes)
+      setFetchMinutesInput(saved.autoFetchMinutes)
     } catch {
       message.error(t("msg.saveFail"))
+    } finally {
+      setSavingRemoteSettings(false)
     }
   }
 
@@ -1535,14 +1552,14 @@ export default function App({
                   onChange={setFetchMinutesInput}
                   onBlur={() => void saveRemoteRefreshInterval()}
                   onPressEnter={(event) => event.currentTarget.blur()}
-                  disabled={!configLoaded}
+                  disabled={!configLoaded || savingRemoteSettings}
                 />
               </div>
               <div className="row">
                 <span className="lb">
                   {t("settings.autoPull")}<span className="hint">{t("settings.autoPullHint")}</span>
                 </span>
-                <Switch size="small" aria-label={t("settings.autoPull")} checked={autoPull} onChange={changeAutoPull} disabled={!configLoaded} />
+                <Switch size="small" aria-label={t("settings.autoPull")} checked={autoPull && autoFetchMinutes > 0} onChange={changeAutoPull} disabled={!configLoaded || savingRemoteSettings} />
               </div>
               <div className="row">
                 <span className="lb">

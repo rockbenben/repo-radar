@@ -2,7 +2,7 @@
   "settings.autoPull": "Otomatik pull",
   "settings.remoteRefreshInterval": "Uzak yenileme aralığı (dakika)",
   "settings.remoteRefreshHint": "0 kapatır. Saatlik yenileme için 60 girin.",
-  "settings.autoPullHint": "Uzak yenilemeden sonra yalnızca geride kalmış temiz dalları hızlı ileri alır.",
+  "settings.autoPullHint": "Uzak yenilemeden sonra yalnızca geride kalmış temiz dalları hızlı ileri alır. Uzak yenileme kapalıysa bu seçenek saatlik yenilemeyi başlatır.",
   "settings.autoPullInherit": "Genel ayarı izle",
   "settings.autoPullOn": "Açık",
   "nav.board": "Pano",

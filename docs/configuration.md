@@ -29,7 +29,10 @@ independently of periodic scans. Manual **Fetch** refreshes the selected reposit
 
 Enable **Auto-pull** to apply fetched commits during a scheduled remote refresh when the worktree
 is clean and the branch is strictly behind. A repository can override that policy in its detail
-panel. Archived repositories and branches without a remote upstream are skipped. Worktrees with
+panel. Enabling auto-pull globally or for one repository uses the existing remote refresh interval.
+If remote refresh is off, enabling auto-pull starts hourly remote refreshes. Setting the interval
+to zero pauses scheduled fetches and pulls, including per-repository overrides.
+Archived repositories and branches without a remote upstream are skipped. Worktrees with
 Git operations in progress and worktrees with ignored files that would be overwritten are
 protected from auto-pull.
 

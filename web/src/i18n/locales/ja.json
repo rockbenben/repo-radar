@@ -2,7 +2,7 @@
   "settings.autoPull": "自動プル",
   "settings.remoteRefreshInterval": "リモート更新間隔（分）",
   "settings.remoteRefreshHint": "0 で無効、60 で 1 時間ごとに更新します。",
-  "settings.autoPullHint": "リモート更新後、変更がなく上流より遅れているだけのブランチを早送りします。",
+  "settings.autoPullHint": "リモート更新後、変更がなく上流より遅れているだけのブランチを早送りします。リモート更新がオフの場合は、オンにすると1時間ごとに更新します。",
   "settings.autoPullInherit": "全体設定に従う",
   "settings.autoPullOn": "オン",
   "nav.board": "ボード",

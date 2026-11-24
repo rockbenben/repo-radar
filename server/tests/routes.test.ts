@@ -344,6 +344,31 @@ describe("api", () => {
     t.cleanup()
   })
 
+  it("starts the shared remote schedule when global or per-repo auto-pull is enabled", async () => {
+    const t = setup()
+    try {
+      const [repo] = await t.store.refreshAll()
+      const applyConfig = vi.fn(async () => {})
+      const app = createApi(t.store, t.configFile, { applyConfig })
+      const put = (patch: Partial<Config>) => app.request("/api/config", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(patch),
+      })
+      expect(await (await put({ autoPull: true })).json()).toMatchObject({ autoPull: true, autoFetchMinutes: 60 })
+      await put({ autoFetchMinutes: 17 })
+      expect(await (await put({ autoPull: false })).json()).toMatchObject({ autoFetchMinutes: 17 })
+      expect(await (await put({ autoPull: true })).json()).toMatchObject({ autoFetchMinutes: 17 })
+      await put({ autoPull: false, autoFetchMinutes: 0 })
+      const response = await app.request(`/api/repos/${repo.id}/meta`, {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ autoPull: true }),
+      })
+      expect(response.headers.get("X-Repo-Radar-Remote-Refresh-Minutes")).toBe("60")
+      expect(loadConfig(t.configFile)).toMatchObject({ autoFetchMinutes: 60, autoPull: false, autoPullOverrides: { [repo.id]: true } })
+      expect(applyConfig).toHaveBeenLastCalledWith(expect.objectContaining({ autoFetchMinutes: 60 }), expect.objectContaining({ autoFetchMinutes: 0 }))
+    } finally {
+      t.cleanup()
+    }
+  })
+
   // 清单导入改写的是 config.manualRepos，而导入进来的仓库多半落在所有扫描根之外（跨机器清单的
   // 常见情形）——applyConfig 的 manualRepos 分支是**唯一**会给这类仓库建立监听句柄的地方。
   // 只落盘不调它的话，前端随后那次 POST /api/scan（force=false，收尾走 applyRepos）只会把它

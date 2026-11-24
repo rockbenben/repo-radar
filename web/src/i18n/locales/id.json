@@ -2,7 +2,7 @@
   "settings.autoPull": "Pull otomatis",
   "settings.remoteRefreshInterval": "Interval pembaruan remote (menit)",
   "settings.remoteRefreshHint": "0 menonaktifkan. Masukkan 60 untuk pembaruan setiap jam.",
-  "settings.autoPullHint": "Setelah pembaruan remote, lakukan fast-forward hanya pada branch bersih yang tertinggal.",
+  "settings.autoPullHint": "Setelah pembaruan remote, lakukan fast-forward hanya pada branch bersih yang tertinggal. Jika penyegaran remote nonaktif, opsi ini mengaktifkannya setiap jam.",
   "settings.autoPullInherit": "Ikuti pengaturan global",
   "settings.autoPullOn": "Aktif",
   "nav.board": "Papan",

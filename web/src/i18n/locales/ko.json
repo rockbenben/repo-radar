@@ -2,7 +2,7 @@
   "settings.autoPull": "자동 풀",
   "settings.remoteRefreshInterval": "원격 새로 고침 간격(분)",
   "settings.remoteRefreshHint": "0은 끄기이며, 60은 한 시간마다 새로 고침합니다.",
-  "settings.autoPullHint": "원격 새로 고침 후 깨끗하고 뒤처지기만 한 브랜치를 빨리 감습니다.",
+  "settings.autoPullHint": "원격 새로 고침 후 깨끗하고 뒤처지기만 한 브랜치를 빨리 감습니다. 원격 갱신이 꺼져 있으면 이 옵션을 켤 때 한 시간마다 갱신합니다.",
   "settings.autoPullInherit": "전역 설정 따르기",
   "settings.autoPullOn": "켜기",
   "nav.board": "보드",

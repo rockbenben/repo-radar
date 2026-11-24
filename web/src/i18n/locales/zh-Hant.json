@@ -2,7 +2,7 @@
   "settings.autoPull": "自動拉取",
   "settings.remoteRefreshInterval": "遠端更新間隔（分鐘）",
   "settings.remoteRefreshHint": "0 為關閉，60 表示每小時更新一次。",
-  "settings.autoPullHint": "更新遠端狀態後，僅快轉工作區乾淨且只落後於上游的分支。",
+  "settings.autoPullHint": "更新遠端狀態後，僅快轉工作區乾淨且只落後於上游的分支。遠端重新整理已關閉時，開啟此項會啟用每小時重新整理。",
   "settings.autoPullInherit": "跟隨全域設定",
   "settings.autoPullOn": "開啟",
   "nav.board": "看板",

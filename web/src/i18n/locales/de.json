@@ -2,7 +2,7 @@
   "settings.autoPull": "Automatischer Pull",
   "settings.remoteRefreshInterval": "Remote-Aktualisierung (Minuten)",
   "settings.remoteRefreshHint": "0 deaktiviert sie. 60 aktualisiert stündlich.",
-  "settings.autoPullHint": "Nach dem Abruf nur saubere, zurückliegende Branches per Fast-forward aktualisieren.",
+  "settings.autoPullHint": "Nach dem Abruf nur saubere, zurückliegende Branches per Fast-forward aktualisieren. Ist der Fernabruf aus, aktiviert diese Option den stündlichen Abruf.",
   "settings.autoPullInherit": "Globale Einstellung übernehmen",
   "settings.autoPullOn": "An",
   "nav.board": "Board",

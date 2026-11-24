@@ -2,7 +2,7 @@
   "settings.autoPull": "Pull automatico",
   "settings.remoteRefreshInterval": "Intervallo di aggiornamento remoto (minuti)",
   "settings.remoteRefreshHint": "0 disattiva l’aggiornamento. Usa 60 per aggiornarlo ogni ora.",
-  "settings.autoPullHint": "Dopo l’aggiornamento remoto, avanza in fast-forward solo i branch puliti rimasti indietro.",
+  "settings.autoPullHint": "Dopo l’aggiornamento remoto, avanza in fast-forward solo i branch puliti rimasti indietro. Se l’aggiornamento remoto è disattivato, questa opzione lo attiva ogni ora.",
   "settings.autoPullInherit": "Segui l’impostazione globale",
   "settings.autoPullOn": "Attivo",
   "nav.board": "Bacheca",

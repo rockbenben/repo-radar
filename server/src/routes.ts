@@ -17,6 +17,10 @@ import { type BatchDeps, startBatch, startExec } from "./tasks"
 import type { ActivityResponse, DiffPreview, HeatmapResponse, RepoMutation, RepoStatus, ScanStatus, StashesResponse, TaskStarted, WorklogExportStatus } from "./types"
 import { queryWorklog } from "./worklog"
 
+function enableRemoteRefresh(cfg: Config): void {
+  if (cfg.autoFetchMinutes === 0) cfg.autoFetchMinutes = 60
+}
+
 export interface ApiExtras {
   hub?: WsHub
   openFn?: (template: string, path: string, target: OpenTarget) => void | Promise<void>
@@ -489,7 +493,13 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     }
     if (body.autoPull === null) delete cfg.autoPullOverrides[repo.id]
     else if (typeof body.autoPull === "boolean") cfg.autoPullOverrides[repo.id] = body.autoPull
+    const previousMinutes = cfg.autoFetchMinutes
+    if (body.autoPull === true) enableRemoteRefresh(cfg)
     saveConfig(configFile, cfg)
+    if (cfg.autoFetchMinutes !== previousMinutes) {
+      await applyConfigSafely(cfg, { ...cfg, autoFetchMinutes: previousMinutes })
+    }
+    if (body.autoPull === true) c.header("X-Repo-Radar-Remote-Refresh-Minutes", String(cfg.autoFetchMinutes))
 
     const updated = store.redecorate(repo.id)
     if (!updated) return c.json({ error: "repo not found" }, 404)
@@ -775,6 +785,9 @@ export function createApi(store: RepoStore, configFile: string, extras: ApiExtra
     }
     const prev = loadConfig(configFile)
     const next = mergeConfig(prev, body)
+    const enablesOverride = Object.entries(body.autoPullOverrides ?? {}).some(([id, enabled]) =>
+      enabled && prev.autoPullOverrides[id] !== true)
+    if (body.autoFetchMinutes === undefined && (body.autoPull === true || enablesOverride)) enableRemoteRefresh(next)
     saveConfig(configFile, next)
     // 自动化字段有运行期副作用（监听器、重扫定时器），光落盘不算改完；applyConfig 内部
     // 逐字段与 prev 比对，只重装真变了的——存标签/备注或原值 round-trip 都不会动监听器。
