@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { serve } from "@hono/node-server"
-import { createNodeWebSocket } from "@hono/node-ws"
+import { serve, upgradeWebSocket } from "@hono/node-server"
+import { WebSocketServer } from "ws"
 import { createAutomation } from "./automation"
 import { type Config, DEFAULT_CONFIG, loadConfig, saveConfig } from "./config"
 import { DescCache } from "./desc-cache"
@@ -645,7 +645,7 @@ export function createBackend(options: BackendOptions): Backend {
     version,
     ...(options.extras ?? {}),
   })
-  const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app })
+  const websocketServer = new WebSocketServer({ noServer: true })
 
   const wsUpgrade = upgradeWebSocket(() => ({
     onOpen: (_evt, ws) => hub.add(ws),
@@ -667,7 +667,7 @@ export function createBackend(options: BackendOptions): Backend {
   function bindOnce(p: number): Promise<{ ok: true } | { ok: false; err: NodeJS.ErrnoException }> {
     return new Promise((resolve) => {
       let listening = false
-      const s = serve({ fetch: app.fetch, port: p, hostname: "127.0.0.1" }, (info) => {
+      const s = serve({ fetch: app.fetch, port: p, hostname: "127.0.0.1", websocket: { server: websocketServer } }, (info) => {
         listening = true
         server = s
         boundPort = info.port
@@ -677,7 +677,6 @@ export function createBackend(options: BackendOptions): Backend {
         if (listening) console.error(`[repo-radar] 服务器错误 / server error: ${err.message}`)
         else resolve({ ok: false, err })
       })
-      injectWebSocket(s)
     })
   }
 

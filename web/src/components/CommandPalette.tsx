@@ -50,6 +50,8 @@ export function CommandPalette({
     return repos.filter(match).slice(0, 8)
   }, [repos, query])
 
+  const selectedIndex = Math.min(sel, results.length - 1)
+
   // ⌘K 是启动器：选中回车 / 点整行都直接用编辑器打开
   const pick = (r: RepoStatus | undefined) => {
     if (!r) return
@@ -64,45 +66,41 @@ export function CommandPalette({
       footer={null}
       closable={false}
       width={560}
-      styles={{ body: { padding: 0 } }}
-      style={{ top: 120 }}
+      centered
+      title={t("palette.title")}
+      classNames={{ container: "rr-palette-container", body: "rr-palette-body" }}
     >
       <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
         <input
           ref={inputRef}
           role="combobox"
+          aria-label={t("palette.placeholder")}
           aria-expanded={results.length > 0}
           aria-controls="rr-palette-list"
-          aria-activedescendant={results.length > 0 ? `rr-palette-opt-${Math.min(sel, results.length - 1)}` : undefined}
+          aria-activedescendant={selectedIndex >= 0 ? `rr-palette-opt-${selectedIndex}` : undefined}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
             setSel(0)
           }}
           onKeyDown={(e) => {
-            if (e.key === "ArrowDown") {
+            if (e.nativeEvent.isComposing || selectedIndex < 0) return
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault()
-              setSel((s) => Math.min(s + 1, results.length - 1))
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault()
-              setSel((s) => Math.max(s - 1, 0))
+              const next = e.key === "ArrowDown"
+                ? Math.min(selectedIndex + 1, results.length - 1)
+                : Math.max(selectedIndex - 1, 0)
+              setSel(next)
+              document.getElementById(`rr-palette-opt-${next}`)?.scrollIntoView({ block: "nearest", inline: "nearest" })
             } else if (e.key === "Enter") {
-              pick(results[sel])
+              pick(results[selectedIndex])
             }
           }}
           placeholder={t("palette.placeholder")}
-          className="mono"
-          style={{
-            width: "100%",
-            background: "transparent",
-            border: 0,
-            outline: 0,
-            color: "var(--hi)",
-            fontSize: 15,
-          }}
+          className="mono rr-palette-input"
         />
       </div>
-      <div style={{ maxHeight: 360, overflowY: "auto", padding: 6 }} role="listbox" id="rr-palette-list" aria-label={t("palette.placeholder")}>
+      <div className="rr-palette-results" role="listbox" id="rr-palette-list" aria-label={t("palette.placeholder")}>
         {results.length === 0 && (
           <div style={{ padding: "28px 0", textAlign: "center", color: "var(--dim)", fontSize: 13 }}>{t("palette.noMatch")}</div>
         )}
@@ -115,7 +113,7 @@ export function CommandPalette({
             role="option"
             id={`rr-palette-opt-${i}`}
             tabIndex={-1}
-            aria-selected={i === sel}
+            aria-selected={i === selectedIndex}
             onMouseEnter={() => setSel(i)}
             onClick={() => pick(r)}
             style={{
@@ -125,11 +123,11 @@ export function CommandPalette({
               padding: "9px 10px",
               borderRadius: 8,
               cursor: "pointer",
-              background: i === sel ? "var(--panel)" : "transparent",
+              background: i === selectedIndex ? "var(--seg-sel)" : "transparent",
             }}
           >
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: sev(r), flex: "none" }} />
-            <span className="mono" style={{ color: "var(--hi)", fontSize: 13, flex: "none" }}>
+            <span className="mono" style={{ color: "var(--hi)", fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {r.name}
             </span>
             <span

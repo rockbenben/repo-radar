@@ -81,7 +81,7 @@ const view = () => (
   <ConfigProvider>
     <I18nProvider lang="zh-Hans" setLang={() => {}}>
       <AntApp>
-        <App themeMode="dark" onToggleTheme={() => {}} />
+        <App themePreference="dark" onThemeChange={() => {}} />
       </AntApp>
     </I18nProvider>
   </ConfigProvider>

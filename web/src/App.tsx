@@ -39,6 +39,7 @@ import { type LogEntry, loadLog, loadViews, pref, type SavedView, savePref } fro
 import { mergeRepo, parentOf } from "./lib/repos"
 import { relativeTime } from "./lib/time"
 import { connectEvents } from "./lib/ws"
+import type { ThemePreference } from "./theme"
 import type { BatchProgress, BatchResultItem, RepoStatus, ScanStatus, ServerEvent, TaskStarted } from "./types"
 
 const JSON_HEADERS = { "content-type": "application/json" }
@@ -67,11 +68,11 @@ const SETTINGS_TABS: { key: SettingsTab; labelKey: string }[] = [
 ]
 
 export default function App({
-  themeMode,
-  onToggleTheme,
+  themePreference,
+  onThemeChange,
 }: {
-  themeMode: "dark" | "light"
-  onToggleTheme: () => void
+  themePreference: ThemePreference
+  onThemeChange: (preference: ThemePreference) => void
 }) {
   const { message, modal } = AntdApp.useApp()
   const { t, lang, setLang } = useI18n()
@@ -228,6 +229,20 @@ export default function App({
   const [cloning, setCloning] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
   const detailRepo = detailId !== null ? (repos.find((r) => r.id === detailId) ?? null) : null
+  const detailOpener = useRef<HTMLElement | null>(null)
+
+  function openDetail(id: string) {
+    detailOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setDetailId(id)
+  }
+
+  useLayoutEffect(() => {
+    const opener = detailOpener.current
+    if (detailRepo || !opener) return
+    detailOpener.current = null
+    if (opener.isConnected && opener !== document.body) opener.focus()
+    if (document.activeElement === document.body) boardRef.current?.focus()
+  }, [detailRepo])
   const [cockpitOpen, setCockpitOpen] = useState(() => pref("cockpit", "1") === "1")
   useEffect(() => savePref("cockpit", cockpitOpen ? "1" : "0"), [cockpitOpen])
   // 「待处理」里被点过「已处理」的项：key=repoId:kind → 当时的状态签名。签名不变则保持隐藏，一旦有新变化（签名变）就再冒出来
@@ -297,7 +312,7 @@ export default function App({
     if (!repos.some((r) => r.id === id)) return
     setView("board")
     setStashView(null)
-    setDetailId(id)
+    openDetail(id)
   }
 
   // 扫描时刻 + 监听覆盖数。挂载、WebSocket 重连、以及改动监听设置之后各拉一次：
@@ -1157,7 +1172,7 @@ export default function App({
       clock={clockTick}
       onToggleSelect={toggleSelect}
       onOpen={openRepo}
-      onShowDetail={setDetailId}
+      onShowDetail={openDetail}
       onToggleFavorite={toggleFavorite}
       onQuickFilter={quickFilter}
       onFilterTag={filterTag}
@@ -1354,11 +1369,14 @@ export default function App({
               </div>
               <div className="row">
                 <span className="lb">{t("settings.theme")}</span>
-                <Segmented
+                <Select<ThemePreference>
+                  aria-label={t("settings.theme")}
                   size="small"
-                  value={themeMode}
-                  onChange={(v) => v !== themeMode && onToggleTheme()}
+                  style={{ width: 138 }}
+                  value={themePreference}
+                  onChange={onThemeChange}
                   options={[
+                    { label: t("settings.themeSystem"), value: "system" },
                     { label: t("settings.dark"), value: "dark" },
                     { label: t("settings.light"), value: "light" },
                   ]}
@@ -1735,7 +1753,7 @@ export default function App({
           <StashView key={stashView.repoId ?? "all"} repoId={stashView.repoId} onLog={addLog} />
         </main>
       ) : (
-        <main className="rr-main" ref={boardRef}>
+        <main className="rr-main" ref={boardRef} tabIndex={-1}>
           {showOverview && (
             <div className="rr-overview">
               <section className="rr-health">

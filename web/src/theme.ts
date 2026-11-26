@@ -44,6 +44,7 @@ const INSTRUMENT_LIGHT = {
 } as const
 
 export type ThemeMode = "dark" | "light"
+export type ThemePreference = ThemeMode | "system"
 
 const SANS = `"Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif`
 

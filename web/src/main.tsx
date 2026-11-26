@@ -1,33 +1,50 @@
 import { App as AntApp, ConfigProvider } from "antd"
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import App from "./App"
 import { I18nProvider, isRtl, type LangCode, readLang } from "./i18n"
 import "./index.css"
-import { radarTheme, type ThemeMode } from "./theme"
+import { radarTheme, type ThemePreference } from "./theme"
 
-function readMode(): ThemeMode {
+const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
+
+function readThemePreference(): ThemePreference {
   try {
-    return localStorage.getItem("rr.theme") === "light" ? "light" : "dark"
+    const preference = localStorage.getItem("rr.theme")
+    if (preference === "light" || preference === "dark") return preference
   } catch {
-    return "dark"
+    /* localStorage 不可用时跟随系统 */
   }
+  return "system"
 }
 
 function Root() {
-  const [mode, setMode] = useState<ThemeMode>(readMode)
+  const [preference, setPreference] = useState(readThemePreference)
+  const [systemDark, setSystemDark] = useState(() => systemTheme.matches)
+  const mode = preference === "system" ? (systemDark ? "dark" : "light") : preference
   const [lang, setLang] = useState<LangCode>(readLang)
   const rtl = isRtl(lang)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.setAttribute("data-theme", mode)
     window.repoRadarWindow?.setTheme(mode)
+  }, [mode])
+
+  useEffect(() => {
+    const sync = () => setSystemDark(systemTheme.matches)
+    systemTheme.addEventListener("change", sync)
+    sync()
+    return () => systemTheme.removeEventListener("change", sync)
+  }, [])
+
+  useEffect(() => {
     try {
-      localStorage.setItem("rr.theme", mode)
+      if (preference === "system") localStorage.removeItem("rr.theme")
+      else localStorage.setItem("rr.theme", preference)
     } catch {
       /* localStorage 不可用时静默 */
     }
-  }, [mode])
+  }, [preference])
 
   useEffect(() => {
     if (!window.repoRadarWindow) return
@@ -57,7 +74,7 @@ function Root() {
     <ConfigProvider theme={radarTheme(mode)} direction={rtl ? "rtl" : "ltr"} button={{ autoInsertSpace: false }}>
       <I18nProvider lang={lang} setLang={setLang}>
         <AntApp>
-          <App themeMode={mode} onToggleTheme={() => setMode((m) => (m === "dark" ? "light" : "dark"))} />
+          <App themePreference={preference} onThemeChange={setPreference} />
         </AntApp>
       </I18nProvider>
     </ConfigProvider>

@@ -76,7 +76,7 @@ function Harness() {
           <button type="button" onClick={() => setLang("en")}>
             switch-to-en
           </button>
-          <App themeMode="dark" onToggleTheme={() => {}} />
+          <App themePreference="dark" onThemeChange={() => {}} />
         </AntApp>
       </I18nProvider>
     </ConfigProvider>

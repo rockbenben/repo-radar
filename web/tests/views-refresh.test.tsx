@@ -62,7 +62,7 @@ it.each([
   render(
     <ConfigProvider>
       <I18nProvider lang="en" setLang={() => {}}>
-        <AntApp><App themeMode="dark" onToggleTheme={() => {}} /></AntApp>
+        <AntApp><App themePreference="dark" onThemeChange={() => {}} /></AntApp>
       </I18nProvider>
     </ConfigProvider>,
   )

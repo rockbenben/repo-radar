@@ -1,4 +1,6 @@
 /* repo-radar · 主题色、界面布局与应用组件。 */
+:root{color-scheme:light dark}
+:root[data-theme="dark"]{color-scheme:dark}
 :root{
   --ink:#0b0e15; --panel:#111726; --panel2:#0d1220; --panel3:#0f1524; --card:#0f1626; --line:#1e2838; --line2:#161f2f;
   --text:#c8d1e0; --hi:#e6edf7; --dim:#7b89a6; --dim2:#43506a;
@@ -26,6 +28,7 @@
 }
 /* 浅色「日照舱」：整套语义色改成明亮版；强调色加深以在白底保持对比 */
 :root[data-theme="light"]{
+  color-scheme:light;
   --ink:#eceff4; --panel:#ffffff; --panel2:#f4f6fa; --panel3:#eef2f8; --card:#ffffff; --line:#d9dfe8; --line2:#e6eaf0;
   --text:#3b4657; --hi:#141a24; --dim:#5f6a7e; --dim2:#aab3c2;
   /* 强调色的浅色版要比深色版**更深**，不是同一个色换个亮度：深色主题是亮色压深底（--sig 9.62:1），
@@ -124,6 +127,12 @@ body{margin:0;background:var(--ink);color:var(--text);font-family:var(--sans);
   border:1px solid var(--line);border-radius:5px;background:var(--panel3)}
 .rr-kbd.ant-btn:hover{color:var(--sig);border-color:var(--edge-h)}
 /* 命令面板行尾的「更多操作」：设计稿是紧凑描边 chip，不跟 antd 默认按钮同高 */
+.rr-palette-container{display:flex;flex-direction:column;max-height:calc(100dvh - 40px - var(--dialog-top,0px))}
+.rr-palette-container .ant-modal-header{flex:none}
+.rr-palette-body{display:flex;flex-direction:column;min-height:0}
+.rr-palette-results{min-height:0;max-height:360px;overflow:auto;overscroll-behavior:contain;padding:6px}
+.rr-palette-input{width:100%;background:transparent;border:0;color:var(--hi);font-size:15px}
+.rr-palette-input:focus-visible{outline:2px solid var(--sig);outline-offset:3px}
 .rr-palette-more.ant-btn{padding:0 6px;font-size:10px;line-height:16px;
   color:var(--dim);border:1px solid var(--line);border-radius:4px;background:transparent}
 .rr-palette-more.ant-btn:hover{color:var(--sig);border-color:var(--edge-h)}
